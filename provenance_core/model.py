@@ -91,6 +91,7 @@ class CustodyCore:
     actor: str | None = None
     source: str | None = None
     previous_custody: str | None = None
+    related_identity: str | None = None
 
     def __post_init__(self) -> None:
         require_sha256_identity(
@@ -143,6 +144,7 @@ class CustodyCore:
             "actor": self.actor,
             "source": self.source,
             "previous_custody": self.previous_custody,
+            "related_identity": self.related_identity,
         }
 
 
