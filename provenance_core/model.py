@@ -58,6 +58,8 @@ class ArtifactRecord:
     retention: RetentionState = RetentionState.CONTENT_RETAINED
 
     def __post_init__(self) -> None:
+        if not isinstance(self.retention, RetentionState):
+            raise TypeError("artifact retention must be a RetentionState")
         require_sha256_identity(self.content_identity, label="artifact content identity")
         if type(self.byte_count) is not int or self.byte_count < 0:
             raise ValueError("artifact byte_count must be a non-negative integer")
@@ -101,6 +103,16 @@ class EventCore:
     collection_status: CollectionStatus = CollectionStatus.RECORDED
 
     def __post_init__(self) -> None:
+        if not isinstance(self.evidence_class, EvidenceClass):
+            raise TypeError("event evidence_class must be an EvidenceClass")
+        if not isinstance(self.collection_status, CollectionStatus):
+            raise TypeError("event collection_status must be a CollectionStatus")
+        if not isinstance(self.inputs, tuple) or not isinstance(self.outputs, tuple):
+            raise TypeError("event inputs and outputs must be tuples")
+        if not isinstance(self.relationships, tuple):
+            raise TypeError("event relationships must be a tuple")
+        if not all(isinstance(item, Relationship) for item in self.relationships):
+            raise TypeError("event relationships must contain Relationship values")
         if not isinstance(self.actor, str) or not self.actor:
             raise ValueError("event actor must be a non-empty string")
         if not isinstance(self.operation, str) or not self.operation:
@@ -134,6 +146,8 @@ class EventEnvelope:
         return cls(core=core, event_identity=event_identity(core.to_dict()))
 
     def __post_init__(self) -> None:
+        if not isinstance(self.core, EventCore):
+            raise TypeError("event envelope core must be an EventCore")
         require_sha256_identity(self.event_identity, label="event identity")
         expected = event_identity(self.core.to_dict())
         if self.event_identity != expected:
@@ -154,6 +168,8 @@ class ManifestCore:
     scope: str = "closed"
 
     def __post_init__(self) -> None:
+        if not isinstance(self.artifacts, tuple) or not isinstance(self.events, tuple):
+            raise TypeError("manifest artifacts and events must be tuples")
         if self.scope not in {"open", "closed"}:
             raise ValueError("manifest scope must be 'open' or 'closed'")
         if tuple(sorted(set(self.artifacts))) != self.artifacts:
@@ -199,6 +215,8 @@ class ManifestEnvelope:
         return cls(core=core, manifest_identity=manifest_identity(core.to_dict()))
 
     def __post_init__(self) -> None:
+        if not isinstance(self.core, ManifestCore):
+            raise TypeError("manifest envelope core must be a ManifestCore")
         require_sha256_identity(self.manifest_identity, label="manifest identity")
         expected = manifest_identity(self.core.to_dict())
         if self.manifest_identity != expected:
