@@ -393,7 +393,7 @@ without requiring external services.
 ## Status
 
 ```text
-IMPLEMENTED
+COMPLETE
 ```
 
 ## Goal
@@ -504,6 +504,12 @@ The first Ollama adapter remains local and authentication-free. Provider authent
 
 # Phase 5 — Ollama Reference Adapter
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Observe a real AI system.
@@ -558,6 +564,25 @@ actual GPU kernel execution
 true model provenance beyond exposed metadata
 ```
 
+## Reference implementation
+
+The Phase 5 adapter is local-only and stdlib-only.
+
+It uses the native non-streaming Ollama `/api/generate` endpoint and retains the exact request and response body bytes.
+
+It records:
+
+```text
+OBSERVED request event
+OBSERVED response event
+DECLARED model identifier event
+CAPTURED / STORED / VERIFIED custody
+```
+
+The model identifier used for the declaration is the value returned by Ollama, not an assumption that the request alias was honored exactly.
+
+See `OLLAMA.md`.
+
 ## Exit Gate
 
 A real local inference can produce:
@@ -573,6 +598,12 @@ verified bundle
 ---
 
 # Phase 6 — GitHub Actions Ollama Smoke Test
+
+## Status
+
+```text
+IMPLEMENTED
+```
 
 ## Goal
 
@@ -618,9 +649,18 @@ The test validates PROVENANCE.
 
 ## CI Constraints
 
-The Ollama workflow should be separate from fast core CI.
+The Ollama workflow is separate from fast core CI.
 
-Routine core changes should not automatically require a model download unless relevant.
+Routine core changes do not automatically require a model download.
+
+The initial matrix uses two independent GitHub-hosted runners:
+
+```text
+qwen2.5:0.5b
+qwen2:0.5b
+```
+
+Each runner starts its own local Ollama server. Model weights are not cached in the initial trust lane.
 
 ## Exit Gate
 
