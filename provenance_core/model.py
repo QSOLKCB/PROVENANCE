@@ -53,6 +53,13 @@ class ClockAssurance(str, Enum):
     SIGNED_ATTESTATION = "SIGNED_ATTESTATION"
 
 
+class ClockAssurance(str, Enum):
+    LOCAL = "LOCAL"
+    NETWORK = "NETWORK"
+    AUTHENTICATED_NETWORK = "AUTHENTICATED_NETWORK"
+    SIGNED_ATTESTATION = "SIGNED_ATTESTATION"
+
+
 class CustodyAction(str, Enum):
     CAPTURED = "CAPTURED"
     STORED = "STORED"
@@ -110,6 +117,18 @@ class CustodyCore:
             require_sha256_identity(
                 self.previous_custody,
                 label="previous custody identity",
+            )
+        if self.related_identity is not None:
+            require_sha256_identity(
+                self.related_identity,
+                label="custody related identity",
+            )
+        if (
+            self.action is CustodyAction.SUPERSEDED
+            and self.related_identity is None
+        ):
+            raise ValueError(
+                "SUPERSEDED custody requires related_identity"
             )
 
     def to_dict(self) -> dict[str, object]:
