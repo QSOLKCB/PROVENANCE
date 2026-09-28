@@ -357,6 +357,80 @@ class LocalEvidenceStore:
             finally:
                 os.close(parent_fd)
 
+    def put_artifact(
+        self,
+        data: bytes,
+        *,
+        media_type: str = "application/octet-stream",
+        retain_content: bool = True,
+    ) -> ArtifactRecord:
+        if not isinstance(data, bytes):
+            raise TypeError("artifact data must be bytes")
+        retention = (
+            RetentionState.CONTENT_RETAINED
+            if retain_content
+            else RetentionState.DIGEST_ONLY
+        )
+        record = ArtifactRecord.from_bytes(
+            data,
+            media_type=media_type,
+            retention=retention,
+        )
+        entry = ManifestArtifact.from_record(record)
+        self._check_artifact_rebinding(entry)
+
+        content_digest = _digest(
+            record.content_identity,
+            label="artifact content identity",
+        )
+        if retain_content:
+            self._publish_bytes(_OBJECT_ARTIFACTS, content_digest, data)
+
+        record_digest = _digest(
+            record.record_identity,
+            label="artifact record identity",
+        )
+        self._publish_bytes(
+            _OBJECT_RECORDS,
+            record_digest + ".json",
+            canonical_json_bytes(record.to_dict()),
+        )
+        self._artifacts[record.content_identity] = entry
+        self._session_changed_artifacts.add(record.content_identity)
+        return record
+
+    def _check_artifact_rebinding(self, entry: ManifestArtifact) -> None:
+        prior = self._artifacts.get(entry.content_identity)
+        if prior is None or prior == entry:
+            return
+        if (
+            self._current_manifest_identity is None
+            or entry.content_identity in self._session_changed_artifacts
+        ):
+            raise StoreError(
+                "current working snapshot already binds a different state "
+                "to this content identity"
+            )
+
+    def mark_missing(self, content_identity: str) -> ManifestArtifact:
+        entry = ManifestArtifact.missing(content_identity)
+        self._check_artifact_rebinding(entry)
+        self._artifacts[content_identity] = entry
+        self._session_changed_artifacts.add(content_identity)
+        return entry
+
+    def put_event(self, event: EventEnvelope) -> str:
+        if not isinstance(event, EventEnvelope):
+            raise TypeError("event must be an EventEnvelope")
+        event_digest = _digest(event.event_identity, label="event identity")
+        self._publish_bytes(
+            _OBJECT_EVENTS,
+            event_digest + ".json",
+            canonical_json_bytes(event.to_dict()),
+        )
+        self._events.add(event.event_identity)
+        return event.event_identity
+
     def _link_object_into_snapshot(
         self,
         root_fd: int,
