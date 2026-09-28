@@ -22,6 +22,7 @@ from provenance_core import (
     RetentionState,
     artifact_record_identity,
     canonical_json_bytes,
+    event_identity,
     manifest_identity,
     parse_canonical_json_bytes,
     require_sha256_identity,
@@ -863,6 +864,11 @@ class LocalEvidenceStore:
                             manifest.manifest_identity,
                             label="existing snapshot",
                         )
+                        self._validate_object_pool_against_snapshot(
+                            manifest.manifest_identity,
+                            self._artifacts,
+                            self._events,
+                        )
                         # A previous finalize may have failed immediately after
                         # renaming this snapshot. Re-establish parent durability
                         # before allowing HEAD to advance on this retry.
@@ -1056,6 +1062,11 @@ class LocalEvidenceStore:
                 manifest.manifest_identity,
                 label="snapshot before HEAD publication",
             )
+            self._validate_object_pool_against_snapshot(
+                manifest.manifest_identity,
+                self._artifacts,
+                self._events,
+            )
             self._update_head(manifest.manifest_identity)
             self._current_manifest_identity = manifest.manifest_identity
             self._session_changed_artifacts.clear()
@@ -1147,9 +1158,27 @@ class LocalEvidenceStore:
             raise StoreError(f"snapshot manifest cannot be parsed: {exc}") from exc
         if not isinstance(envelope, dict):
             raise StoreError("snapshot manifest envelope must be an object")
+        if set(envelope) != {
+            "core",
+            "manifest_identity",
+            "self_hash_exclusion",
+        }:
+            raise StoreError(
+                "snapshot manifest envelope has unexpected fields"
+            )
         core = envelope.get("core")
         if not isinstance(core, dict):
             raise StoreError("snapshot manifest core must be an object")
+        if set(core) != {
+            "schema",
+            "canonicalization",
+            "artifacts",
+            "events",
+            "scope",
+        }:
+            raise StoreError(
+                "snapshot manifest core has unexpected fields"
+            )
         if (
             envelope.get("self_hash_exclusion") != "manifest_identity"
             or envelope.get("manifest_identity") != expected_identity
@@ -1193,6 +1222,8 @@ class LocalEvidenceStore:
         snapshot_category: tuple[str, ...],
         snapshot_name: str,
         label: str,
+        member_kind: str,
+        expected_identity: str,
     ) -> None:
         pool_parent_fd = self._open_dir_chain(
             root_fd,
@@ -1223,6 +1254,9 @@ class LocalEvidenceStore:
             except Exception:
                 os.close(pool_fd)
                 raise
+
+            snapshot_json = bytearray()
+            snapshot_hasher = hashlib.sha256()
             try:
                 while True:
                     pool_chunk = os.read(pool_fd, _CHUNK_SIZE)
@@ -1233,9 +1267,65 @@ class LocalEvidenceStore:
                         )
                     if not pool_chunk:
                         break
+                    if member_kind == "content":
+                        snapshot_hasher.update(snapshot_chunk)
+                    else:
+                        snapshot_json.extend(snapshot_chunk)
             finally:
                 os.close(pool_fd)
                 os.close(snapshot_member_fd)
+
+            if member_kind == "content":
+                observed = f"sha256:{snapshot_hasher.hexdigest()}"
+                if observed != expected_identity:
+                    raise StoreError(
+                        f"verified snapshot {label} does not match expected content identity"
+                    )
+                return
+
+            try:
+                value = parse_canonical_json_bytes(bytes(snapshot_json))
+            except (CanonicalizationError, RecursionError) as exc:
+                raise StoreError(
+                    f"verified snapshot {label} is not canonical: {exc}"
+                ) from exc
+            if not isinstance(value, dict):
+                raise StoreError(
+                    f"verified snapshot {label} must be an object"
+                )
+
+            if member_kind == "artifact_record":
+                if artifact_record_identity(value) != expected_identity:
+                    raise StoreError(
+                        f"verified snapshot {label} does not match expected record identity"
+                    )
+                return
+
+            if member_kind == "event":
+                if set(value) != {
+                    "core",
+                    "event_identity",
+                    "self_hash_exclusion",
+                }:
+                    raise StoreError(
+                        f"verified snapshot {label} envelope has unexpected fields"
+                    )
+                core = value.get("core")
+                if not isinstance(core, dict):
+                    raise StoreError(
+                        f"verified snapshot {label} core must be an object"
+                    )
+                if (
+                    value.get("self_hash_exclusion") != "event_identity"
+                    or value.get("event_identity") != expected_identity
+                    or event_identity(core) != expected_identity
+                ):
+                    raise StoreError(
+                        f"verified snapshot {label} does not match expected event identity"
+                    )
+                return
+
+            raise StoreError(f"unsupported snapshot member kind: {member_kind}")
         finally:
             os.close(pool_parent_fd)
             os.close(snapshot_parent_fd)
@@ -1290,6 +1380,8 @@ class LocalEvidenceStore:
                         snapshot_category=("artifact_records", "sha256"),
                         snapshot_name=record_digest + ".json",
                         label=f"artifact record {entry.record_identity}",
+                        member_kind="artifact_record",
+                        expected_identity=entry.record_identity,
                     )
 
                     if entry.retention is RetentionState.CONTENT_RETAINED:
@@ -1305,6 +1397,8 @@ class LocalEvidenceStore:
                             snapshot_category=("artifacts", "sha256"),
                             snapshot_name=content_digest,
                             label=f"artifact content {entry.content_identity}",
+                            member_kind="content",
+                            expected_identity=entry.content_identity,
                         )
 
                 for event_identity_value in events:
@@ -1320,6 +1414,8 @@ class LocalEvidenceStore:
                         snapshot_category=("events", "sha256"),
                         snapshot_name=event_digest + ".json",
                         label=f"event {event_identity_value}",
+                        member_kind="event",
+                        expected_identity=event_identity_value,
                     )
             finally:
                 os.close(snapshot_fd)
@@ -1378,6 +1474,11 @@ class LocalEvidenceStore:
             identity,
             loaded_artifacts,
             loaded_events,
+        )
+        self._verify_snapshot_identity(
+            snapshot,
+            identity,
+            label="HEAD snapshot after reconstruction checks",
         )
 
         self._artifacts = loaded_artifacts
