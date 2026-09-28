@@ -13,6 +13,7 @@ on:
     paths:
       - "provenance_core/**"
       - "provenance_verify/**"
+      - "BUNDLE.md"
       - "tests/test_verify.py"
       - ".github/workflows/verify.yml"
   workflow_dispatch:
