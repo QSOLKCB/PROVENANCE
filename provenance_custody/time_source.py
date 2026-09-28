@@ -11,8 +11,13 @@ import subprocess
 from provenance_core import ClockAssurance
 
 _SELECTED_RE = re.compile(r"^([\^=#])\*\s+(\S+)", re.MULTILINE)
-_OFFSET_RE = re.compile(
-    r"\boffset\s+([+-]?\d+(?:\.\d+)?)(?:,|\s+sec\b)"
+_LEAP_RE = re.compile(r"^Leap status\s*:\s*(\S+)\s*$", re.MULTILINE)
+_SERVER_OFFSET_RE = re.compile(
+    r"^server\s+.*?\boffset\s+([+-]?\d+(?:\.\d+)?),",
+    re.MULTILINE,
+)
+_SUMMARY_OFFSET_RE = re.compile(
+    r"\boffset\s+([+-]?\d+(?:\.\d+)?)\s+sec\b"
 )
 
 
@@ -104,7 +109,8 @@ def chrony_clock_observation(
 
     mode_marker, selected = match.groups()
     tracking = _run(["chronyc", "tracking"], timeout=timeout)
-    if "Leap status" in tracking and "Normal" not in tracking:
+    leap = _LEAP_RE.search(tracking)
+    if leap is None or leap.group(1) != "Normal":
         raise TimeSourceError("chrony selected source is not in normal leap status")
 
     if mode_marker == "#":
@@ -144,12 +150,15 @@ def ntpdate_clock_observation(
         raise TimeSourceError("ntpdate is not installed")
 
     output = _run(["ntpdate", "-q", server], timeout=timeout)
-    offsets = [float(item) for item in _OFFSET_RE.findall(output)]
+    offsets = [float(item) for item in _SERVER_OFFSET_RE.findall(output)]
+    if not offsets:
+        offsets = [float(item) for item in _SUMMARY_OFFSET_RE.findall(output)]
     if not offsets:
         raise TimeSourceError("ntpdate returned no parseable offset")
 
-    # ntpdate may query multiple addresses for a pool name. Use the median
-    # observed offset so one outlier is not silently promoted.
+    # ntpdate may query multiple addresses for a pool name. Prefer only the
+    # per-server samples and use their median so the summary-selected server
+    # is not counted twice.
     offsets.sort()
     midpoint = len(offsets) // 2
     if len(offsets) % 2:
