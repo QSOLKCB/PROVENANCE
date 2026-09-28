@@ -19,7 +19,9 @@ from provenance_core import (
     ManifestCore,
     ManifestEnvelope,
     RetentionState,
+    artifact_record_identity,
     canonical_json_bytes,
+    manifest_identity,
     parse_canonical_json_bytes,
     require_sha256_identity,
 )
@@ -32,6 +34,7 @@ _OBJECT_EVENTS = ("objects", "events", "sha256")
 _SNAPSHOTS = ("snapshots", "sha256")
 _HEAD = "HEAD"
 _LOCK = ".store.lock"
+_FORMAT = "STORE_FORMAT"
 _CHUNK_SIZE = 1024 * 1024
 _DIR_FD_SUPPORT = {
     "open": os.open in os.supports_dir_fd,
@@ -118,7 +121,11 @@ class LocalEvidenceStore:
     """Local content-addressed store with verifier-gated immutable snapshots."""
 
     def __init__(self, root: Path | str):
-        self.root = Path(root).expanduser().absolute()
+        supplied_root = Path(root).expanduser()
+        if supplied_root.exists() and supplied_root.is_symlink():
+            raise StoreError("store root must not be a symbolic link")
+        self.root = supplied_root.resolve(strict=False)
+        self._root_identity: tuple[int, int] | None = None
         self._artifacts: dict[str, ManifestArtifact] = {}
         self._events: set[str] = set()
         self._current_manifest_identity: str | None = None
@@ -139,20 +146,20 @@ class LocalEvidenceStore:
         return len(self._events)
 
     def _initialize(self) -> None:
-        if self.root.exists() and self.root.is_symlink():
-            raise StoreError("store root must not be a symbolic link")
         try:
             self.root.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise StoreError(f"store root cannot be created: {exc}") from exc
         try:
-            mode = self.root.lstat().st_mode
+            root_stat = self.root.lstat()
         except OSError as exc:
             raise StoreError(f"store root cannot be inspected: {exc}") from exc
-        if not stat.S_ISDIR(mode):
+        if not stat.S_ISDIR(root_stat.st_mode):
             raise StoreError("store root must be a directory")
+        self._root_identity = (root_stat.st_dev, root_stat.st_ino)
 
         with self._root_fd() as root_fd:
+            self._ensure_store_format(root_fd)
             for parts in (
                 _OBJECT_ARTIFACTS,
                 _OBJECT_RECORDS,
@@ -170,8 +177,16 @@ class LocalEvidenceStore:
         except OSError as exc:
             raise StoreError(f"store root cannot be opened safely: {exc}") from exc
         try:
-            if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            opened = os.fstat(fd)
+            if not stat.S_ISDIR(opened.st_mode):
                 raise StoreError("store root must be a directory")
+            if (
+                self._root_identity is not None
+                and (opened.st_dev, opened.st_ino) != self._root_identity
+            ):
+                raise StoreError(
+                    "store root filesystem identity changed since construction"
+                )
             yield fd
         finally:
             os.close(fd)
@@ -210,6 +225,65 @@ class LocalEvidenceStore:
         except Exception:
             os.close(current_fd)
             raise
+
+    def _ensure_store_format(self, root_fd: int) -> None:
+        expected = (STORE_FORMAT + "\n").encode("ascii")
+        try:
+            fd = os.open(
+                _FORMAT,
+                _file_read_flags(),
+                dir_fd=root_fd,
+            )
+        except FileNotFoundError:
+            if os.scandir not in os.supports_fd:
+                raise StoreError(
+                    "store format initialization requires scandir(fd) support"
+                )
+            with os.scandir(root_fd) as entries:
+                existing = [entry.name for entry in entries]
+            if existing:
+                raise StoreError(
+                    "existing store root has no STORE_FORMAT marker; "
+                    "refusing to assume a layout version"
+                )
+            try:
+                fd = os.open(
+                    _FORMAT,
+                    _file_create_flags(),
+                    0o600,
+                    dir_fd=root_fd,
+                )
+            except OSError as exc:
+                raise StoreError(
+                    f"STORE_FORMAT marker cannot be created: {exc}"
+                ) from exc
+            try:
+                _write_all(fd, expected)
+                os.fsync(fd)
+            except OSError as exc:
+                raise StoreError(
+                    f"STORE_FORMAT marker cannot be written durably: {exc}"
+                ) from exc
+            finally:
+                os.close(fd)
+            _fsync_directory(root_fd)
+            return
+        except OSError as exc:
+            raise StoreError(
+                f"STORE_FORMAT marker cannot be opened safely: {exc}"
+            ) from exc
+
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise StoreError("STORE_FORMAT marker must be a regular file")
+            raw = _read_all(fd)
+        finally:
+            os.close(fd)
+        if raw != expected:
+            raise StoreError(
+                "unsupported or corrupt STORE_FORMAT marker: "
+                + raw.decode("ascii", errors="replace").rstrip("\n")
+            )
 
     def _ensure_lock_file(self, root_fd: int) -> None:
         try:
@@ -400,6 +474,10 @@ class LocalEvidenceStore:
         if not isinstance(value, dict):
             raise StoreError(
                 f"prior artifact record {record_identity} must be an object"
+            )
+        if artifact_record_identity(value) != record_identity:
+            raise StoreError(
+                f"prior artifact record {record_identity} does not match its identity"
             )
         return value
 
@@ -932,7 +1010,11 @@ class LocalEvidenceStore:
         _digest(identity, label="HEAD manifest identity")
         return identity
 
-    def _read_snapshot_manifest(self, snapshot: Path) -> dict[str, object]:
+    def _read_snapshot_manifest(
+        self,
+        snapshot: Path,
+        expected_identity: str,
+    ) -> dict[str, object]:
         try:
             snapshot_fd = os.open(snapshot, _directory_flags())
         except OSError as exc:
@@ -963,6 +1045,17 @@ class LocalEvidenceStore:
             raise StoreError(f"snapshot manifest cannot be parsed: {exc}") from exc
         if not isinstance(envelope, dict):
             raise StoreError("snapshot manifest envelope must be an object")
+        core = envelope.get("core")
+        if not isinstance(core, dict):
+            raise StoreError("snapshot manifest core must be an object")
+        if (
+            envelope.get("self_hash_exclusion") != "manifest_identity"
+            or envelope.get("manifest_identity") != expected_identity
+            or manifest_identity(core) != expected_identity
+        ):
+            raise StoreError(
+                "snapshot manifest changed after verification or does not match HEAD"
+            )
         return envelope
 
     def _load_head(self) -> None:
@@ -977,7 +1070,7 @@ class LocalEvidenceStore:
             label="HEAD snapshot",
         )
 
-        envelope = self._read_snapshot_manifest(snapshot)
+        envelope = self._read_snapshot_manifest(snapshot, identity)
         core = envelope.get("core")
         if not isinstance(core, dict):
             raise StoreError("verified snapshot manifest core must be an object")
