@@ -697,6 +697,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the module contracts and dependency r
 
 See [BUNDLE.md](BUNDLE.md) for the Phase 2 evidence-bundle layout consumed by the independent verifier.
 
+See [STORE.md](STORE.md) for the Phase 3 local content-addressed storage contract.
+
 ---
 
 # Implementation Roadmap
@@ -781,7 +783,7 @@ That is the target.
 
 # Status
 
-**Bootstrap / Phase 2 implementation.**
+**Bootstrap / Phase 3 implementation.**
 
 The constitutional and architectural foundation is in place. The first executable module is now `provenance_core`, covering the initial Phase 1 surface:
 
@@ -799,7 +801,9 @@ The constitutional and architectural foundation is in place. The first executabl
 
 The independent verifier is now implemented in `provenance_verify`, with canonical bundle verification, artifact/event identity recomputation, exact physical membership checks, retained-content hash and byte-count verification, explicit missing-evidence handling, reference resolution, symlink rejection, and adversarial tamper tests.
 
-The evidence store, custody implementation, adapters, MCP server, CLI, and UI remain later roadmap phases.
+The local evidence store is now implemented in `provenance_store`, with content-addressed immutable objects, atomic no-overwrite publication, exact-byte deduplication, verifier-gated snapshots, atomic `HEAD` publication, reopen-from-verified-state, stale-writer rejection, and explicit recovery from previously missing evidence.
+
+Custody semantics remain Phase 4. Adapters, Ollama integration, MCP, CLI, and UI remain later roadmap phases.
 
 Interfaces and compatibility guarantees should still be considered unstable until explicitly versioned and released.
 
