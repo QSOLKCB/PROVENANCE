@@ -832,15 +832,34 @@ class LocalEvidenceStoreTests(unittest.TestCase):
                 )
             )
 
+            event_path = _event_object(root, event.event_identity)
+            real_fsync_directory = store_module._fsync_directory
+            failed = False
+
+            def fail_post_link_parent_sync(fd: int) -> None:
+                nonlocal failed
+                fd_path = (
+                    os.readlink(f"/proc/self/fd/{fd}")
+                    if Path("/proc/self/fd").is_dir()
+                    else ""
+                )
+                if (
+                    not failed
+                    and fd_path.endswith("/objects/events/sha256")
+                    and event_path.exists()
+                ):
+                    failed = True
+                    raise StoreError("injected object directory fsync failure")
+                real_fsync_directory(fd)
+
             with mock.patch.object(
                 store_module,
                 "_fsync_directory",
-                side_effect=StoreError("injected object directory fsync failure"),
+                side_effect=fail_post_link_parent_sync,
             ):
                 with self.assertRaisesRegex(StoreError, "directory fsync"):
                     store.put_event(event)
 
-            event_path = _event_object(root, event.event_identity)
             self.assertTrue(event_path.is_file())
 
             real_fsync_directory = store_module._fsync_directory
@@ -1085,7 +1104,10 @@ class LocalEvidenceStoreTests(unittest.TestCase):
                     label=label,
                 )
                 if label == "HEAD snapshot":
-                    envelope = _read_json(path / "manifest.json")
+                    envelope = store_module.parse_canonical_json_bytes(
+                        (path / "manifest.json").read_bytes()
+                    )
+                    assert isinstance(envelope, dict)
                     envelope["unexpected"] = "field"
                     (path / "manifest.json").write_bytes(
                         store_module.canonical_json_bytes(envelope)
