@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import stat
 from typing import Any
 
 from provenance_core import (
@@ -89,13 +90,29 @@ def _artifact_content_relative(identity: str) -> str:
     return f"artifacts/sha256/{_identity_digest(identity, label='artifact content identity')}"
 
 
+def _require_regular_file(path: Path, *, label: str) -> None:
+    """Reject symlinks and special files before any evidence bytes are read."""
+
+    try:
+        mode = path.lstat().st_mode
+    except OSError as exc:
+        raise VerificationError(f"{label} cannot be inspected: {exc}") from exc
+    if not stat.S_ISREG(mode):
+        raise VerificationError(f"{label} must be a regular non-symlink file")
+
+
 def _read_canonical_object(path: Path, *, label: str) -> dict[str, Any]:
+    _require_regular_file(path, label=label)
     try:
         data = path.read_bytes()
     except OSError as exc:
         raise VerificationError(f"{label} cannot be read: {exc}") from exc
     try:
         value = parse_canonical_json_bytes(data)
+    except RecursionError as exc:
+        raise VerificationError(
+            f"{label} exceeds supported JSON nesting depth"
+        ) from exc
     except CanonicalizationError as exc:
         raise VerificationError(f"{label} is not canonical JSON: {exc}") from exc
     if not isinstance(value, dict):
@@ -386,11 +403,18 @@ def _physical_files(bundle_dir: Path) -> tuple[set[str], list[str]]:
         raise VerificationError(f"cannot enumerate bundle: {exc}") from exc
     for path in paths:
         relative = path.relative_to(bundle_dir).as_posix()
-        if path.is_symlink():
-            unsafe.append(relative)
-            continue
-        if path.is_file():
+        try:
+            mode = path.lstat().st_mode
+        except OSError as exc:
+            raise VerificationError(
+                f"cannot inspect bundle entry {relative}: {exc}"
+            ) from exc
+        if stat.S_ISREG(mode):
             files.add(relative)
+        elif stat.S_ISDIR(mode):
+            continue
+        else:
+            unsafe.append(relative)
     return files, unsafe
 
 
@@ -416,11 +440,6 @@ def verify_bundle(bundle_dir: Path) -> VerificationReport:
         )
 
     manifest_path = bundle_dir / "manifest.json"
-    if manifest_path.is_symlink():
-        errors.append("manifest.json must not be a symbolic link")
-        return VerificationReport(
-            False, None, None, 0, tuple(checks), tuple(errors)
-        )
     try:
         (
             _manifest_core,
@@ -460,7 +479,7 @@ def verify_bundle(bundle_dir: Path) -> VerificationReport:
 
     if unsafe_paths:
         errors.append(
-            "symbolic links are forbidden inside evidence bundles: "
+            "non-regular filesystem entries are forbidden inside evidence bundles: "
             + ", ".join(sorted(unsafe_paths))
         )
     missing_files = sorted(expected_files - physical_files)
