@@ -62,7 +62,10 @@ def canonical_json_bytes(value: Any) -> bytes:
         )
     except (TypeError, ValueError) as exc:
         raise CanonicalizationError(str(exc)) from exc
-    return (encoded + "\n").encode("utf-8")
+    try:
+        return (encoded + "\n").encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise CanonicalizationError("canonical JSON contains invalid Unicode scalar data") from exc
 
 
 def _pairs_without_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
