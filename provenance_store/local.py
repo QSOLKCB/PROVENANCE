@@ -613,6 +613,12 @@ class LocalEvidenceStore:
 
     def finalize(self, *, scope: str = "closed") -> StoredSnapshot:
         with self._exclusive_finalize_lock():
+            disk_head = self._read_head()
+            if disk_head != self._current_manifest_identity:
+                raise StoreError(
+                    "store HEAD changed since this instance loaded; "
+                    "reopen before finalizing"
+                )
             core = ManifestCore.build(
                 artifacts=self._artifacts.values(),
                 events=self._events,
