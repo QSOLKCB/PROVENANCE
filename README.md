@@ -770,10 +770,12 @@ The constitutional and architectural foundation is in place. The first executabl
 
 - canonical UTF-8 JSON records;
 - duplicate-key, BOM, non-finite and unsupported-number rejection;
-- SHA-256 artifact identities;
-- domain-separated event and manifest identities;
+- ordinary SHA-256 raw-content identities;
+- domain-separated artifact-record, event, and manifest identities;
 - `OBSERVED`, `DECLARED`, and `DERIVED` evidence classes;
 - collection-status and retention-state vocabulary;
+- source-bound DERIVED events;
+- explicit retained, digest-only, and missing artifact states in manifests;
 - core/envelope self-hash exclusion;
 - normalized manifest membership; and
 - focused dependency-free regression tests.
