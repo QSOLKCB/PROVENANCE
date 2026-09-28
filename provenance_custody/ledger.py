@@ -6,6 +6,7 @@ import fcntl
 import os
 from pathlib import Path
 import stat
+import threading
 import uuid
 from typing import Iterator
 
@@ -25,7 +26,11 @@ CUSTODY_LEDGER_FORMAT = "provenance.local-custody.v1"
 _FORMAT = "CUSTODY_FORMAT"
 _LOCK = ".custody.lock"
 _RECORDS = ("records", "sha256")
+_STAGING = ("staging",)
 _CHUNK_SIZE = 1024 * 1024
+
+_PROCESS_LOCKS_GUARD = threading.Lock()
+_PROCESS_LOCKS: dict[tuple[int, int, str], threading.Lock] = {}
 
 
 class CustodyLedgerError(RuntimeError):
@@ -82,6 +87,17 @@ def _fsync_directory(fd: int) -> None:
         os.fsync(fd)
     except OSError as exc:
         raise CustodyLedgerError(f"directory fsync failed: {exc}") from exc
+
+
+def _process_lock_for_root(root_fd: int) -> threading.Lock:
+    root_stat = os.fstat(root_fd)
+    key = (root_stat.st_dev, root_stat.st_ino, _LOCK)
+    with _PROCESS_LOCKS_GUARD:
+        lock = _PROCESS_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PROCESS_LOCKS[key] = lock
+        return lock
 
 
 class LocalCustodyLedger:
@@ -142,14 +158,22 @@ class LocalCustodyLedger:
                 create=True,
             )
             os.close(records_fd)
+            staging_fd = self._open_dir_chain(
+                root_fd,
+                _STAGING,
+                create=True,
+            )
+            os.close(staging_fd)
             self._ensure_lock(root_fd)
 
-        report = self.verify()
-        if not report.integrity_verified:
-            raise CustodyLedgerError(
-                "existing custody ledger failed verification: "
-                + "; ".join(report.errors)
-            )
+        with self._exclusive_lock():
+            self._recover_staging_locked()
+            report = self.verify()
+            if not report.integrity_verified:
+                raise CustodyLedgerError(
+                    "existing custody ledger failed verification: "
+                    + "; ".join(report.errors)
+                )
 
     @contextmanager
     def _root_fd(self) -> Iterator[int]:
@@ -267,65 +291,121 @@ class LocalCustodyLedger:
         _fsync_directory(root_fd)
 
     def _ensure_lock(self, root_fd: int) -> None:
-        try:
-            fd = os.open(
-                _LOCK,
-                os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=root_fd,
-            )
-        except OSError as exc:
-            raise CustodyLedgerError(
-                f"custody lock cannot be created safely: {exc}"
-            ) from exc
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                raise CustodyLedgerError("custody lock must be a regular file")
-        finally:
-            os.close(fd)
-        _fsync_directory(root_fd)
-
-    @contextmanager
-    def _exclusive_lock(self) -> Iterator[None]:
-        with self._root_fd() as root_fd:
+        process_lock = _process_lock_for_root(root_fd)
+        with process_lock:
             try:
                 fd = os.open(
                     _LOCK,
-                    os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    0o600,
                     dir_fd=root_fd,
                 )
             except OSError as exc:
                 raise CustodyLedgerError(
-                    f"custody lock cannot be opened: {exc}"
+                    f"custody lock cannot be created safely: {exc}"
                 ) from exc
             try:
                 if not stat.S_ISREG(os.fstat(fd).st_mode):
                     raise CustodyLedgerError(
                         "custody lock must be a regular file"
                     )
-                fcntl.lockf(
-                    fd,
-                    fcntl.LOCK_EX,
-                    0,
-                    0,
-                    os.SEEK_SET,
-                )
-                yield
-            except OSError as exc:
-                raise CustodyLedgerError(
-                    f"custody POSIX lock operation failed: {exc}"
-                ) from exc
             finally:
+                os.close(fd)
+            _fsync_directory(root_fd)
+
+    @contextmanager
+    def _exclusive_lock(self) -> Iterator[None]:
+        with self._root_fd() as root_fd:
+            process_lock = _process_lock_for_root(root_fd)
+            process_lock.acquire()
+            fd: int | None = None
+            posix_locked = False
+            try:
+                try:
+                    fd = os.open(
+                        _LOCK,
+                        os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+                        dir_fd=root_fd,
+                    )
+                except OSError as exc:
+                    raise CustodyLedgerError(
+                        f"custody lock cannot be opened: {exc}"
+                    ) from exc
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise CustodyLedgerError(
+                        "custody lock must be a regular file"
+                    )
                 try:
                     fcntl.lockf(
                         fd,
-                        fcntl.LOCK_UN,
+                        fcntl.LOCK_EX,
                         0,
                         0,
                         os.SEEK_SET,
                     )
+                    posix_locked = True
+                except OSError as exc:
+                    raise CustodyLedgerError(
+                        f"custody POSIX lock operation failed: {exc}"
+                    ) from exc
+                yield
+            finally:
+                try:
+                    if fd is not None and posix_locked:
+                        fcntl.lockf(
+                            fd,
+                            fcntl.LOCK_UN,
+                            0,
+                            0,
+                            os.SEEK_SET,
+                        )
                 finally:
-                    os.close(fd)
+                    if fd is not None:
+                        os.close(fd)
+                    process_lock.release()
+
+    def _recover_staging_locked(self) -> None:
+        with self._root_fd() as root_fd:
+            staging_fd = self._open_dir_chain(
+                root_fd,
+                _STAGING,
+                create=True,
+            )
+            try:
+                if os.scandir not in os.supports_fd:
+                    raise CustodyLedgerError(
+                        "custody staging recovery requires scandir(fd) support"
+                    )
+                stale: list[str] = []
+                with os.scandir(staging_fd) as entries:
+                    for entry in entries:
+                        try:
+                            mode = entry.stat(follow_symlinks=False).st_mode
+                        except OSError as exc:
+                            raise CustodyLedgerError(
+                                f"custody staging entry {entry.name} cannot be inspected: {exc}"
+                            ) from exc
+                        if (
+                            not stat.S_ISREG(mode)
+                            or not entry.name.startswith(".")
+                            or not entry.name.endswith(".tmp")
+                        ):
+                            raise CustodyLedgerError(
+                                f"unexpected custody staging entry: {entry.name}"
+                            )
+                        stale.append(entry.name)
+
+                for name in stale:
+                    try:
+                        os.unlink(name, dir_fd=staging_fd)
+                    except OSError as exc:
+                        raise CustodyLedgerError(
+                            f"stale custody staging file {name} cannot be removed: {exc}"
+                        ) from exc
+                if stale:
+                    _fsync_directory(staging_fd)
+            finally:
+                os.close(staging_fd)
 
     def _record_bytes(self) -> list[bytes]:
         with self._root_fd() as root_fd:
@@ -417,11 +497,17 @@ class LocalCustodyLedger:
         data = canonical_json_bytes(envelope.to_dict())
         digest = envelope.custody_identity.split(":", 1)[1]
         name = digest + ".json"
+        temp_name = f".{name}.{uuid.uuid4().hex}.tmp"
 
         with self._root_fd() as root_fd:
             records_fd = self._open_dir_chain(
                 root_fd,
                 _RECORDS,
+                create=True,
+            )
+            staging_fd = self._open_dir_chain(
+                root_fd,
+                _STAGING,
                 create=True,
             )
             try:
@@ -449,7 +535,6 @@ class LocalCustodyLedger:
                     _fsync_directory(records_fd)
                     return
 
-                temp_name = f".{name}.{uuid.uuid4().hex}.tmp"
                 fd: int | None = None
                 try:
                     try:
@@ -457,7 +542,7 @@ class LocalCustodyLedger:
                             temp_name,
                             _file_create_flags(),
                             0o600,
-                            dir_fd=records_fd,
+                            dir_fd=staging_fd,
                         )
                         _write_all(fd, data)
                         os.fsync(fd)
@@ -474,7 +559,7 @@ class LocalCustodyLedger:
                         os.link(
                             temp_name,
                             name,
-                            src_dir_fd=records_fd,
+                            src_dir_fd=staging_fd,
                             dst_dir_fd=records_fd,
                             follow_symlinks=False,
                         )
@@ -504,15 +589,18 @@ class LocalCustodyLedger:
 
                     _fsync_directory(records_fd)
                 finally:
-                    if fd is not None:
-                        os.close(fd)
                     try:
-                        os.unlink(temp_name, dir_fd=records_fd)
+                        os.unlink(temp_name, dir_fd=staging_fd)
                     except FileNotFoundError:
                         pass
-                    except OSError:
-                        pass
+                    except OSError as exc:
+                        raise CustodyLedgerError(
+                            f"custody staging cleanup failed: {exc}"
+                        ) from exc
+                    else:
+                        _fsync_directory(staging_fd)
             finally:
+                os.close(staging_fd)
                 os.close(records_fd)
 
     def append(
@@ -542,6 +630,7 @@ class LocalCustodyLedger:
             raise TypeError("clock must be a ClockObservation")
 
         with self._exclusive_lock():
+            self._recover_staging_locked()
             before = self.verify()
             if not before.integrity_verified:
                 raise CustodyLedgerError(
