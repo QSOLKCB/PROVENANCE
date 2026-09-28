@@ -319,6 +319,31 @@ class LocalEvidenceStoreTests(unittest.TestCase):
             self.assertTrue(first.path.exists())
             self.assertTrue(verify_bundle(first.path).integrity_verified)
 
+    def test_symlinked_managed_event_parent_blocks_finalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_root = Path(tmp)
+            root = temp_root / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"managed parent")
+            event = _event_for(artifact.content_identity)
+            store.put_event(event)
+
+            events_dir = root / "objects" / "events"
+            outside_events = temp_root / "outside-events"
+            events_dir.rename(outside_events)
+            events_dir.symlink_to(outside_events, target_is_directory=True)
+
+            with self.assertRaisesRegex(StoreError, "events.*unsafe"):
+                store.finalize()
+
+            self.assertFalse((root / "HEAD").exists())
+            snapshots = [
+                path
+                for path in (root / "snapshots" / "sha256").iterdir()
+                if path.is_dir() and not path.name.startswith(".")
+            ]
+            self.assertEqual(snapshots, [])
+
     def test_stale_store_instance_cannot_overwrite_newer_head(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "store"
