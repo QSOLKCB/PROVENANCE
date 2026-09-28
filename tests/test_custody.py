@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -243,8 +244,10 @@ class CustodyVerifierTests(unittest.TestCase):
 class ClockObservationTests(unittest.TestCase):
     def test_chrony_nts_selected_source_is_authenticated_network(self) -> None:
         fixed_ns = 1_790_640_000_000_000_000
+        commands: list[list[str]] = []
 
-        def run(argv: list[str], *, timeout: float) -> str:
+        def run(argv: list[str], *, timeout: int) -> str:
+            commands.append(list(argv))
             if argv[-1] == "sources":
                 return (
                     "MS Name/IP address Stratum Poll Reach LastRx Last sample\n"
@@ -279,6 +282,14 @@ class ClockObservationTests(unittest.TestCase):
             ClockAssurance.AUTHENTICATED_NETWORK,
         )
         self.assertIn("chrony:192.0.2.10;auth=NTS", observation.clock_source)
+        self.assertEqual(
+            commands,
+            [
+                ["chronyc", "-n", "sources"],
+                ["chronyc", "-n", "tracking"],
+                ["chronyc", "-n", "authdata", "-a"],
+            ],
+        )
 
     def test_ntpdate_query_applies_median_offset(self) -> None:
         fixed_ns = 1_790_640_000_000_000_000
@@ -434,6 +445,135 @@ class LocalCustodyLedgerTests(unittest.TestCase):
             self.assertEqual(tips[first], first_record.custody_identity)
             self.assertEqual(tips[second], second_record.custody_identity)
 
+    def test_same_process_instances_serialize_appends_without_fork(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "custody"
+            first = LocalCustodyLedger(root)
+            second = LocalCustodyLedger(root)
+            subject = sha256_identity(b"threaded subject")
+            barrier = threading.Barrier(3)
+            results: list[CustodyEnvelope] = []
+            errors: list[BaseException] = []
+
+            def worker(
+                ledger: LocalCustodyLedger,
+                action: CustodyAction,
+                timestamp: str,
+            ) -> None:
+                barrier.wait()
+                try:
+                    results.append(
+                        ledger.append(
+                            subject,
+                            action,
+                            clock=_clock(timestamp),
+                        )
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(
+                    target=worker,
+                    args=(
+                        first,
+                        CustodyAction.CAPTURED,
+                        "2026-09-29T00:00:00.000000Z",
+                    ),
+                ),
+                threading.Thread(
+                    target=worker,
+                    args=(
+                        second,
+                        CustodyAction.STORED,
+                        "2026-09-29T00:00:01.000000Z",
+                    ),
+                ),
+            ]
+            for thread in threads:
+                thread.start()
+            barrier.wait()
+            for thread in threads:
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive())
+
+            self.assertEqual(errors, [])
+            self.assertEqual(len(results), 2)
+            report = LocalCustodyLedger(root).verify()
+            self.assertTrue(report.integrity_verified, report.errors)
+            self.assertEqual(report.record_count, 2)
+            self.assertEqual(report.subject_count, 1)
+            self.assertIn(dict(report.tips)[subject], {
+                item.custody_identity for item in results
+            })
+            self.assertEqual(
+                sum(item.core.previous_custody is None for item in results),
+                1,
+            )
+
+    def test_reopen_recovers_staging_file_from_crash_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "custody"
+            LocalCustodyLedger(root)
+            staging = root / "staging"
+            stale = staging / ".orphan.before.json.deadbeef.tmp"
+            stale.write_bytes(b"partial crash residue")
+            self.assertTrue(stale.exists())
+
+            reopened = LocalCustodyLedger(root)
+
+            self.assertFalse(stale.exists())
+            report = reopened.verify()
+            self.assertTrue(report.integrity_verified, report.errors)
+            self.assertEqual(report.record_count, 0)
+
+    def test_reopen_recovers_staging_file_from_crash_after_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "custody"
+            ledger = LocalCustodyLedger(root)
+            subject = sha256_identity(b"published before crash")
+            record = ledger.append(
+                subject,
+                CustodyAction.CAPTURED,
+                clock=_clock(),
+            )
+            record_path = (
+                root
+                / "records"
+                / "sha256"
+                / f"{record.custody_identity.split(':', 1)[1]}.json"
+            )
+            staging = root / "staging"
+            stale = staging / ".published.after.json.deadbeef.tmp"
+            stale.write_bytes(record_path.read_bytes())
+            self.assertTrue(record_path.exists())
+            self.assertTrue(stale.exists())
+
+            reopened = LocalCustodyLedger(root)
+
+            self.assertFalse(stale.exists())
+            self.assertTrue(record_path.exists())
+            report = reopened.verify()
+            self.assertTrue(report.integrity_verified, report.errors)
+            self.assertEqual(report.record_count, 1)
+            self.assertEqual(
+                dict(report.tips)[subject],
+                record.custody_identity,
+            )
+
+    def test_records_directory_remains_strict_about_non_record_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "custody"
+            LocalCustodyLedger(root)
+            bad = root / "records" / "sha256" / ".should-not-be-here.tmp"
+            bad.write_bytes(b"not authoritative evidence")
+
+            with self.assertRaisesRegex(
+                CustodyLedgerError,
+                "failed verification",
+            ):
+                LocalCustodyLedger(root)
+
     def test_append_uses_posix_record_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             ledger = LocalCustodyLedger(Path(tmp) / "custody")
@@ -482,14 +622,12 @@ class LocalCustodyLedgerTests(unittest.TestCase):
                     )
 
             records = root / "records" / "sha256"
+            staging = root / "staging"
             self.assertEqual(
                 [path for path in records.iterdir() if path.suffix == ".json"],
                 [],
             )
-            self.assertEqual(
-                [path for path in records.iterdir() if path.name.endswith(".tmp")],
-                [],
-            )
+            self.assertEqual(list(staging.iterdir()), [])
 
     def test_tampered_record_rejects_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
