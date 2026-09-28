@@ -42,6 +42,10 @@ class CanonicalJsonTests(unittest.TestCase):
         with self.assertRaisesRegex(CanonicalizationError, "safe-integer"):
             canonical_json_bytes({"n": 9_007_199_254_740_992})
 
+    def test_lone_surrogate_is_rejected_as_invalid_unicode(self) -> None:
+        with self.assertRaisesRegex(CanonicalizationError, "invalid Unicode"):
+            canonical_json_bytes({"text": "\ud800"})
+
     def test_bom_and_float_are_rejected(self) -> None:
         with self.assertRaisesRegex(CanonicalizationError, "BOM"):
             parse_canonical_json_bytes(b"\xef\xbb\xbf{}\n")
