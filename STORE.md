@@ -214,7 +214,9 @@ Phase 3 tests cover:
 - unexpected manifest-envelope fields during reconstruction;
 - descriptor-bound retained-content identity during reopen;
 - recovered root-ancestor parent-fsync barriers;
-- recovered STORE_FORMAT file-data and directory-entry durability.
+- recovered STORE_FORMAT file-data and directory-entry durability;
+- same-process concurrent finalizers;
+- process-owned POSIX lock protection against other in-process lock-file opens/closes.
 
 A failure must not silently publish partial evidence as the current state.
 
@@ -234,7 +236,19 @@ Managed directories are opened without following symlinks. When a managed child 
 
 Object publication uses no-overwrite semantics.
 
-Finalization uses a local exclusive lock to serialize HEAD publication. While holding that lock, the instance compares its loaded HEAD generation with the current on-disk HEAD; stale instances must reopen instead of replacing a newer authoritative snapshot.
+Finalization uses two cooperating lock layers to serialize HEAD publication:
+
+~~~text
+same-process mutex keyed by store-root filesystem identity
++
+POSIX fcntl advisory record lock
+~~~
+
+The same-process layer serializes threads and multiple LocalEvidenceStore instances and prevents another PROVENANCE instance in the same process from opening/closing the process-owned POSIX lock file while finalization is active.
+
+The POSIX layer serializes cooperating writers across processes.
+
+While holding both layers, the instance compares its loaded HEAD generation with the current on-disk HEAD; stale instances must reopen instead of replacing a newer authoritative snapshot.
 
 Snapshot files and containing directories are fsynced before snapshot publication, and the snapshots parent is fsynced after the final snapshot rename. HEAD is advanced only after that durability sequence and independent verification succeed.
 
@@ -250,7 +264,7 @@ Phase 3 stores evidence.
 
 It does not yet define custody events.
 
-The following remain Phase 4 work:
+Custody events are implemented separately by the Phase 4 custody module:
 
 ~~~text
 CAPTURED
@@ -261,7 +275,7 @@ TRANSFERRED
 SUPERSEDED
 ~~~
 
-The filesystem backend must not invent custody claims merely because a file exists on disk.
+The Phase 3 filesystem backend still must not invent custody claims merely because a file exists on disk.
 
 ---
 

@@ -51,6 +51,36 @@ ZERO_UNDECLARED_LOSS_OF_EVIDENTIARY_ACCURACY
 
 Performance improvements are valid only when the evidence contract remains unchanged or the change is explicitly versioned.
 
+## Portability Objective
+
+The local reference path is POSIX-first and terminal-native.
+
+Prefer:
+
+```text
+POSIX-style files and directories
+POSIX advisory record locking
+integer time arithmetic
+argv-based subprocess execution
+UTF-8 text protocols
+loopback HTTP
+terminal keyboard operation
+```
+
+Avoid making these mandatory:
+
+```text
+Bash
+systemd
+GNU-specific commands
+Node.js
+desktop GUI frameworks
+network connectivity
+vendor-specific authentication
+```
+
+Optional host tools such as chronyc or ntpdate may enrich evidence, but absence of those tools must not invalidate the core local workflow.
+
 ---
 
 # Phase 0 — Constitutional Foundation
@@ -280,7 +310,7 @@ Changing one covered byte must fail verification.
 ## Status
 
 ```text
-IMPLEMENTED
+COMPLETE
 ```
 
 ## Goal
@@ -360,6 +390,12 @@ without requiring external services.
 
 # Phase 4 — Minimal Custody Chain
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Move from artifact integrity to actual chain of custody.
@@ -390,6 +426,25 @@ actor/source-attributed where supported
 
 Unknown handlers remain unknown.
 
+The Phase 4 reference implementation uses a domain-separated custody identity, an independent custody-chain verifier, and an append-only local custody ledger whose current tips are derived from immutable records instead of trusted mutable HEAD files.
+
+Clock observations are explicit evidence:
+
+```text
+LOCAL
+NETWORK
+AUTHENTICATED_NETWORK
+SIGNED_ATTESTATION
+```
+
+The reference clock observer prefers existing host chrony state and otherwise falls back to the local system clock. It does not automatically initiate network time queries. An explicit operator diagnostic may invoke ntpdate in query-only mode.
+
+Custody time arithmetic uses integers only. System time and optional diagnostic offsets are represented as integer nanoseconds; RFC3339/base-60 formatting is presentation only.
+
+Chain order is determined by previous_custody, not wall-clock ordering.
+
+The Phase 3 store and Phase 4 custody ledger use POSIX advisory record locks rather than flock-specific locking.
+
 ## Important Boundary
 
 Custody history must never claim:
@@ -411,6 +466,39 @@ original identity
 historical custody
 correction history
 ```
+
+## What Comes Next
+
+After Phase 4 review/merge, implementation proceeds in this order:
+
+```text
+Phase 5  Ollama reference adapter
+    ↓
+Phase 6  real Ollama GitHub Actions smoke test
+    ↓
+Phase 7  MCP stdio interface
+    ↓
+Phase 8  Rust terminal CLI/TUI
+    ↓
+Phase 9  localhost read-only HTTP viewer
+    ↓
+Phase 10 generic/provider adapters
+```
+
+Phase 5 should exercise the existing contracts rather than invent new ones:
+
+```text
+Ollama request
+→ observed request artifact
+→ Ollama response
+→ observed response artifact
+→ event relationship
+→ store
+→ custody
+→ independent verification
+```
+
+The first Ollama adapter remains local and authentication-free. Provider authentication and OpenAI-compatible remote endpoints belong to later adapter/TUI work, behind provider-neutral interfaces.
 
 ---
 
@@ -654,6 +742,31 @@ provenance finalize
 provenance export
 ```
 
+The preferred interactive operator surface is a small Rust TUI inspired by the efficient Codex CLI interaction model:
+
+```text
+type /
+→ command palette
+→ filter/select action
+→ keyboard-first execution
+```
+
+The TUI should remain a client of existing PROVENANCE contracts rather than a second implementation of them.
+
+Authentication should be provider-neutral. Later auth adapters may support:
+
+```text
+none
+API key
+OAuth device authorization
+OAuth loopback/browser authorization
+provider-specific delegated login
+```
+
+Browser-based sign-in should open an explicit authorization URL and receive only the token/code material needed by that provider. Credentials must not become ordinary custody/evidence payloads.
+
+OpenAI-compatible HTTP APIs are an important interoperability target, but compatibility at the transport/API surface must not make OpenAI-specific semantics part of provenance-core.
+
 ## Rule
 
 The CLI wraps existing core/verifier behavior.
@@ -682,15 +795,25 @@ provenance-ui
 
 ## Initial Technology Direction
 
-Prefer:
+Keep the first viewer deliberately simple:
 
 ```text
-HTML
-CSS
-minimal JavaScript
+small local HTTP server
+pure HTML
+pure CSS
+minimal vanilla JavaScript
+no frontend framework
 ```
 
-unless requirements justify more.
+Default network binding:
+
+```text
+127.0.0.1
+```
+
+LAN/public binding must require explicit operator action. The UI is read-only and has no evidentiary authority.
+
+Avoid inetd-style miscellaneous service exposure; the viewer needs one narrow HTTP surface only.
 
 ## Primary Views
 

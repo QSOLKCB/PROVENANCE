@@ -10,6 +10,7 @@ from .canonical import canonical_json_bytes
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 ARTIFACT_RECORD_DOMAIN = b"PROVENANCE/ARTIFACT-RECORD/v1\0"
+CUSTODY_DOMAIN = b"PROVENANCE/CUSTODY/v1\0"
 EVENT_DOMAIN = b"PROVENANCE/EVENT/v1\0"
 MANIFEST_DOMAIN = b"PROVENANCE/MANIFEST/v1\0"
 
@@ -35,6 +36,10 @@ def domain_identity(domain: bytes, value: Any) -> str:
 
 def artifact_record_identity(record: Any) -> str:
     return domain_identity(ARTIFACT_RECORD_DOMAIN, record)
+
+
+def custody_identity(core: Any) -> str:
+    return domain_identity(CUSTODY_DOMAIN, core)
 
 
 def event_identity(core: Any) -> str:

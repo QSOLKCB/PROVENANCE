@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
+import re
 from typing import Iterable
 
 from .canonical import CANONICALIZATION_ID, MAX_SAFE_INTEGER
 from .identity import (
     artifact_record_identity,
+    custody_identity,
     event_identity,
     manifest_identity,
     require_sha256_identity,
@@ -15,8 +18,13 @@ from .identity import (
 )
 
 ARTIFACT_SCHEMA = "provenance.artifact.v1"
+CUSTODY_SCHEMA = "provenance.custody.v1"
 EVENT_SCHEMA = "provenance.event.v1"
 MANIFEST_SCHEMA = "provenance.manifest.v1"
+
+_CUSTODY_TIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$"
+)
 
 
 class EvidenceClass(str, Enum):
@@ -36,6 +44,132 @@ class RetentionState(str, Enum):
     CONTENT_RETAINED = "CONTENT_RETAINED"
     DIGEST_ONLY = "DIGEST_ONLY"
     MISSING = "MISSING"
+
+
+class ClockAssurance(str, Enum):
+    LOCAL = "LOCAL"
+    NETWORK = "NETWORK"
+    AUTHENTICATED_NETWORK = "AUTHENTICATED_NETWORK"
+    SIGNED_ATTESTATION = "SIGNED_ATTESTATION"
+
+
+class CustodyAction(str, Enum):
+    CAPTURED = "CAPTURED"
+    STORED = "STORED"
+    VERIFIED = "VERIFIED"
+    EXPORTED = "EXPORTED"
+    TRANSFERRED = "TRANSFERRED"
+    SUPERSEDED = "SUPERSEDED"
+
+
+def _validate_custody_time(value: str) -> None:
+    if not isinstance(value, str) or _CUSTODY_TIME_RE.fullmatch(value) is None:
+        raise ValueError(
+            "custody recorded_at must be canonical UTC RFC3339 "
+            "YYYY-MM-DDTHH:MM:SS[.ffffff]Z"
+        )
+    try:
+        datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as exc:
+        raise ValueError("custody recorded_at is not a valid UTC timestamp") from exc
+
+
+@dataclass(frozen=True, slots=True)
+class CustodyCore:
+    subject_identity: str
+    action: CustodyAction
+    recorded_at: str
+    clock_source: str
+    clock_assurance: ClockAssurance
+    actor: str | None = None
+    source: str | None = None
+    previous_custody: str | None = None
+    related_identity: str | None = None
+
+    def __post_init__(self) -> None:
+        require_sha256_identity(
+            self.subject_identity,
+            label="custody subject identity",
+        )
+        if not isinstance(self.action, CustodyAction):
+            raise TypeError("custody action must be a CustodyAction")
+        _validate_custody_time(self.recorded_at)
+        if not isinstance(self.clock_source, str) or not self.clock_source:
+            raise ValueError("custody clock_source must be a non-empty string")
+        if not isinstance(self.clock_assurance, ClockAssurance):
+            raise TypeError(
+                "custody clock_assurance must be a ClockAssurance"
+            )
+        for label, value in (("actor", self.actor), ("source", self.source)):
+            if value is not None and (
+                not isinstance(value, str) or not value
+            ):
+                raise ValueError(
+                    f"custody {label} must be null or a non-empty string"
+                )
+        if self.previous_custody is not None:
+            require_sha256_identity(
+                self.previous_custody,
+                label="previous custody identity",
+            )
+        if self.related_identity is not None:
+            require_sha256_identity(
+                self.related_identity,
+                label="custody related identity",
+            )
+        if (
+            self.action is CustodyAction.SUPERSEDED
+            and self.related_identity is None
+        ):
+            raise ValueError(
+                "SUPERSEDED custody requires related_identity"
+            )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema": CUSTODY_SCHEMA,
+            "canonicalization": CANONICALIZATION_ID,
+            "subject_identity": self.subject_identity,
+            "action": self.action.value,
+            "recorded_at": self.recorded_at,
+            "clock_source": self.clock_source,
+            "clock_assurance": self.clock_assurance.value,
+            "actor": self.actor,
+            "source": self.source,
+            "previous_custody": self.previous_custody,
+            "related_identity": self.related_identity,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class CustodyEnvelope:
+    core: CustodyCore
+    custody_identity: str
+
+    @classmethod
+    def seal(cls, core: CustodyCore) -> "CustodyEnvelope":
+        return cls(
+            core=core,
+            custody_identity=custody_identity(core.to_dict()),
+        )
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.core, CustodyCore):
+            raise TypeError("custody envelope core must be a CustodyCore")
+        require_sha256_identity(
+            self.custody_identity,
+            label="custody identity",
+        )
+        expected = custody_identity(self.core.to_dict())
+        if self.custody_identity != expected:
+            raise ValueError("custody identity does not match custody core")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "core": self.core.to_dict(),
+            "custody_identity": self.custody_identity,
+            "self_hash_exclusion": "custody_identity",
+        }
 
 
 @dataclass(frozen=True, slots=True)

@@ -780,6 +780,48 @@ It must not reshape the universal core schema around one vendor.
 
 ---
 
+# 16A. POSIX-First Local Portability
+
+The local reference implementation should remain usable on ordinary Unix-like systems without requiring a desktop environment or network service.
+
+Baseline principles:
+
+```text
+terminal-native
+POSIX-style filesystem semantics
+POSIX advisory record locks
+same-process mutexes around process-owned POSIX lock files
+integer evidentiary time arithmetic
+no Bash requirement
+no systemd requirement
+no GNU-command requirement
+no Node requirement
+no automatic network dependency
+```
+
+Host-specific tools are optional observers.
+
+For example:
+
+```text
+chronyc present
+→ inspect existing host clock discipline
+
+chronyc absent
+→ use local system clock
+
+explicit operator diagnostic
+→ ntpdate -q <server>
+```
+
+PROVENANCE should execute subprocesses through explicit argv vectors, never by interpolating evidence into shell command strings.
+
+Because classic POSIX record locks are process-owned, a record lock alone is not sufficient for multiple threads or instances in one process. Lock-file open/close operations must be serialized by the same process-local mutex used around acquisition of the POSIX record lock.
+
+Presentation may use RFC3339/base-60 clock notation, but custody time calculations remain integer-only.
+
+---
+
 # 17. Ollama Reference Adapter
 
 The first AI adapter should be Ollama.
@@ -941,6 +983,8 @@ A local application should be able to use PROVENANCE without operating a network
 
 The CLI is the simplest human and automation interface.
 
+The preferred interactive implementation direction is a Rust TUI with keyboard-first slash-command discovery. Typing `/` should open/filter a compact command palette rather than requiring users to memorize flags for common interactive operations.
+
 Initial commands may conceptually include:
 
 ```text
@@ -955,6 +999,10 @@ The CLI should expose core functionality directly.
 
 It should not contain a second implementation of verification semantics.
 
+Provider authentication belongs behind an interface boundary. Supported modes may include API keys, OAuth device authorization, OAuth browser/loopback authorization, or no authentication for local endpoints. Tokens and credentials are operational secrets, not ordinary evidence payloads.
+
+OpenAI-compatible API surfaces may be supported as a generic interoperability adapter because many providers and local/open-source systems implement similar request/response shapes. That compatibility must remain outside the universal evidence core.
+
 ---
 
 # 23. `provenance-ui`
@@ -962,6 +1010,8 @@ It should not contain a second implementation of verification semantics.
 The UI is an evidence viewer.
 
 It has no evidentiary authority.
+
+The initial viewer should be served by a tiny local HTTP server bound to loopback by default and implemented with pure HTML/CSS plus minimal vanilla JavaScript. No frontend framework or Node runtime is required unless a later concrete requirement earns that complexity.
 
 Its job is to make the chain understandable.
 
@@ -979,6 +1029,15 @@ evidence gaps
 The UI consumes existing evidence.
 
 It does not define evidence.
+
+Network exposure is explicit:
+
+```text
+default = 127.0.0.1
+LAN/public = operator opt-in
+```
+
+Do not expose unrelated inetd-style utility services as part of the viewer.
 
 ---
 
