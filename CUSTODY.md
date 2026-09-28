@@ -191,6 +191,8 @@ That query is observation-only and opt-in.
 
 PROVENANCE does not start a time service and does not open UDP/TCP time listeners.
 
+Automatic chrony inspection uses numeric output mode for sources, tracking, and authentication data so clock observation does not trigger hostname-resolution traffic.
+
 If the explicit diagnostic helper is used, its decimal offset text is parsed into integer nanoseconds without binary floating-point arithmetic. The host clock is read as integer nanoseconds, offset arithmetic is integer-only, and base-60/RFC3339 conversion occurs only at the presentation boundary.
 
 The recorded diagnostic timestamp may retain:
@@ -238,7 +240,17 @@ It does not upgrade unrelated custody claims.
 
 # Local custody ledger
 
-The Phase 4 reference ledger uses POSIX-style advisory record locking through fcntl record locks rather than flock-specific locking.
+The Phase 4 reference ledger combines two lock layers:
+
+~~~text
+same-process mutex keyed by custody-root filesystem identity
++
+POSIX fcntl advisory record lock
+~~~
+
+The process-local layer serializes threads and multiple ledger instances inside one process. It also prevents PROVENANCE from opening/closing the custody lock file through another instance while a process-owned POSIX lock is held.
+
+The POSIX layer serializes cooperating writers across processes.
 
 The Phase 4 reference ledger uses:
 
@@ -246,10 +258,15 @@ The Phase 4 reference ledger uses:
 custody/
 ├── CUSTODY_FORMAT
 ├── .custody.lock
+├── staging/
 └── records/
     └── sha256/
         └── <custody-digest>.json
 ~~~
+
+Only records/sha256 is authoritative custody history.
+
+staging/ is non-authoritative publication workspace.
 
 The ledger deliberately has no authoritative mutable per-subject HEAD file.
 
@@ -258,17 +275,29 @@ Current tips are derived from immutable custody records by independent verificat
 Appending follows:
 
 ~~~text
-lock
+acquire same-process mutex
+→ acquire POSIX record lock
+→ recover stale staging files
 → verify current ledger
 → derive current subject tip
 → construct next custody record
-→ publish immutable canonical record
-→ fsync containing directory
+→ write+fsync staging file
+→ atomically link immutable record into records/sha256
+→ fsync authoritative records directory
+→ remove staging name
+→ fsync staging directory
 → independently verify complete ledger
-→ unlock
+→ release POSIX lock
+→ release same-process mutex
 ~~~
 
 No successful append may create a fork.
+
+A crash before final-name publication may leave only a staging file; reopen removes it under the writer lock.
+
+A crash after final-name publication may leave both the authoritative record and a staging name; reopen preserves the verified record and removes the stale staging name under the writer lock.
+
+Unexpected files inside records/sha256 remain verification failures and are never silently cleaned up.
 
 ---
 
