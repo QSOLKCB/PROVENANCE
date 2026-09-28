@@ -104,7 +104,7 @@ jobs:
           set -eu
           out="$RUNNER_TEMP/provenance-ollama-${{ matrix.lane }}"
           mkdir -p "$out"
-          python3 scripts/ollama_smoke.py             --model "$OLLAMA_MODEL"             --host "$OLLAMA_HOST"             --output "$out"
+          python3 -m scripts.ollama_smoke --model "$OLLAMA_MODEL" --host "$OLLAMA_HOST" --output "$out"
 
       - name: Upload evidence
         if: always()
