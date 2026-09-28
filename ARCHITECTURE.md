@@ -848,9 +848,13 @@ stream = false
 dependencies = Python standard library + existing PROVENANCE modules
 ```
 
-It retains the exact HTTP request body bytes it sends and the exact response body bytes it receives.
+It retains the exact request bytes prepared by the adapter before transport and retains any HTTP response body bytes before parsing.
 
-The response model field is treated as a declaration by Ollama. It is not promoted into independently verified model provenance.
+The transport boundary is enforced by an adapter-owned urllib opener with environment proxies disabled and redirects rejected. The documented localhost spelling is canonicalized to a literal loopback address to avoid DNS.
+
+Prepared request evidence does not independently prove peer receipt. Transport and parse failures are recorded with COLLECTION_FAILED events and finalized evidence rather than silently disappearing.
+
+The response model field is treated as a declaration by Ollama. It is not promoted into independently verified model provenance, and it is not used as the custody actor.
 
 Capture times are expressed through custody observations rather than by adding provider-specific timestamp fields to the universal event core.
 
@@ -900,8 +904,9 @@ VERIFY
 Assertions should cover:
 
 ```text
-request retained or intentionally omitted
-response retained
+prepared request retained
+successful or error response bytes retained when observed
+failure evidence finalized on transport/parse failure
 request identity recomputes
 response identity recomputes
 adapter identity recorded
