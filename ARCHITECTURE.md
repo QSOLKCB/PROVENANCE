@@ -824,7 +824,7 @@ Presentation may use RFC3339/base-60 clock notation, but custody time calculatio
 
 # 17. Ollama Reference Adapter
 
-The first AI adapter should be Ollama.
+The first AI adapter is Ollama.
 
 Reasons:
 
@@ -837,13 +837,43 @@ easy request/response capture
 small models available
 ```
 
+The Phase 5 reference implementation is:
+
+```text
+provenance_adapters.OllamaAdapter
+adapter id = provenance-adapter:ollama/v1
+transport = loopback HTTP only
+endpoint = /api/generate
+stream = false
+dependencies = Python standard library + existing PROVENANCE modules
+```
+
+It retains the exact HTTP request body bytes it sends and the exact response body bytes it receives.
+
+The response model field is treated as a declaration by Ollama. It is not promoted into independently verified model provenance.
+
+Capture times are expressed through custody observations rather than by adding provider-specific timestamp fields to the universal event core.
+
 The Ollama adapter exists primarily to test the evidence architecture.
 
 It must not define AI provenance semantics for every other provider.
 
+Ollama's OpenAI-compatible endpoints are intentionally not used to redefine Phase 5. OpenAI-compatible HTTP remains a later generic interoperability surface behind the adapter boundary.
+
 ---
 
 # 18. Ollama CI Contract
+
+The initial real-model lane uses a GitHub Actions matrix with separate clean runners. Each matrix job starts its own Ollama server and pulls one small reference model.
+
+Current reference matrix:
+
+```text
+qwen2.5:0.5b
+qwen2:0.5b
+```
+
+The Ollama runtime is version-pinned in the workflow and its downloaded installer script is checksum-verified before execution.
 
 A real inference test should verify the chain rather than exact generated language.
 
