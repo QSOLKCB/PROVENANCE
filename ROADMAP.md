@@ -51,6 +51,36 @@ ZERO_UNDECLARED_LOSS_OF_EVIDENTIARY_ACCURACY
 
 Performance improvements are valid only when the evidence contract remains unchanged or the change is explicitly versioned.
 
+## Portability Objective
+
+The local reference path is POSIX-first and terminal-native.
+
+Prefer:
+
+```text
+POSIX-style files and directories
+POSIX advisory record locking
+integer time arithmetic
+argv-based subprocess execution
+UTF-8 text protocols
+loopback HTTP
+terminal keyboard operation
+```
+
+Avoid making these mandatory:
+
+```text
+Bash
+systemd
+GNU-specific commands
+Node.js
+desktop GUI frameworks
+network connectivity
+vendor-specific authentication
+```
+
+Optional host tools such as chronyc or ntpdate may enrich evidence, but absence of those tools must not invalidate the core local workflow.
+
 ---
 
 # Phase 0 — Constitutional Foundation
@@ -407,7 +437,13 @@ AUTHENTICATED_NETWORK
 SIGNED_ATTESTATION
 ```
 
-The reference clock observer prefers existing chrony state, may query ntpdate in query-only mode, and falls back to the local system clock. Chain order is determined by previous_custody, not wall-clock ordering.
+The reference clock observer prefers existing host chrony state and otherwise falls back to the local system clock. It does not automatically initiate network time queries. An explicit operator diagnostic may invoke ntpdate in query-only mode.
+
+Custody time arithmetic uses integers only. System time and optional diagnostic offsets are represented as integer nanoseconds; RFC3339/base-60 formatting is presentation only.
+
+Chain order is determined by previous_custody, not wall-clock ordering.
+
+The Phase 3 store and Phase 4 custody ledger use POSIX advisory record locks rather than flock-specific locking.
 
 ## Important Boundary
 
@@ -430,6 +466,39 @@ original identity
 historical custody
 correction history
 ```
+
+## What Comes Next
+
+After Phase 4 review/merge, implementation proceeds in this order:
+
+```text
+Phase 5  Ollama reference adapter
+    ↓
+Phase 6  real Ollama GitHub Actions smoke test
+    ↓
+Phase 7  MCP stdio interface
+    ↓
+Phase 8  Rust terminal CLI/TUI
+    ↓
+Phase 9  localhost read-only HTTP viewer
+    ↓
+Phase 10 generic/provider adapters
+```
+
+Phase 5 should exercise the existing contracts rather than invent new ones:
+
+```text
+Ollama request
+→ observed request artifact
+→ Ollama response
+→ observed response artifact
+→ event relationship
+→ store
+→ custody
+→ independent verification
+```
+
+The first Ollama adapter remains local and authentication-free. Provider authentication and OpenAI-compatible remote endpoints belong to later adapter/TUI work, behind provider-neutral interfaces.
 
 ---
 
