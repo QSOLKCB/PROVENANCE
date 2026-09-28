@@ -262,7 +262,7 @@ def _verify_artifact_record(
 
     if retention == RetentionState.CONTENT_RETAINED.value:
         content_path = bundle_dir / _artifact_content_relative(str(content_identity))
-        if not content_path.is_file() or content_path.is_symlink():
+        if content_path.is_symlink() or not content_path.is_file():
             raise VerificationError("retained artifact content is missing or unsafe")
         try:
             data = content_path.read_bytes()
@@ -416,6 +416,11 @@ def verify_bundle(bundle_dir: Path) -> VerificationReport:
         )
 
     manifest_path = bundle_dir / "manifest.json"
+    if manifest_path.is_symlink():
+        errors.append("manifest.json must not be a symbolic link")
+        return VerificationReport(
+            False, None, None, 0, tuple(checks), tuple(errors)
+        )
     try:
         (
             _manifest_core,
@@ -470,13 +475,14 @@ def verify_bundle(bundle_dir: Path) -> VerificationReport:
     artifact_content_ids = {str(entry["content_identity"]) for entry in artifacts}
     event_ids = set(events)
 
-    artifact_failures_before = len(errors)
+    artifact_phase_ok = True
     for entry in artifacts:
         if entry["retention"] == RetentionState.MISSING.value:
             continue
         relative = _artifact_record_relative(entry["record_identity"])
         path = bundle_dir / relative
-        if not path.is_file() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            artifact_phase_ok = False
             continue
         try:
             _verify_artifact_record(
@@ -485,16 +491,18 @@ def verify_bundle(bundle_dir: Path) -> VerificationReport:
                 bundle_dir=bundle_dir,
             )
         except VerificationError as exc:
+            artifact_phase_ok = False
             errors.append(f"{relative}: {exc}")
-    if len(errors) == artifact_failures_before:
+    if artifact_phase_ok:
         checks.append("artifact metadata and available content verified")
 
-    event_failures_before = len(errors)
+    event_phase_ok = True
     references: list[tuple[str, str, str]] = []
     for identity in events:
         relative = _event_relative(identity)
         path = bundle_dir / relative
-        if not path.is_file() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            event_phase_ok = False
             continue
         try:
             inputs, outputs, relationship_targets = _verify_event(
@@ -502,6 +510,7 @@ def verify_bundle(bundle_dir: Path) -> VerificationReport:
                 expected_identity=identity,
             )
         except VerificationError as exc:
+            event_phase_ok = False
             errors.append(f"{relative}: {exc}")
             continue
         references.extend((relative, "input", value) for value in inputs)
@@ -514,15 +523,17 @@ def verify_bundle(bundle_dir: Path) -> VerificationReport:
     for relative, reference_kind, target in references:
         if reference_kind in {"input", "output"}:
             if target not in artifact_content_ids:
+                event_phase_ok = False
                 errors.append(
                     f"{relative}: {reference_kind} does not resolve to a manifest artifact: {target}"
                 )
         elif target not in resolvable_relationship_targets:
+            event_phase_ok = False
             errors.append(
                 f"{relative}: relationship target does not resolve inside the manifest: {target}"
             )
 
-    if len(errors) == event_failures_before:
+    if event_phase_ok:
         checks.append("event identities and references verified")
 
     integrity_verified = not errors
