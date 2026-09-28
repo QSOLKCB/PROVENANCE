@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import os
 from pathlib import Path
 import stat
 from typing import Any
@@ -21,10 +23,10 @@ from provenance_core import (
     manifest_identity,
     parse_canonical_json_bytes,
     require_sha256_identity,
-    sha256_identity,
 )
 
 VERIFICATION_REPORT_SCHEMA = "provenance.verification-report.v1"
+READ_CHUNK_SIZE = 1024 * 1024
 
 
 class VerificationError(ValueError):
@@ -75,6 +77,12 @@ def _identity_digest(value: Any, *, label: str) -> str:
     return str(value).split(":", 1)[1]
 
 
+def _require_enum_string(value: Any, allowed: set[str], *, label: str) -> str:
+    if not isinstance(value, str) or value not in allowed:
+        raise VerificationError(f"{label} is invalid")
+    return value
+
+
 def _event_relative(identity: str) -> str:
     return f"events/sha256/{_identity_digest(identity, label='event identity')}.json"
 
@@ -90,23 +98,118 @@ def _artifact_content_relative(identity: str) -> str:
     return f"artifacts/sha256/{_identity_digest(identity, label='artifact content identity')}"
 
 
-def _require_regular_file(path: Path, *, label: str) -> None:
-    """Reject symlinks and special files before any evidence bytes are read."""
+def _descriptor_flags(*, directory: bool) -> int:
+    required = ("O_NOFOLLOW", "O_CLOEXEC")
+    if directory:
+        required += ("O_DIRECTORY",)
+    missing = [name for name in required if not hasattr(os, name)]
+    if os.open not in os.supports_dir_fd:
+        missing.append("dir_fd support for os.open")
+    if missing:
+        raise VerificationError(
+            "secure descriptor-relative verification is unsupported: "
+            + ", ".join(missing)
+        )
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    if directory:
+        flags |= os.O_DIRECTORY
+    else:
+        flags |= getattr(os, "O_NONBLOCK", 0)
+    return flags
 
+
+def _open_bundle_root(bundle_dir: Path) -> int:
+    flags = _descriptor_flags(directory=True)
     try:
-        mode = path.lstat().st_mode
+        fd = os.open(bundle_dir, flags)
     except OSError as exc:
-        raise VerificationError(f"{label} cannot be inspected: {exc}") from exc
-    if not stat.S_ISREG(mode):
-        raise VerificationError(f"{label} must be a regular non-symlink file")
-
-
-def _read_canonical_object(path: Path, *, label: str) -> dict[str, Any]:
-    _require_regular_file(path, label=label)
+        raise VerificationError(f"bundle root cannot be opened safely: {exc}") from exc
     try:
-        data = path.read_bytes()
-    except OSError as exc:
-        raise VerificationError(f"{label} cannot be read: {exc}") from exc
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise VerificationError("bundle root must be a directory")
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _relative_parts(relative: str) -> tuple[str, ...]:
+    if not isinstance(relative, str) or not relative or relative.startswith("/"):
+        raise VerificationError("evidence path must be a non-empty relative path")
+    parts = tuple(relative.split("/"))
+    if any(part in {"", ".", ".."} for part in parts):
+        raise VerificationError(f"unsafe evidence path: {relative}")
+    return parts
+
+
+def _open_relative_regular(root_fd: int, relative: str, *, label: str) -> int:
+    """Open a required file through trusted directory descriptors only."""
+
+    parts = _relative_parts(relative)
+    current_fd = os.dup(root_fd)
+    try:
+        for part in parts[:-1]:
+            try:
+                next_fd = os.open(
+                    part,
+                    _descriptor_flags(directory=True),
+                    dir_fd=current_fd,
+                )
+            except OSError as exc:
+                raise VerificationError(
+                    f"{label} parent path is missing or unsafe: {exc}"
+                ) from exc
+            os.close(current_fd)
+            current_fd = next_fd
+
+        try:
+            file_fd = os.open(
+                parts[-1],
+                _descriptor_flags(directory=False),
+                dir_fd=current_fd,
+            )
+        except OSError as exc:
+            raise VerificationError(
+                f"{label} is missing or unsafe: {exc}"
+            ) from exc
+
+        try:
+            if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+                raise VerificationError(
+                    f"{label} must be a regular non-symlink file"
+                )
+            return file_fd
+        except Exception:
+            os.close(file_fd)
+            raise
+    finally:
+        os.close(current_fd)
+
+
+def _read_regular_bytes(root_fd: int, relative: str, *, label: str) -> bytes:
+    fd = _open_relative_regular(root_fd, relative, label=label)
+    data = bytearray()
+    try:
+        while True:
+            try:
+                chunk = os.read(fd, READ_CHUNK_SIZE)
+            except OSError as exc:
+                raise VerificationError(f"{label} cannot be read: {exc}") from exc
+            if not chunk:
+                break
+            data.extend(chunk)
+    finally:
+        os.close(fd)
+    return bytes(data)
+
+
+def _read_canonical_object(
+    root_fd: int,
+    relative: str,
+    *,
+    label: str,
+) -> dict[str, Any]:
+    data = _read_regular_bytes(root_fd, relative, label=label)
     try:
         value = parse_canonical_json_bytes(data)
     except RecursionError as exc:
@@ -120,10 +223,38 @@ def _read_canonical_object(path: Path, *, label: str) -> dict[str, Any]:
     return value
 
 
+def _stream_content_identity(
+    root_fd: int,
+    relative: str,
+    *,
+    label: str,
+) -> tuple[int, str]:
+    fd = _open_relative_regular(root_fd, relative, label=label)
+    digest = hashlib.sha256()
+    byte_count = 0
+    try:
+        while True:
+            try:
+                chunk = os.read(fd, READ_CHUNK_SIZE)
+            except OSError as exc:
+                raise VerificationError(f"{label} cannot be read: {exc}") from exc
+            if not chunk:
+                break
+            byte_count += len(chunk)
+            digest.update(chunk)
+    finally:
+        os.close(fd)
+    return byte_count, f"sha256:{digest.hexdigest()}"
+
+
 def _verify_manifest(
-    manifest_path: Path,
+    root_fd: int,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[str], str, str, int]:
-    envelope = _read_canonical_object(manifest_path, label="manifest.json")
+    envelope = _read_canonical_object(
+        root_fd,
+        "manifest.json",
+        label="manifest.json",
+    )
     _exact_keys(
         envelope,
         {"core", "manifest_identity", "self_hash_exclusion"},
@@ -148,9 +279,11 @@ def _verify_manifest(
     if core.get("canonicalization") != CANONICALIZATION_ID:
         raise VerificationError("manifest canonicalization changed")
 
-    scope = core.get("scope")
-    if scope not in {"open", "closed"}:
-        raise VerificationError("manifest scope must be open or closed")
+    scope = _require_enum_string(
+        core.get("scope"),
+        {"open", "closed"},
+        label="manifest scope",
+    )
 
     artifacts = core.get("artifacts")
     events = core.get("events")
@@ -162,6 +295,7 @@ def _verify_manifest(
     normalized_artifacts: list[dict[str, Any]] = []
     artifact_keys: list[str] = []
     known_missing = 0
+    retention_values = {item.value for item in RetentionState}
     for index, entry in enumerate(artifacts):
         if not isinstance(entry, dict):
             raise VerificationError(f"manifest artifact[{index}] must be an object")
@@ -174,9 +308,11 @@ def _verify_manifest(
         _identity_digest(
             content_identity, label=f"manifest artifact[{index}] content identity"
         )
-        retention = entry.get("retention")
-        if retention not in {item.value for item in RetentionState}:
-            raise VerificationError(f"manifest artifact[{index}] retention is invalid")
+        retention = _require_enum_string(
+            entry.get("retention"),
+            retention_values,
+            label=f"manifest artifact[{index}] retention",
+        )
 
         record_identity = entry.get("record_identity")
         if retention == RetentionState.MISSING.value:
@@ -219,19 +355,19 @@ def _verify_manifest(
         core,
         normalized_artifacts,
         normalized_events,
-        str(scope),
+        scope,
         str(claimed_identity),
         known_missing,
     )
 
 
 def _verify_artifact_record(
-    path: Path,
+    root_fd: int,
+    relative: str,
     *,
     manifest_entry: dict[str, Any],
-    bundle_dir: Path,
 ) -> None:
-    record = _read_canonical_object(path, label=path.as_posix())
+    record = _read_canonical_object(root_fd, relative, label=relative)
     _exact_keys(
         record,
         {
@@ -268,26 +404,27 @@ def _verify_artifact_record(
     if not isinstance(media_type, str) or not media_type:
         raise VerificationError("artifact media_type must be a non-empty string")
 
-    retention = record.get("retention")
-    if retention not in {
-        RetentionState.CONTENT_RETAINED.value,
-        RetentionState.DIGEST_ONLY.value,
-    }:
-        raise VerificationError("artifact record retention is invalid")
+    retention = _require_enum_string(
+        record.get("retention"),
+        {
+            RetentionState.CONTENT_RETAINED.value,
+            RetentionState.DIGEST_ONLY.value,
+        },
+        label="artifact record retention",
+    )
     if retention != manifest_entry["retention"]:
         raise VerificationError("artifact record retention differs from manifest")
 
     if retention == RetentionState.CONTENT_RETAINED.value:
-        content_path = bundle_dir / _artifact_content_relative(str(content_identity))
-        if content_path.is_symlink() or not content_path.is_file():
-            raise VerificationError("retained artifact content is missing or unsafe")
-        try:
-            data = content_path.read_bytes()
-        except OSError as exc:
-            raise VerificationError(f"retained artifact cannot be read: {exc}") from exc
-        if len(data) != byte_count:
+        content_relative = _artifact_content_relative(str(content_identity))
+        observed_count, observed_identity = _stream_content_identity(
+            root_fd,
+            content_relative,
+            label=content_relative,
+        )
+        if observed_count != byte_count:
             raise VerificationError("retained artifact byte-count mismatch")
-        if sha256_identity(data) != content_identity:
+        if observed_identity != content_identity:
             raise VerificationError("retained artifact SHA-256 mismatch")
 
     expected_record_identity = artifact_record_identity(record)
@@ -298,11 +435,12 @@ def _verify_artifact_record(
 
 
 def _verify_event(
-    path: Path,
+    root_fd: int,
+    relative: str,
     *,
     expected_identity: str,
 ) -> tuple[list[str], list[str], list[str]]:
-    envelope = _read_canonical_object(path, label=path.as_posix())
+    envelope = _read_canonical_object(root_fd, relative, label=relative)
     _exact_keys(
         envelope,
         {"core", "event_identity", "self_hash_exclusion"},
@@ -335,12 +473,18 @@ def _verify_event(
         raise VerificationError("event schema changed")
     if core.get("canonicalization") != CANONICALIZATION_ID:
         raise VerificationError("event canonicalization changed")
-    if core.get("evidence_class") not in {item.value for item in EvidenceClass}:
-        raise VerificationError("event evidence_class is invalid")
-    if core.get("collection_status") not in {
-        item.value for item in CollectionStatus
-    }:
-        raise VerificationError("event collection_status is invalid")
+
+    evidence_class = _require_enum_string(
+        core.get("evidence_class"),
+        {item.value for item in EvidenceClass},
+        label="event evidence_class",
+    )
+    _require_enum_string(
+        core.get("collection_status"),
+        {item.value for item in CollectionStatus},
+        label="event collection_status",
+    )
+
     if not isinstance(core.get("actor"), str) or not core["actor"]:
         raise VerificationError("event actor must be a non-empty string")
     if not isinstance(core.get("operation"), str) or not core["operation"]:
@@ -384,7 +528,7 @@ def _verify_event(
         relationship_targets.append(str(target))
         has_derived_from = has_derived_from or kind == "derived_from"
 
-    if core["evidence_class"] == EvidenceClass.DERIVED.value:
+    if evidence_class == EvidenceClass.DERIVED.value:
         if not normalized_inputs and not has_derived_from:
             raise VerificationError("DERIVED event does not identify a source")
 
@@ -394,27 +538,60 @@ def _verify_event(
     return normalized_inputs, normalized_outputs, relationship_targets
 
 
-def _physical_files(bundle_dir: Path) -> tuple[set[str], list[str]]:
+def _physical_files(root_fd: int) -> tuple[set[str], list[str]]:
+    """Enumerate all bundle entries without suppressing traversal failures."""
+
+    if os.scandir not in os.supports_fd:
+        raise VerificationError(
+            "secure descriptor-relative verification requires scandir(fd) support"
+        )
+
     files: set[str] = set()
     unsafe: list[str] = []
+    stack: list[tuple[int, str]] = [(os.dup(root_fd), "")]
     try:
-        paths = list(bundle_dir.rglob("*"))
-    except OSError as exc:
-        raise VerificationError(f"cannot enumerate bundle: {exc}") from exc
-    for path in paths:
-        relative = path.relative_to(bundle_dir).as_posix()
-        try:
-            mode = path.lstat().st_mode
-        except OSError as exc:
-            raise VerificationError(
-                f"cannot inspect bundle entry {relative}: {exc}"
-            ) from exc
-        if stat.S_ISREG(mode):
-            files.add(relative)
-        elif stat.S_ISDIR(mode):
-            continue
-        else:
-            unsafe.append(relative)
+        while stack:
+            dir_fd, prefix = stack.pop()
+            try:
+                with os.scandir(dir_fd) as entries:
+                    for entry in entries:
+                        relative = f"{prefix}/{entry.name}" if prefix else entry.name
+                        try:
+                            mode = entry.stat(follow_symlinks=False).st_mode
+                        except OSError as exc:
+                            raise VerificationError(
+                                f"cannot inspect bundle entry {relative}: {exc}"
+                            ) from exc
+
+                        if stat.S_ISREG(mode):
+                            files.add(relative)
+                        elif stat.S_ISDIR(mode):
+                            try:
+                                child_fd = os.open(
+                                    entry.name,
+                                    _descriptor_flags(directory=True),
+                                    dir_fd=dir_fd,
+                                )
+                            except OSError as exc:
+                                raise VerificationError(
+                                    f"cannot traverse bundle directory {relative}: {exc}"
+                                ) from exc
+                            stack.append((child_fd, relative))
+                        else:
+                            unsafe.append(relative)
+            except OSError as exc:
+                raise VerificationError(
+                    f"cannot enumerate bundle directory {prefix or '.'}: {exc}"
+                ) from exc
+            finally:
+                os.close(dir_fd)
+    finally:
+        for dir_fd, _prefix in stack:
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
+
     return files, unsafe
 
 
@@ -428,139 +605,169 @@ def verify_bundle(bundle_dir: Path) -> VerificationReport:
     scope: str | None = None
     known_missing = 0
 
-    if bundle_dir.is_symlink():
-        errors.append("bundle root must not be a symbolic link")
-        return VerificationReport(
-            False, None, None, 0, tuple(checks), tuple(errors)
-        )
-    if not bundle_dir.is_dir():
-        errors.append("bundle path must be an existing directory")
-        return VerificationReport(
-            False, None, None, 0, tuple(checks), tuple(errors)
-        )
-
-    manifest_path = bundle_dir / "manifest.json"
     try:
-        (
-            _manifest_core,
-            artifacts,
-            events,
-            scope,
-            manifest_identity_value,
-            known_missing,
-        ) = _verify_manifest(manifest_path)
-        checks.append("manifest canonical form, schema and identity verified")
+        root_fd = _open_bundle_root(bundle_dir)
     except VerificationError as exc:
-        errors.append(str(exc))
         return VerificationReport(
-            False,
-            manifest_identity_value,
-            scope,
-            known_missing,
-            tuple(checks),
-            tuple(errors),
+            False, None, None, 0, tuple(checks), (str(exc),)
         )
-
-    expected_files: set[str] = {"manifest.json"}
-    for entry in artifacts:
-        if entry["retention"] == RetentionState.MISSING.value:
-            continue
-        expected_files.add(_artifact_record_relative(entry["record_identity"]))
-        if entry["retention"] == RetentionState.CONTENT_RETAINED.value:
-            expected_files.add(_artifact_content_relative(entry["content_identity"]))
-    for identity in events:
-        expected_files.add(_event_relative(identity))
 
     try:
-        physical_files, unsafe_paths = _physical_files(bundle_dir)
-    except VerificationError as exc:
-        errors.append(str(exc))
-        physical_files, unsafe_paths = set(), []
-
-    if unsafe_paths:
-        errors.append(
-            "non-regular filesystem entries are forbidden inside evidence bundles: "
-            + ", ".join(sorted(unsafe_paths))
-        )
-    missing_files = sorted(expected_files - physical_files)
-    extra_files = sorted(physical_files - expected_files)
-    if missing_files:
-        errors.append("bundle is missing declared files: " + ", ".join(missing_files))
-    if extra_files:
-        errors.append("bundle contains undeclared files: " + ", ".join(extra_files))
-    if not unsafe_paths and not missing_files and not extra_files:
-        checks.append("physical bundle membership exactly matches the manifest")
-
-    artifact_content_ids = {str(entry["content_identity"]) for entry in artifacts}
-    event_ids = set(events)
-
-    artifact_phase_ok = True
-    for entry in artifacts:
-        if entry["retention"] == RetentionState.MISSING.value:
-            continue
-        relative = _artifact_record_relative(entry["record_identity"])
-        path = bundle_dir / relative
-        if path.is_symlink() or not path.is_file():
-            artifact_phase_ok = False
-            continue
         try:
-            _verify_artifact_record(
-                path,
-                manifest_entry=entry,
-                bundle_dir=bundle_dir,
-            )
+            (
+                _manifest_core,
+                artifacts,
+                events,
+                scope,
+                manifest_identity_value,
+                known_missing,
+            ) = _verify_manifest(root_fd)
+            checks.append("manifest canonical form, schema and identity verified")
         except VerificationError as exc:
-            artifact_phase_ok = False
-            errors.append(f"{relative}: {exc}")
-    if artifact_phase_ok:
-        checks.append("artifact metadata and available content verified")
+            errors.append(str(exc))
+            return VerificationReport(
+                False,
+                manifest_identity_value,
+                scope,
+                known_missing,
+                tuple(checks),
+                tuple(errors),
+            )
 
-    event_phase_ok = True
-    references: list[tuple[str, str, str]] = []
-    for identity in events:
-        relative = _event_relative(identity)
-        path = bundle_dir / relative
-        if path.is_symlink() or not path.is_file():
-            event_phase_ok = False
-            continue
+        expected_files: set[str] = {"manifest.json"}
+        for entry in artifacts:
+            if entry["retention"] == RetentionState.MISSING.value:
+                continue
+            expected_files.add(_artifact_record_relative(entry["record_identity"]))
+            if entry["retention"] == RetentionState.CONTENT_RETAINED.value:
+                expected_files.add(
+                    _artifact_content_relative(entry["content_identity"])
+                )
+        for identity in events:
+            expected_files.add(_event_relative(identity))
+
         try:
-            inputs, outputs, relationship_targets = _verify_event(
-                path,
-                expected_identity=identity,
-            )
+            physical_files, unsafe_paths = _physical_files(root_fd)
         except VerificationError as exc:
-            event_phase_ok = False
-            errors.append(f"{relative}: {exc}")
-            continue
-        references.extend((relative, "input", value) for value in inputs)
-        references.extend((relative, "output", value) for value in outputs)
-        references.extend(
-            (relative, "relationship", value) for value in relationship_targets
-        )
+            errors.append(str(exc))
+            return VerificationReport(
+                False,
+                manifest_identity_value,
+                scope,
+                known_missing,
+                tuple(checks),
+                tuple(errors),
+            )
 
-    resolvable_relationship_targets = artifact_content_ids | event_ids
-    for relative, reference_kind, target in references:
-        if reference_kind in {"input", "output"}:
-            if target not in artifact_content_ids:
+        membership_phase_ok = True
+        if unsafe_paths:
+            membership_phase_ok = False
+            errors.append(
+                "non-regular filesystem entries are forbidden inside evidence bundles: "
+                + ", ".join(sorted(unsafe_paths))
+            )
+
+        missing_files = sorted(expected_files - physical_files)
+        extra_files = sorted(physical_files - expected_files)
+        if missing_files:
+            membership_phase_ok = False
+            errors.append(
+                "bundle is missing declared files: " + ", ".join(missing_files)
+            )
+        if extra_files:
+            membership_phase_ok = False
+            errors.append(
+                "bundle contains undeclared files: " + ", ".join(extra_files)
+            )
+        if membership_phase_ok:
+            checks.append("physical bundle membership exactly matches the manifest")
+
+        # Unsafe entries can redirect or block path traversal. Do not read children
+        # after discovering them even though descriptor-relative opens would reject
+        # the same boundary again.
+        if unsafe_paths:
+            return VerificationReport(
+                False,
+                manifest_identity_value,
+                scope,
+                known_missing,
+                tuple(checks),
+                tuple(errors),
+            )
+
+        artifact_content_ids = {
+            str(entry["content_identity"]) for entry in artifacts
+        }
+        event_ids = set(events)
+
+        artifact_phase_ok = True
+        for entry in artifacts:
+            if entry["retention"] == RetentionState.MISSING.value:
+                continue
+            relative = _artifact_record_relative(entry["record_identity"])
+            try:
+                _verify_artifact_record(
+                    root_fd,
+                    relative,
+                    manifest_entry=entry,
+                )
+            except VerificationError as exc:
+                artifact_phase_ok = False
+                errors.append(f"{relative}: {exc}")
+        if artifact_phase_ok:
+            checks.append("artifact metadata and available content verified")
+
+        event_phase_ok = True
+        references: list[tuple[str, str, str]] = []
+        for identity in events:
+            relative = _event_relative(identity)
+            try:
+                inputs, outputs, relationship_targets = _verify_event(
+                    root_fd,
+                    relative,
+                    expected_identity=identity,
+                )
+            except VerificationError as exc:
+                event_phase_ok = False
+                errors.append(f"{relative}: {exc}")
+                continue
+            references.extend((relative, "input", value) for value in inputs)
+            references.extend((relative, "output", value) for value in outputs)
+            references.extend(
+                (relative, "relationship", value)
+                for value in relationship_targets
+            )
+
+        resolvable_relationship_targets = artifact_content_ids | event_ids
+        for relative, reference_kind, target in references:
+            if reference_kind in {"input", "output"}:
+                if target not in artifact_content_ids:
+                    event_phase_ok = False
+                    errors.append(
+                        f"{relative}: {reference_kind} does not resolve to a manifest artifact: {target}"
+                    )
+            elif target not in resolvable_relationship_targets:
                 event_phase_ok = False
                 errors.append(
-                    f"{relative}: {reference_kind} does not resolve to a manifest artifact: {target}"
+                    f"{relative}: relationship target does not resolve inside the manifest: {target}"
                 )
-        elif target not in resolvable_relationship_targets:
-            event_phase_ok = False
-            errors.append(
-                f"{relative}: relationship target does not resolve inside the manifest: {target}"
-            )
 
-    if event_phase_ok:
-        checks.append("event identities and references verified")
+        if event_phase_ok:
+            checks.append("event identities and references verified")
 
-    integrity_verified = not errors
-    return VerificationReport(
-        integrity_verified=integrity_verified,
-        manifest_identity=manifest_identity_value,
-        manifest_scope=scope,
-        known_missing_artifacts=known_missing,
-        checks=tuple(checks),
-        errors=tuple(errors),
-    )
+        integrity_verified = (
+            membership_phase_ok
+            and artifact_phase_ok
+            and event_phase_ok
+            and not errors
+        )
+        return VerificationReport(
+            integrity_verified=integrity_verified,
+            manifest_identity=manifest_identity_value,
+            manifest_scope=scope,
+            known_missing_artifacts=known_missing,
+            checks=tuple(checks),
+            errors=tuple(errors),
+        )
+    finally:
+        os.close(root_fd)
