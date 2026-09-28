@@ -69,19 +69,24 @@ def main() -> int:
         )
 
     tampered = output / "tamper-copy"
-    shutil.copytree(observation.snapshot.path, tampered)
-    response_digest = observation.response.content_identity.split(":", 1)[1]
-    response_path = tampered / "artifacts" / "sha256" / response_digest
-    original = response_path.read_bytes()
-    if not original:
-        raise SystemExit("retained Ollama response is unexpectedly empty")
-    response_path.write_bytes(
-        bytes([original[0] ^ 0x01]) + original[1:]
-    )
-    tampered_report = verify_bundle(tampered)
-    if tampered_report.integrity_verified:
-        raise SystemExit("tampered bundle unexpectedly verified")
-    shutil.rmtree(tampered)
+    tampered_report = None
+    try:
+        shutil.copytree(observation.snapshot.path, tampered)
+        response_digest = observation.response.content_identity.split(":", 1)[1]
+        response_path = tampered / "artifacts" / "sha256" / response_digest
+        original = response_path.read_bytes()
+        if not original:
+            raise SystemExit("retained Ollama response is unexpectedly empty")
+        response_path.write_bytes(
+            bytes([original[0] ^ 0x01]) + original[1:]
+        )
+        tampered_report = verify_bundle(tampered)
+        if tampered_report.integrity_verified:
+            raise SystemExit("tampered bundle unexpectedly verified")
+    finally:
+        shutil.rmtree(tampered, ignore_errors=True)
+
+    assert tampered_report is not None
 
     summary = {
         "schema": "provenance.ollama-smoke-summary.v1",
