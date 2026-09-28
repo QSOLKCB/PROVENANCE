@@ -53,13 +53,6 @@ class ClockAssurance(str, Enum):
     SIGNED_ATTESTATION = "SIGNED_ATTESTATION"
 
 
-class ClockAssurance(str, Enum):
-    LOCAL = "LOCAL"
-    NETWORK = "NETWORK"
-    AUTHENTICATED_NETWORK = "AUTHENTICATED_NETWORK"
-    SIGNED_ATTESTATION = "SIGNED_ATTESTATION"
-
-
 class CustodyAction(str, Enum):
     CAPTURED = "CAPTURED"
     STORED = "STORED"
