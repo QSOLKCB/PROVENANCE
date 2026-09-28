@@ -280,7 +280,7 @@ Changing one covered byte must fail verification.
 ## Status
 
 ```text
-IMPLEMENTED
+COMPLETE
 ```
 
 ## Goal
@@ -360,6 +360,12 @@ without requiring external services.
 
 # Phase 4 — Minimal Custody Chain
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Move from artifact integrity to actual chain of custody.
@@ -389,6 +395,19 @@ actor/source-attributed where supported
 ```
 
 Unknown handlers remain unknown.
+
+The Phase 4 reference implementation uses a domain-separated custody identity, an independent custody-chain verifier, and an append-only local custody ledger whose current tips are derived from immutable records instead of trusted mutable HEAD files.
+
+Clock observations are explicit evidence:
+
+```text
+LOCAL
+NETWORK
+AUTHENTICATED_NETWORK
+SIGNED_ATTESTATION
+```
+
+The reference clock observer prefers existing chrony state, may query ntpdate in query-only mode, and falls back to the local system clock. Chain order is determined by previous_custody, not wall-clock ordering.
 
 ## Important Boundary
 
@@ -654,6 +673,31 @@ provenance finalize
 provenance export
 ```
 
+The preferred interactive operator surface is a small Rust TUI inspired by the efficient Codex CLI interaction model:
+
+```text
+type /
+→ command palette
+→ filter/select action
+→ keyboard-first execution
+```
+
+The TUI should remain a client of existing PROVENANCE contracts rather than a second implementation of them.
+
+Authentication should be provider-neutral. Later auth adapters may support:
+
+```text
+none
+API key
+OAuth device authorization
+OAuth loopback/browser authorization
+provider-specific delegated login
+```
+
+Browser-based sign-in should open an explicit authorization URL and receive only the token/code material needed by that provider. Credentials must not become ordinary custody/evidence payloads.
+
+OpenAI-compatible HTTP APIs are an important interoperability target, but compatibility at the transport/API surface must not make OpenAI-specific semantics part of provenance-core.
+
 ## Rule
 
 The CLI wraps existing core/verifier behavior.
@@ -682,15 +726,25 @@ provenance-ui
 
 ## Initial Technology Direction
 
-Prefer:
+Keep the first viewer deliberately simple:
 
 ```text
-HTML
-CSS
-minimal JavaScript
+small local HTTP server
+pure HTML
+pure CSS
+minimal vanilla JavaScript
+no frontend framework
 ```
 
-unless requirements justify more.
+Default network binding:
+
+```text
+127.0.0.1
+```
+
+LAN/public binding must require explicit operator action. The UI is read-only and has no evidentiary authority.
+
+Avoid inetd-style miscellaneous service exposure; the viewer needs one narrow HTTP surface only.
 
 ## Primary Views
 
