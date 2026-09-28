@@ -9,6 +9,7 @@ from .canonical import canonical_json_bytes
 
 _SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
+ARTIFACT_RECORD_DOMAIN = b"PROVENANCE/ARTIFACT-RECORD/v1\0"
 EVENT_DOMAIN = b"PROVENANCE/EVENT/v1\0"
 MANIFEST_DOMAIN = b"PROVENANCE/MANIFEST/v1\0"
 
@@ -30,6 +31,10 @@ def domain_identity(domain: bytes, value: Any) -> str:
         raise IdentityError("identity domain must be non-empty and NUL-terminated")
     digest = hashlib.sha256(domain + canonical_json_bytes(value)).hexdigest()
     return f"sha256:{digest}"
+
+
+def artifact_record_identity(record: Any) -> str:
+    return domain_identity(ARTIFACT_RECORD_DOMAIN, record)
 
 
 def event_identity(core: Any) -> str:
