@@ -1168,6 +1168,122 @@ class LocalEvidenceStoreTests(unittest.TestCase):
                 ):
                     LocalEvidenceStore(root)
 
+    @unittest.skipUnless(
+        Path("/proc/self/fd").is_dir(),
+        "requires Linux-style /proc/self/fd",
+    )
+    def test_root_ancestor_retry_refsyncs_surviving_created_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base"
+            base.mkdir()
+            root = base / "new-parent" / "store"
+            real_sync = store_module._fsync_directory
+            failed = False
+
+            def fail_base_after_parent_creation(fd: int) -> None:
+                nonlocal failed
+                fd_path = os.readlink(f"/proc/self/fd/{fd}")
+                if (
+                    not failed
+                    and Path(fd_path) == base
+                    and (base / "new-parent").exists()
+                ):
+                    failed = True
+                    raise StoreError("injected ancestor durability failure")
+                real_sync(fd)
+
+            with mock.patch.object(
+                store_module,
+                "_fsync_directory",
+                side_effect=fail_base_after_parent_creation,
+            ):
+                with self.assertRaisesRegex(StoreError, "ancestor durability"):
+                    LocalEvidenceStore(root)
+
+            self.assertTrue((base / "new-parent").is_dir())
+            self.assertFalse(root.exists())
+
+            synced_paths: list[Path] = []
+
+            def record_sync(fd: int) -> None:
+                synced_paths.append(Path(os.readlink(f"/proc/self/fd/{fd}")))
+                real_sync(fd)
+
+            with mock.patch.object(
+                store_module,
+                "_fsync_directory",
+                side_effect=record_sync,
+            ):
+                store = LocalEvidenceStore(root)
+                artifact = store.put_artifact(b"ancestor retry")
+                store.put_event(_event_for(artifact.content_identity))
+                store.finalize()
+
+            self.assertIn(base, synced_paths)
+            self.assertTrue((root / "HEAD").is_file())
+
+    @unittest.skipUnless(
+        Path("/proc/self/fd").is_dir(),
+        "requires Linux-style /proc/self/fd",
+    )
+    def test_store_format_retry_refsyncs_existing_marker_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            root.mkdir()
+            real_fsync = store_module.os.fsync
+            failed = False
+
+            def fail_marker_data_sync(fd: int) -> None:
+                nonlocal failed
+                fd_path = Path(os.readlink(f"/proc/self/fd/{fd}"))
+                if (
+                    not failed
+                    and fd_path.name == "STORE_FORMAT"
+                    and fd_path.parent == root
+                ):
+                    failed = True
+                    raise OSError("injected marker data fsync failure")
+                real_fsync(fd)
+
+            with mock.patch.object(
+                store_module.os,
+                "fsync",
+                side_effect=fail_marker_data_sync,
+            ):
+                with self.assertRaisesRegex(StoreError, "STORE_FORMAT"):
+                    LocalEvidenceStore(root)
+
+            marker_path = root / "STORE_FORMAT"
+            self.assertTrue(marker_path.is_file())
+            self.assertEqual(
+                marker_path.read_text(encoding="ascii"),
+                store_module.STORE_FORMAT + "\n",
+            )
+
+            fsynced_files: list[tuple[int, int]] = []
+
+            def record_fsync(fd: int) -> None:
+                st = os.fstat(fd)
+                if stat.S_ISREG(st.st_mode):
+                    fsynced_files.append((st.st_dev, st.st_ino))
+                real_fsync(fd)
+
+            with mock.patch.object(
+                store_module.os,
+                "fsync",
+                side_effect=record_fsync,
+            ):
+                store = LocalEvidenceStore(root)
+                artifact = store.put_artifact(b"marker retry")
+                store.put_event(_event_for(artifact.content_identity))
+                store.finalize()
+
+            marker_stat = marker_path.stat()
+            self.assertIn(
+                (marker_stat.st_dev, marker_stat.st_ino),
+                fsynced_files,
+            )
+
     def test_corrupt_head_snapshot_is_rejected_on_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "store"
