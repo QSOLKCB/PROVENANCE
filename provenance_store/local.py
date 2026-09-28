@@ -388,13 +388,27 @@ class LocalEvidenceStore:
                 if not stat.S_ISREG(os.fstat(fd).st_mode):
                     raise StoreError("store lock must be a regular file")
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    fcntl.lockf(
+                        fd,
+                        fcntl.LOCK_EX,
+                        0,
+                        0,
+                        os.SEEK_SET,
+                    )
                 except OSError as exc:
-                    raise StoreError(f"store lock cannot be acquired: {exc}") from exc
+                    raise StoreError(
+                        f"store POSIX lock cannot be acquired: {exc}"
+                    ) from exc
                 yield
             finally:
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    fcntl.lockf(
+                        fd,
+                        fcntl.LOCK_UN,
+                        0,
+                        0,
+                        os.SEEK_SET,
+                    )
                 finally:
                     os.close(fd)
 
