@@ -122,7 +122,7 @@ class LocalEvidenceStore:
 
     def __init__(self, root: Path | str):
         supplied_root = Path(root).expanduser()
-        if supplied_root.exists() and supplied_root.is_symlink():
+        if supplied_root.is_symlink():
             raise StoreError("store root must not be a symbolic link")
         self.root = supplied_root.resolve(strict=False)
         self._root_identity: tuple[int, int] | None = None
@@ -362,6 +362,7 @@ class LocalEvidenceStore:
             parent_fd = self._open_dir_chain(root_fd, category, create=True)
             try:
                 if self._existing_bytes_match(parent_fd, name, data):
+                    _fsync_directory(parent_fd)
                     return False
                 try:
                     probe_fd = os.open(name, _file_read_flags(), dir_fd=parent_fd)
@@ -414,6 +415,7 @@ class LocalEvidenceStore:
                             raise StoreError(
                                 f"concurrent object {name} conflicts with expected bytes"
                             )
+                        _fsync_directory(parent_fd)
                         return False
                     except OSError as exc:
                         raise StoreError(f"object publication failed: {exc}") from exc
@@ -623,11 +625,15 @@ class LocalEvidenceStore:
             source_category,
             create=False,
         )
-        destination_parent_fd = self._open_dir_chain(
-            temp_snapshot_fd,
-            destination_category,
-            create=True,
-        )
+        try:
+            destination_parent_fd = self._open_dir_chain(
+                temp_snapshot_fd,
+                destination_category,
+                create=True,
+            )
+        except Exception:
+            os.close(source_parent_fd)
+            raise
         try:
             try:
                 source_fd = os.open(
@@ -1112,22 +1118,30 @@ class LocalEvidenceStore:
             pool_category,
             create=False,
         )
-        snapshot_parent_fd = self._open_dir_chain(
-            snapshot_fd,
-            snapshot_category,
-            create=False,
-        )
+        try:
+            snapshot_parent_fd = self._open_dir_chain(
+                snapshot_fd,
+                snapshot_category,
+                create=False,
+            )
+        except Exception:
+            os.close(pool_parent_fd)
+            raise
         try:
             pool_fd = self._open_regular_member(
                 pool_parent_fd,
                 pool_name,
                 label=f"object pool {label}",
             )
-            snapshot_member_fd = self._open_regular_member(
-                snapshot_parent_fd,
-                snapshot_name,
-                label=f"verified snapshot {label}",
-            )
+            try:
+                snapshot_member_fd = self._open_regular_member(
+                    snapshot_parent_fd,
+                    snapshot_name,
+                    label=f"verified snapshot {label}",
+                )
+            except Exception:
+                os.close(pool_fd)
+                raise
             try:
                 while True:
                     pool_chunk = os.read(pool_fd, _CHUNK_SIZE)
