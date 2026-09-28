@@ -53,6 +53,25 @@ def _event_object(store_root: Path, identity: str) -> Path:
 
 
 class LocalEvidenceStoreTests(unittest.TestCase):
+    def test_finalize_uses_posix_record_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = LocalEvidenceStore(Path(tmp) / "store")
+            artifact = store.put_artifact(b"posix lock")
+            store.put_event(_event_for(artifact.content_identity))
+            real_lockf = store_module.fcntl.lockf
+
+            with mock.patch.object(
+                store_module.fcntl,
+                "lockf",
+                wraps=real_lockf,
+            ) as lockf:
+                snapshot = store.finalize()
+
+            self.assertTrue(snapshot.verification.integrity_verified)
+            commands = [call.args[1] for call in lockf.call_args_list]
+            self.assertIn(store_module.fcntl.LOCK_EX, commands)
+            self.assertIn(store_module.fcntl.LOCK_UN, commands)
+
     def test_record_finalize_reopen_and_verify(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "store"
