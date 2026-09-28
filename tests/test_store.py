@@ -4,7 +4,11 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import subprocess
+import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -71,6 +75,124 @@ class LocalEvidenceStoreTests(unittest.TestCase):
             commands = [call.args[1] for call in lockf.call_args_list]
             self.assertIn(store_module.fcntl.LOCK_EX, commands)
             self.assertIn(store_module.fcntl.LOCK_UN, commands)
+
+    def test_same_process_instances_serialize_finalize(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            first = LocalEvidenceStore(root)
+            second = LocalEvidenceStore(root)
+
+            first_artifact = first.put_artifact(b"thread writer one")
+            first.put_event(
+                _event_for(first_artifact.content_identity, operation="first")
+            )
+            second_artifact = second.put_artifact(b"thread writer two")
+            second.put_event(
+                _event_for(second_artifact.content_identity, operation="second")
+            )
+
+            barrier = threading.Barrier(3)
+            successes: list[str] = []
+            errors: list[str] = []
+
+            def worker(store: LocalEvidenceStore) -> None:
+                barrier.wait()
+                try:
+                    successes.append(store.finalize().manifest_identity)
+                except StoreError as exc:
+                    errors.append(str(exc))
+
+            threads = [
+                threading.Thread(target=worker, args=(first,)),
+                threading.Thread(target=worker, args=(second,)),
+            ]
+            for thread in threads:
+                thread.start()
+            barrier.wait()
+            for thread in threads:
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive())
+
+            self.assertEqual(len(successes), 1)
+            self.assertEqual(len(errors), 1)
+            self.assertIn("HEAD changed", errors[0])
+
+            reopened = LocalEvidenceStore(root)
+            self.assertEqual(
+                reopened.current_manifest_identity,
+                successes[0],
+            )
+            self.assertTrue(reopened.verify_current().integrity_verified)
+
+    def test_second_instance_open_cannot_release_held_posix_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            lock_path = root / ".store.lock"
+            ready = Path(tmp) / "child-ready"
+            acquired = Path(tmp) / "child-acquired"
+            script = (
+                "import fcntl, os, pathlib, sys\n"
+                "lock_path, ready, acquired = sys.argv[1:4]\n"
+                "fd = os.open(lock_path, os.O_RDWR)\n"
+                "pathlib.Path(ready).write_text('ready')\n"
+                "fcntl.lockf(fd, fcntl.LOCK_EX, 0, 0, os.SEEK_SET)\n"
+                "pathlib.Path(acquired).write_text('acquired')\n"
+                "fcntl.lockf(fd, fcntl.LOCK_UN, 0, 0, os.SEEK_SET)\n"
+                "os.close(fd)\n"
+            )
+            constructed: list[LocalEvidenceStore] = []
+            constructor_errors: list[BaseException] = []
+            constructor: threading.Thread | None = None
+            child: subprocess.Popen[str] | None = None
+
+            def construct_second() -> None:
+                try:
+                    constructed.append(LocalEvidenceStore(root))
+                except BaseException as exc:
+                    constructor_errors.append(exc)
+
+            try:
+                with store._exclusive_finalize_lock():
+                    child = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-c",
+                            script,
+                            str(lock_path),
+                            str(ready),
+                            str(acquired),
+                        ],
+                        text=True,
+                    )
+                    deadline = time.monotonic() + 3.0
+                    while not ready.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(ready.exists())
+
+                    constructor = threading.Thread(target=construct_second)
+                    constructor.start()
+                    time.sleep(0.15)
+
+                    self.assertTrue(constructor.is_alive())
+                    self.assertFalse(acquired.exists())
+                    self.assertIsNone(child.poll())
+
+                assert constructor is not None
+                constructor.join(timeout=5)
+                self.assertFalse(constructor.is_alive())
+                assert child is not None
+                self.assertEqual(child.wait(timeout=5), 0)
+            finally:
+                if constructor is not None and constructor.is_alive():
+                    constructor.join(timeout=5)
+                if child is not None and child.poll() is None:
+                    child.terminate()
+                    child.wait(timeout=5)
+
+            self.assertEqual(constructor_errors, [])
+            self.assertEqual(len(constructed), 1)
+            self.assertTrue(acquired.exists())
 
     def test_record_finalize_reopen_and_verify(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
