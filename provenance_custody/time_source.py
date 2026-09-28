@@ -153,7 +153,7 @@ def chrony_clock_observation(
         raise TimeSourceError("chrony has no selected synchronization source")
 
     mode_marker, selected = match.groups()
-    tracking = _run(["chronyc", "tracking"], timeout=timeout)
+    tracking = _run(["chronyc", "-n", "tracking"], timeout=timeout)
     leap = _LEAP_RE.search(tracking)
     if leap is None or leap.group(1) != "Normal":
         raise TimeSourceError("chrony selected source is not in normal leap status")
