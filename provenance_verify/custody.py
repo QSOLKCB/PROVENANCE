@@ -95,6 +95,7 @@ def _parse_record(data: bytes, index: int) -> tuple[str, dict[str, object]]:
         "actor",
         "source",
         "previous_custody",
+        "related_identity",
     }:
         raise ValueError(f"{label} core keys changed")
     if core.get("schema") != CUSTODY_SCHEMA:
@@ -142,6 +143,23 @@ def _parse_record(data: bytes, index: int) -> tuple[str, dict[str, object]]:
             )
         except (TypeError, ValueError) as exc:
             raise ValueError(str(exc)) from exc
+
+    related = core.get("related_identity")
+    if related is not None:
+        try:
+            require_sha256_identity(
+                related,
+                label=f"{label} related identity",
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(str(exc)) from exc
+    if (
+        action == CustodyAction.SUPERSEDED.value
+        and related is None
+    ):
+        raise ValueError(
+            f"{label} SUPERSEDED action requires related_identity"
+        )
 
     expected = custody_identity(core)
     if claimed != expected:
