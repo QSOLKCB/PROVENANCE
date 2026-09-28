@@ -32,6 +32,13 @@ _SNAPSHOTS = ("snapshots", "sha256")
 _HEAD = "HEAD"
 _LOCK = ".store.lock"
 _CHUNK_SIZE = 1024 * 1024
+_DIR_FD_SUPPORT = {
+    "open": os.open in os.supports_dir_fd,
+    "mkdir": os.mkdir in os.supports_dir_fd,
+    "unlink": os.unlink in os.supports_dir_fd,
+    "link": os.link in os.supports_dir_fd,
+    "rename": os.rename in os.supports_dir_fd,
+}
 
 
 class StoreError(RuntimeError):
@@ -56,14 +63,14 @@ def _digest(identity: str, *, label: str) -> str:
 def _directory_flags() -> int:
     required = ("O_DIRECTORY", "O_NOFOLLOW", "O_CLOEXEC")
     missing = [name for name in required if not hasattr(os, name)]
-    for function, description in (
-        (os.open, "dir_fd support for os.open"),
-        (os.mkdir, "dir_fd support for os.mkdir"),
-        (os.unlink, "dir_fd support for os.unlink"),
-        (os.link, "dir_fd support for os.link"),
-        (os.rename, "dir_fd support for os.rename"),
+    for name, description in (
+        ("open", "dir_fd support for os.open"),
+        ("mkdir", "dir_fd support for os.mkdir"),
+        ("unlink", "dir_fd support for os.unlink"),
+        ("link", "dir_fd support for os.link"),
+        ("rename", "dir_fd support for os.rename"),
     ):
-        if function not in os.supports_dir_fd:
+        if not _DIR_FD_SUPPORT[name]:
             missing.append(description)
     if missing:
         raise StoreError(
