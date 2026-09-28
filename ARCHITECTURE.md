@@ -304,6 +304,7 @@ Conceptually:
 Artifact
 ├── schema
 ├── content identity
+├── structured record identity
 ├── byte count
 ├── media type
 ├── retention state
@@ -539,6 +540,7 @@ Raw artifact hashes are deliberately **not** domain-separated so that ordinary f
 Structured PROVENANCE record identities should use explicit semantic domains where appropriate:
 
 ```text
+PROVENANCE/ARTIFACT-RECORD/v1
 PROVENANCE/EVENT/v1
 PROVENANCE/MANIFEST/v1
 PROVENANCE/CUSTODY/v1
