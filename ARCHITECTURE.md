@@ -659,6 +659,8 @@ The first backend should be simple.
 
 A local filesystem or similarly lightweight store is preferred initially.
 
+The Phase 3 reference backend is implemented in `provenance_store` and documented in [STORE.md](STORE.md). It keeps mutable store state separate from verifier-compatible immutable snapshots. Content-addressed objects are published without overwrite; snapshots are independently verified before the mutable `HEAD` pointer advances.
+
 ---
 
 # 13. Storage Model
@@ -667,11 +669,14 @@ The store should distinguish:
 
 ```text
 ARTIFACT CONTENT
+ARTIFACT RECORDS
 EVENT RECORDS
-CUSTODY RECORDS
-MANIFESTS
+MANIFESTS / SNAPSHOTS
+FUTURE CUSTODY RECORDS
 DERIVED INDEXES
 ```
+
+The Phase 3 reference store does not yet create custody records. Custody semantics belong to Phase 4.
 
 Indexes are disposable.
 
