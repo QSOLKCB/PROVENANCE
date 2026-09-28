@@ -29,6 +29,7 @@ The mutable store root is not itself an evidence bundle.
 
 ~~~text
 store/
+├── STORE_FORMAT
 ├── .store.lock
 ├── HEAD
 ├── objects/
@@ -46,6 +47,14 @@ store/
             ├── artifact_records/
             └── events/
 ~~~
+
+STORE_FORMAT contains the exact on-disk layout identifier:
+
+~~~text
+provenance.local-store.v1
+~~~
+
+A non-empty store root without this marker is rejected rather than silently interpreted as the current implementation format. An unknown or corrupt marker is also rejected.
 
 HEAD points to the currently finalized manifest identity.
 
@@ -123,11 +132,17 @@ HEAD DOES NOT ADVANCE
 
 A snapshot created before a failed HEAD update may remain as an unreferenced immutable snapshot. It is not the current store state until HEAD points to it.
 
+If a finalize attempt fails immediately after the final snapshot rename but before the snapshots-parent fsync completes, a retry must independently verify that recovered snapshot and re-fsync the snapshots parent before HEAD may advance.
+
+Temporary snapshot trees are removed whenever assembly fails before final publication.
+
 ---
 
 # Reopening
 
-Opening an existing store reads HEAD, independently verifies the referenced snapshot, and reconstructs working state from the verified manifest.
+Opening an existing store reads HEAD, independently verifies the referenced snapshot, then re-reads and revalidates the exact manifest used to reconstruct working state against the HEAD identity. A manifest swapped after the first verification step is therefore rejected.
+
+Before exposing mutable reopened state, every required object-pool artifact record, retained artifact, and event must still exist and match the corresponding bytes in the verified snapshot. A verified snapshot remains historical evidence, but an incomplete or divergent object pool is rejected as an extendable store.
 
 The store does not trust unverified mutable process state from an earlier run.
 
@@ -181,7 +196,14 @@ Phase 3 tests cover:
 - HEAD/manifest identity substitution;
 - snapshot inode isolation;
 - relative-root changes after chdir;
-- directory-fsync durability failures.
+- directory-fsync durability failures;
+- retry after post-rename fsync failure;
+- canonical prior-record tampering under an old identity;
+- manifest swap between verification and state reconstruction;
+- temporary-snapshot cleanup after failed assembly;
+- persisted store-format enforcement;
+- ancestor-symlink retargeting;
+- missing or divergent object-pool members during reopen.
 
 A failure must not silently publish partial evidence as the current state.
 
@@ -191,7 +213,7 @@ A failure must not silently publish partial evidence as the current state.
 
 The initial local store intentionally targets POSIX-style descriptor-relative filesystem support.
 
-The supplied store root is bound to an absolute path at construction time so later process working-directory changes cannot redirect an existing store instance.
+The supplied store root is resolved through existing symlink ancestors at construction time and bound to that resolved path. The store also records the root directory device/inode identity and rejects later opens if the filesystem object at that path changes. Retargeting an ancestor symlink or changing the process working directory therefore cannot silently redirect an existing store instance.
 
 Managed directories are opened without following symlinks.
 
