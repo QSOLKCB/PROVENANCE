@@ -11,7 +11,9 @@ import subprocess
 from provenance_core import ClockAssurance
 
 _SELECTED_RE = re.compile(r"^([\^=#])\*\s+(\S+)", re.MULTILINE)
-_OFFSET_RE = re.compile(r"\boffset\s+([+-]?\d+(?:\.\d+)?)\s+sec\b")
+_OFFSET_RE = re.compile(
+    r"\boffset\s+([+-]?\d+(?:\.\d+)?)(?:,|\s+sec\b)"
+)
 
 
 class TimeSourceError(RuntimeError):
