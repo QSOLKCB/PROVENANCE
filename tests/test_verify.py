@@ -351,6 +351,57 @@ class VerifyBundleTests(unittest.TestCase):
                 report.errors,
             )
 
+    def test_manifest_symlink_is_rejected_before_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_bundle = root / "source"
+            source_bundle.mkdir()
+            _write_bundle(source_bundle)
+
+            bundle = root / "bundle"
+            bundle.mkdir()
+            (bundle / "manifest.json").symlink_to(source_bundle / "manifest.json")
+
+            report = verify_bundle(bundle)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertIn(
+                "manifest.json must not be a symbolic link",
+                report.errors,
+            )
+
+    def test_missing_artifact_record_does_not_claim_artifact_phase_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            fixture = _write_bundle(bundle)
+            artifact = fixture["artifact"]
+            _record_path(bundle, artifact.record_identity).unlink()
+
+            report = verify_bundle(bundle)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertNotIn(
+                "artifact metadata and available content verified",
+                report.checks,
+            )
+
+    def test_missing_event_record_does_not_claim_event_phase_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            fixture = _write_bundle(bundle)
+            event = fixture["event"]
+            _event_path(bundle, event.event_identity).unlink()
+
+            report = verify_bundle(bundle)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertNotIn(
+                "event identities and references verified",
+                report.checks,
+            )
+
     def test_manifest_self_hash_exclusion_defect_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             bundle = Path(tmp) / "bundle"
