@@ -1,24 +1,42 @@
-# PROVENANCE Architecture — v0.1
+# PROVENANCE Architecture — v0.2
 
 ## Status
 
 ```text
-BOOTSTRAP ARCHITECTURE
+BOOTSTRAP MODULAR ARCHITECTURE
 IMPLEMENTATION NOT YET FROZEN
 ```
 
 This document defines the intended architecture of `QSOLKCB/PROVENANCE`.
 
-It translates the project principles and invariants into a minimal system design.
+PROVENANCE is designed as a **modular evidence system**:
 
-Normative engineering rules remain in:
+```text
+small core
++
+independent verification
++
+optional storage
++
+optional adapters
++
+optional interfaces
++
+optional presentation
+```
+
+The modules cooperate.
+
+They must not become inseparable.
+
+Normative engineering law remains in:
 
 ```text
 AGENTS.md
 INVARIANTS.md
 ```
 
-Project purpose and context remain in:
+Project context and engineering ancestry remain in:
 
 ```text
 README.md
@@ -31,7 +49,18 @@ LINEAGE.md
 
 # 1. Architectural Objective
 
-PROVENANCE is a framework-neutral evidence recorder and verifier.
+PROVENANCE is a framework-neutral system for recording, preserving, relating, and independently verifying evidence about actions performed by:
+
+```text
+AI systems
+agents
+applications
+tools
+services
+humans
+automated workflows
+distributed systems
+```
 
 Its primary optimization target is:
 
@@ -41,271 +70,442 @@ subject to
 ZERO_UNDECLARED_LOSS_OF_EVIDENTIARY_ACCURACY
 ```
 
-The system should perform no work that is unnecessary to establish the declared provenance contract.
+The system should perform no work that is unnecessary to establish the declared evidence contract.
 
-The system must not make evidence cheaper by making evidence weaker without saying so.
-
----
-
-# 2. Architectural Boundary
-
-PROVENANCE observes systems.
-
-It does not control them.
+Performance may reduce:
 
 ```text
-┌─────────────────────────────────────────┐
-│            MONITORED SYSTEM             │
-│                                         │
-│ AI / Agent / Application / Tool / API   │
-└───────────────────┬─────────────────────┘
-                    │
-                    │ observable activity
-                    ▼
-┌─────────────────────────────────────────┐
-│                ADAPTER                  │
-│     minimal framework-specific capture  │
-└───────────────────┬─────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────┐
-│              EVIDENCE CORE              │
-│                                         │
-│ classify · identify · relate · record   │
-└───────────────────┬─────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────┐
-│              EVIDENCE STORE             │
-│                                         │
-│ events · artifacts · custody · indexes  │
-└───────────────────┬─────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────┐
-│                VERIFIER                 │
-│                                         │
-│ hashes · structure · lineage · custody  │
-└───────────────────┬─────────────────────┘
-                    │
-                    ▼
-┌─────────────────────────────────────────┐
-│          EXPORT / PRESENTATION          │
-│                                         │
-│ bundles · reports · timelines · tools   │
-└─────────────────────────────────────────┘
+latency
+CPU time
+memory
+storage duplication
+CI time
+network traffic
 ```
 
-The direction of authority is one-way.
+It must not silently reduce:
 
 ```text
-MONITORED SYSTEM
-      ↓
-OBSERVATION
-      ↓
-EVIDENCE
-```
-
-Never:
-
-```text
-EVIDENCE SYSTEM
-      ↓
-MONITORED DECISION
+evidence fidelity
+verification strength
+observation honesty
+custody integrity
 ```
 
 ---
 
-# 3. No Control Plane
+# 2. Architectural Style
 
-PROVENANCE has no decision-authority plane.
+PROVENANCE follows a modular architecture inspired by systems where a stable core is surrounded by replaceable engines, interfaces, hosts, and extensions.
 
-The core must not provide semantics equivalent to:
-
-```text
-allow()
-deny()
-approve()
-block()
-rewrite()
-retry()
-correct()
-```
-
-for monitored behavior.
-
-It may return information such as:
+Conceptually:
 
 ```text
-RECORDED
-NOT_RECORDED
-PARTIAL
-COLLECTION_FAILED
-VERIFIED
-VERIFICATION_FAILED
+                     ┌─────────────────┐
+                     │ provenance-ui   │
+                     └────────┬────────┘
+                              │
+                    ┌─────────▼─────────┐
+                    │ provenance-mcp    │
+                    └─────────┬─────────┘
+                              │
+      ┌───────────────────────┼────────────────────────┐
+      │                       │                        │
+┌─────▼──────────┐    ┌───────▼────────┐      ┌────────▼────────┐
+│ provenance-cli │    │ provenance-api │      │ provenance-     │
+│                │    │ / embedding    │      │ adapters        │
+└─────┬──────────┘    └───────┬────────┘      └────────┬────────┘
+      │                       │                        │
+      └───────────────────────┼────────────────────────┘
+                              ▼
+                     ┌─────────────────┐
+                     │ provenance-core │
+                     └────────┬────────┘
+                              │
+              ┌───────────────┼────────────────┐
+              ▼               ▼                ▼
+      provenance-store  provenance-verify  schemas/spec
 ```
 
-What an integrating application does with that information belongs to the integrating application.
-
-That decision is itself potentially observable evidence.
+No outer module may redefine core evidence semantics.
 
 ---
 
-# 4. Core Architectural Units
+# 3. Monorepo First
 
-The minimal architecture contains six logical responsibilities.
+PROVENANCE should initially remain one repository.
 
-They do not initially require six separate services, processes, packages, or databases.
+Module separation does **not** require separate GitHub repositories.
 
-A small reference implementation may implement several responsibilities in a single process.
+Preferred bootstrap structure:
+
+```text
+PROVENANCE/
+│
+├── provenance-core/
+├── provenance-verify/
+├── provenance-store/
+├── provenance-mcp/
+├── provenance-cli/
+├── provenance-ui/
+├── provenance-adapters/
+│
+├── schemas/
+├── tests/
+│
+├── README.md
+├── README4AIs.md
+├── AGENTS.md
+├── INVARIANTS.md
+├── ARCHITECTURE.md
+├── DONORS.md
+└── LINEAGE.md
+```
+
+This shape is conceptual until implementation requires each module.
+
+Do not create empty modules merely to make the tree look mature.
+
+A module should exist because it has a distinct contract.
 
 ---
 
-## 4.1 Adapter
+# 4. Module Rule
 
-An adapter observes a specific system or framework.
+Each module must satisfy:
+
+```text
+ONE PRIMARY RESPONSIBILITY
+CLEAR INPUT CONTRACT
+CLEAR OUTPUT CONTRACT
+NO HIDDEN AUTHORITY
+REPLACEABLE WHERE PRACTICAL
+```
+
+Modules may depend downward.
+
+Core modules must not depend upward.
+
+Preferred direction:
+
+```text
+UI
+ ↓
+MCP / CLI
+ ↓
+Adapters / Store
+ ↓
+Core
+ ↓
+Canonical Evidence Contract
+```
+
+Verification consumes evidence independently:
+
+```text
+Evidence
+   ↓
+provenance-verify
+```
+
+The verifier must not require:
+
+```text
+UI
+MCP
+Ollama
+OpenAI
+database server
+specific adapter
+original monitored application
+```
+
+to validate a finalized evidence bundle.
+
+---
+
+# 5. `provenance-core`
+
+`provenance-core` is the smallest and most protected module.
+
+It defines the universal evidence semantics.
+
+Its responsibilities are limited to:
+
+```text
+evidence classification
+event model
+artifact references
+relationships
+canonicalization
+content identity
+manifest structures
+custody structures
+failure/gap representation
+```
+
+It must remain:
+
+```text
+framework-neutral
+provider-neutral
+storage-neutral
+UI-neutral
+transport-neutral
+policy-neutral
+```
+
+It must not contain special knowledge of:
+
+```text
+OpenAI
+Claude
+Gemini
+Grok
+Ollama
+MCP
+legal systems
+medical systems
+GitHub
+databases
+web browsers
+```
+
+Those belong above the core.
+
+---
+
+# 6. Core Data Types
+
+The initial core should have very few universal concepts.
+
+## 6.1 Artifact
+
+An Artifact identifies retained content.
 
 Examples:
 
 ```text
-OpenAI API
-Anthropic API
-Gemini API
-Grok API
-Ollama
-llama.cpp
-agent framework
-HTTP service
-CLI program
-filesystem workflow
-custom application
+prompt
+response
+document
+image
+tool payload
+API response
+source file
+configuration
+binary
+log fragment
 ```
 
-An adapter should do as little work as practical.
-
-Its responsibilities are:
+Conceptually:
 
 ```text
-capture observable values
-identify the observation source
-declare observation boundaries
-forward evidence to the core
-report capture failure
+Artifact
+├── schema
+├── content identity
+├── byte count
+├── media type
+├── retention state
+└── optional acquisition metadata
 ```
 
-An adapter must not invent fields merely because the core schema supports them.
+The architecture must distinguish:
+
+```text
+CONTENT_RETAINED
+```
+
+from:
+
+```text
+DIGEST_ONLY
+```
+
+A cryptographic digest is not the original artifact.
+
+---
+
+## 6.2 Event
+
+An Event records an occurrence.
+
+Conceptually:
+
+```text
+Event
+├── schema
+├── event identity
+├── evidence class
+├── actor reference
+├── operation
+├── time information
+├── input references
+├── output references
+├── relationships
+├── observer
+└── extensions
+```
+
+An event and an artifact are different things.
+
+```text
+EVENT
+answers:
+"What occurred?"
+
+ARTIFACT
+answers:
+"What exact content is this?"
+```
+
+---
+
+## 6.3 Relationship
+
+Relationships connect evidence without inventing meaning.
+
+Examples:
+
+```text
+previous
+parent
+triggered_by
+input_to
+output_of
+derived_from
+captured_from
+approved_by
+supersedes
+```
+
+Temporal adjacency does not automatically become causality.
+
+---
+
+## 6.4 Custody Event
+
+Custody is append-only evidence describing handling.
+
+Examples:
+
+```text
+captured
+stored
+transferred
+copied
+exported
+redacted
+encrypted
+verified
+signed
+released
+```
+
+Corrections append.
+
+History does not rewrite.
+
+---
+
+## 6.5 Manifest
+
+A Manifest identifies a collection of evidence.
+
+Preferred shape:
+
+```text
+ManifestCore
+├── schema
+├── event identities
+├── artifact identities
+├── custody identities
+└── scope
+
+        ↓ canonicalize + hash
+
+ManifestEnvelope
+├── core
+└── core identity
+```
+
+The digest is computed over the core.
+
+The envelope may then carry the digest.
+
+No circular self-hashing.
+
+---
+
+# 7. Evidence Classification
+
+The core evidence classes begin with:
+
+```text
+OBSERVED
+DECLARED
+DERIVED
+```
+
+These describe provenance.
+
+They are not truth scores.
+
+```text
+OBSERVED != TRUE
+DECLARED != FALSE
+DERIVED != SPECULATIVE
+```
 
 Example:
 
+An Ollama adapter directly receiving a response body may classify those received bytes as:
+
 ```text
-provider did not expose exact model revision
+OBSERVED
 ```
 
-must remain equivalent to:
+The model name supplied by Ollama may be:
 
 ```text
-exact model revision = UNKNOWN / NOT OBSERVED
+DECLARED
 ```
 
-not:
+A SHA-256 digest calculated by PROVENANCE is:
 
 ```text
-exact model revision = guessed value
+DERIVED
 ```
 
 ---
 
-## 4.2 Evidence Core
+# 8. Canonicalization
 
-The Evidence Core provides framework-neutral semantics.
+Canonicalization belongs in `provenance-core`.
 
-It is responsible for:
+It applies only to structured PROVENANCE records.
 
-```text
-evidence classification
-event structure
-artifact references
-relationships
-identity
-canonical representation
-custody records
-failure representation
-```
-
-The core should know nothing about the scientific, legal, medical, financial, or operational meaning of the monitored decision.
-
-The core asks:
-
-> What happened and what evidence supports the record?
-
-It does not ask:
-
-> Was the decision good?
-
----
-
-## 4.3 Evidence Store
-
-The Evidence Store retains evidence.
-
-The storage technology is not part of the universal evidence contract.
-
-Possible implementations may include:
-
-```text
-filesystem
-content-addressed storage
-object storage
-database
-append-only log
-remote evidence service
-```
-
-The first implementation should prefer the simplest storage model that satisfies the invariants.
-
-The store must distinguish:
-
-```text
-EVENT METADATA
-ARTIFACT CONTENT
-CUSTODY HISTORY
-DERIVED INDEXES
-```
-
-Indexes are disposable.
-
-Evidence is not.
-
-An index may always be regenerated from evidence where the architecture claims it is derivative.
-
----
-
-## 4.4 Canonicalization and Identity
-
-Canonicalization applies to structured PROVENANCE records.
-
-It does not alter raw artifacts.
+It must not modify raw evidence.
 
 ```text
 RAW ARTIFACT
      │
-     ├──────────────► retained bytes
-     │
-     └──────────────► artifact identity
+     ├── retained bytes
+     └── content digest
 
 STRUCTURED RECORD
      │
      ▼
-canonical representation
+canonical bytes
      │
      ▼
-cryptographic identity
+record digest
 ```
 
 Target property:
 
 ```text
-same structured evidence
+same evidence values
 +
 same schema version
 +
@@ -324,312 +524,572 @@ same hash algorithm
 same digest
 ```
 
-Identity algorithms must be explicit.
+---
 
-Example:
+# 9. Domain Separation
+
+Different cryptographic record classes should use explicit domains where appropriate.
+
+Conceptually:
 
 ```text
-sha256:<digest>
+PROVENANCE/ARTIFACT/v1
+PROVENANCE/EVENT/v1
+PROVENANCE/MANIFEST/v1
+PROVENANCE/CUSTODY/v1
+PROVENANCE/CHECKPOINT/v1
+```
+
+This prevents identical serialized bytes used in different semantic roles from being accidentally treated as the same kind of object.
+
+---
+
+# 10. `provenance-verify`
+
+`provenance-verify` is an independent verification engine.
+
+Its rule is:
+
+```text
+RECOMPUTE
+NOT TRUST
+```
+
+It consumes evidence.
+
+It does not modify it.
+
+Typical verification operations include:
+
+```text
+canonical form
+content hashes
+byte counts
+manifest membership
+event links
+custody links
+signatures
+external anchors
+bundle closure
+schema validity
+```
+
+Output may include:
+
+```text
+VERIFIED
+FAILED
+UNKNOWN
+NOT_PRESENT
+NOT_APPLICABLE
+```
+
+Verification must never perform:
+
+```text
+repair
+rewrite
+normalization-in-place
+historical correction
 ```
 
 ---
 
-## 4.5 Verifier
+# 11. Verification Is Multidimensional
 
-The verifier is read-only with respect to historical evidence.
+PROVENANCE must not collapse all assurance into one Boolean.
 
-Its purpose is to recompute claims rather than trust stored claims.
-
-Typical checks may include:
+Example:
 
 ```text
-schema validity
-canonical representation
-content digest
-artifact byte count
-manifest membership
-event linkage
-custody linkage
-signature validity
-checkpoint integrity
-bundle closure
+integrity = VERIFIED
+schema = VERIFIED
+custody = PARTIAL
+signature = NOT_PRESENT
+replay = NOT_POSSIBLE
+anchor = NOT_PRESENT
 ```
 
-Verification must never repair evidence in place.
+This is more honest than:
 
 ```text
-VERIFY
-    ↓
-PASS / FAIL / UNKNOWN
+trusted=true
+```
+
+or:
+
+```text
+trusted=false
+```
+
+A valid historical record does not require every possible assurance dimension.
+
+---
+
+# 12. `provenance-store`
+
+`provenance-store` handles persistence.
+
+Storage is an implementation concern.
+
+It must not define evidence meaning.
+
+Possible backends include:
+
+```text
+filesystem
+content-addressed directory
+SQLite
+database
+object storage
+append-only service
+remote custody store
+```
+
+The first backend should be simple.
+
+A local filesystem or similarly lightweight store is preferred initially.
+
+---
+
+# 13. Storage Model
+
+The store should distinguish:
+
+```text
+ARTIFACT CONTENT
+EVENT RECORDS
+CUSTODY RECORDS
+MANIFESTS
+DERIVED INDEXES
+```
+
+Indexes are disposable.
+
+Evidence is not.
+
+If an index can be rebuilt, it should not become authoritative merely because querying it is faster.
+
+---
+
+# 14. Content Deduplication
+
+Exact content may be stored once and referenced many times.
+
+Example:
+
+```text
+EVENT 1 ───┐
+EVENT 2 ───┼──► sha256:X
+EVENT 3 ───┘
+```
+
+Preferred:
+
+```text
+store artifact X once
+reference X three times
+```
+
+Deduplication must use strong content identity.
+
+Never:
+
+```text
+same filename
+→ assume same artifact
+```
+
+---
+
+# 15. `provenance-adapters`
+
+Adapters connect monitored systems to the core.
+
+Adapters are optional modules.
+
+Potential adapters include:
+
+```text
+ollama
+openai
+anthropic
+gemini
+grok
+llama.cpp
+generic HTTP
+CLI/process
+filesystem
+agent framework
+custom application
+```
+
+Each adapter must declare:
+
+```text
+what it observes
+what it does not observe
+what values are declared externally
+what values PROVENANCE derives
+failure behavior
+```
+
+---
+
+# 16. Adapter Rule
+
+Adapters translate.
+
+They do not invent.
+
+Example:
+
+```text
+provider did not expose immutable model revision
+```
+
+must remain:
+
+```text
+immutable model revision = NOT_OBSERVED
 ```
 
 not:
 
 ```text
+immutable model revision = guessed
+```
+
+Provider-specific metadata may be retained through extensions.
+
+It must not reshape the universal core schema around one vendor.
+
+---
+
+# 17. Ollama Reference Adapter
+
+The first AI adapter should be Ollama.
+
+Reasons:
+
+```text
+local
+open integration surface
+no cloud dependency
+reproducible CI setup
+easy request/response capture
+small models available
+```
+
+The Ollama adapter exists primarily to test the evidence architecture.
+
+It must not define AI provenance semantics for every other provider.
+
+---
+
+# 18. Ollama CI Contract
+
+A real inference test should verify the chain rather than exact generated language.
+
+Example flow:
+
+```text
+PROMPT
+  ↓
+OLLAMA REQUEST
+  ↓
+MODEL EXECUTION
+  ↓
+OLLAMA RESPONSE
+  ↓
+PROVENANCE EVENTS
+  ↓
+ARTIFACT HASHES
+  ↓
+MANIFEST
+  ↓
 VERIFY
-    ↓
-MODIFY UNTIL PASS
+```
+
+Assertions should cover:
+
+```text
+request retained or intentionally omitted
+response retained
+request identity recomputes
+response identity recomputes
+adapter identity recorded
+model metadata classification correct
+event relationships valid
+manifest valid
+verification passes
+```
+
+Then mutate retained evidence:
+
+```text
+change one byte
+↓
+verification fails
+```
+
+Do not require:
+
+```text
+prompt X always produces exact string Y
+```
+
+Model output is the observed evidence.
+
+It is not the regression oracle.
+
+---
+
+# 19. `provenance-mcp`
+
+`provenance-mcp` exposes PROVENANCE through the Model Context Protocol.
+
+MCP is an interface.
+
+It is not part of the evidence core.
+
+Initial tools may include:
+
+```text
+provenance.record
+provenance.inspect
+provenance.verify
+provenance.finalize
+provenance.export
+```
+
+Potential resources:
+
+```text
+provenance://event/<id>
+provenance://artifact/<identity>
+provenance://manifest/<id>
+provenance://custody/<id>
+provenance://schema/<version>
 ```
 
 ---
 
-## 4.6 Export and Presentation
+# 20. MCP Evidence Boundary
 
-Export and presentation are derived layers.
-
-Examples:
+An AI calling:
 
 ```text
-evidence bundles
-timelines
-HTML reports
-JSON exports
-graphs
-CLI inspection
-legal exhibits
-medical review packages
-audit summaries
+provenance.record(...)
 ```
 
-These layers have no authority to alter source evidence.
+does not make every supplied value independently observed.
+
+If an AI says:
 
 ```text
-PRESENTATION
-!=
-EVIDENCE
+"I called tool X because Y"
 ```
+
+through MCP, that information is normally:
+
+```text
+DECLARED
+```
+
+unless PROVENANCE independently observed the relevant action or rationale.
+
+The MCP server must not upgrade self-report into observation.
 
 ---
 
-# 5. Fundamental Data Types
+# 21. MCP Transport
 
-The architecture should begin with very few universal concepts.
+Initial implementation should prefer the lowest-complexity useful transport.
+
+Likely progression:
+
+```text
+stdio
+  ↓
+local integration proven
+  ↓
+optional remote transport
+```
+
+Remote transport must not become mandatory for local evidence recording.
+
+A local application should be able to use PROVENANCE without operating a network service.
 
 ---
 
-## 5.1 Event
+# 22. `provenance-cli`
 
-An Event represents an observed, declared, or derived occurrence.
+The CLI is the simplest human and automation interface.
 
-Conceptually:
+Initial commands may conceptually include:
 
 ```text
-Event
-├── schema/version
-├── identity
-├── evidence class
-├── actor reference
-├── operation
-├── time information
-├── input references
-├── output references
-├── relationships
-├── observation source
-└── optional extensions
+provenance record
+provenance verify
+provenance inspect
+provenance finalize
+provenance export
 ```
 
-The exact schema remains to be defined.
+The CLI should expose core functionality directly.
+
+It should not contain a second implementation of verification semantics.
 
 ---
 
-## 5.2 Artifact
+# 23. `provenance-ui`
 
-An Artifact represents retained content.
+The UI is an evidence viewer.
 
-Examples:
+It has no evidentiary authority.
 
-```text
-prompt
-response
-document
-image
-tool payload
-API response
-source file
-configuration
-model output
-log fragment
-binary
-```
+Its job is to make the chain understandable.
 
-Conceptually:
+Primary views should include:
 
 ```text
-Artifact
-├── content identity
-├── byte count
-├── media type
-├── acquisition metadata
-├── source metadata
-└── storage reference
+timeline
+event graph
+artifact inspector
+custody history
+verification status
+evidence gaps
 ```
 
-An artifact record must distinguish:
+The UI consumes existing evidence.
 
-```text
-CONTENT RETAINED
-```
-
-from:
-
-```text
-ONLY CONTENT IDENTITY RETAINED
-```
-
-A digest is not the artifact itself.
+It does not define evidence.
 
 ---
 
-## 5.3 Relationship
+# 24. UI Evidence Graph
 
-Relationships describe known connections between records.
-
-Examples:
-
-```text
-previous
-parent
-triggered_by
-input_to
-output_of
-derived_from
-captured_from
-approved_by
-supersedes
-```
-
-Relationships must not silently imply more than they state.
-
----
-
-## 5.4 Custody Event
-
-Custody is recorded as history.
-
-Examples:
-
-```text
-captured
-stored
-transferred
-copied
-exported
-redacted
-encrypted
-verified
-signed
-released
-```
-
-Custody events append.
-
-They do not rewrite earlier custody.
-
----
-
-## 5.5 Manifest
-
-A Manifest identifies a collection of evidence.
-
-Conceptually:
-
-```text
-ManifestCore
-├── schema
-├── artifact identities
-├── event identities
-├── custody identities
-└── declared scope
-
-        ↓ canonicalize + hash
-
-ManifestEnvelope
-├── core
-└── core identity
-```
-
-The digest is calculated from the core before the envelope contains the digest.
-
-No circular self-hashing.
-
----
-
-# 6. Event Identity Versus Artifact Identity
-
-These concepts must remain separate.
-
-An artifact answers:
-
-> What exact content is this?
-
-An event answers:
-
-> What occurrence is being recorded?
-
-Two events may reference the same artifact.
+The central visual model should be the evidence chain.
 
 Example:
 
 ```text
-EVENT A ──► artifact sha256:X
-EVENT B ──► artifact sha256:X
+USER INPUT
+    │
+    ▼
+PROMPT ARTIFACT
+sha256:...
+    │
+    ▼
+MODEL INVOCATION
+    │
+    ├────► TOOL CALL
+    │         │
+    │         ▼
+    │      TOOL RESULT
+    │
+    ▼
+MODEL RESPONSE
+sha256:...
+    │
+    ▼
+APPLICATION ACTION
+    │
+    ▼
+HUMAN REVIEW
 ```
 
-The artifact identity remains the same.
-
-The events remain distinct.
-
----
-
-# 7. Evidence Classification
-
-The core classification model begins with:
+Selecting a node should expose:
 
 ```text
-OBSERVED
-DECLARED
-DERIVED
+WHO
+WHAT
+WHEN
+WHERE
+HOW
+WHY-EVIDENCE
+CLASSIFICATION
+IDENTITY
+CUSTODY
+VERIFICATION
 ```
 
-These are provenance properties.
+---
 
-They are not truth scores.
+# 25. Evidence Gaps in the UI
+
+Evidence gaps must be visually explicit.
+
+Never quietly connect:
 
 ```text
-OBSERVED != TRUE
-DECLARED != FALSE
-DERIVED != SPECULATIVE
+EVENT 15
+   ↓
+EVENT 16
 ```
 
-They describe how information entered the evidence system.
+when collection was interrupted.
+
+Instead:
+
+```text
+EVENT 15
+   │
+   ▼
+██████████████████████
+█  EVIDENCE GAP      █
+█ collection failed █
+██████████████████████
+   │
+   ▼
+EVENT 16
+```
+
+A missing record is not evidence that nothing happened.
 
 ---
 
-# 8. Observation Modes
+# 26. UI Technology
 
-PROVENANCE must support more than one observation topology.
+The initial UI should remain lightweight.
+
+Preferred direction:
+
+```text
+HTML
+CSS
+minimal JavaScript
+```
+
+unless requirements later justify something heavier.
+
+Avoid introducing a large application framework merely to display evidence graphs and metadata.
+
+The UI should be replaceable without affecting:
+
+```text
+recording
+storage
+verification
+evidence identity
+```
 
 ---
 
-## 8.1 Native Hook
+# 27. Observation Topologies
+
+Adapters may observe systems through several topologies.
+
+## Native Hook
 
 ```text
 APPLICATION
-    │
     ├── normal operation
-    │
-    └── provenance event
+    └── provenance observation
 ```
 
-Lowest integration distance.
-
-Potentially lowest capture ambiguity.
-
-Requires application integration.
-
----
-
-## 8.2 Middleware / Proxy
+## Middleware / Proxy
 
 ```text
 APPLICATION
@@ -639,13 +1099,7 @@ PROXY
 EXTERNAL SYSTEM
 ```
 
-Useful for APIs and tool traffic.
-
-Must not silently alter payloads.
-
----
-
-## 8.3 Sidecar
+## Sidecar
 
 ```text
 APPLICATION ─────► normal system
@@ -653,67 +1107,81 @@ APPLICATION ─────► normal system
      └───────────► PROVENANCE
 ```
 
-Allows observation logic to remain operationally separate.
-
----
-
-## 8.4 External Observer
+## External Observer
 
 ```text
 SYSTEM
-   │
+   ↓
 observable external effects
    ↓
-OBSERVER
+PROVENANCE
 ```
 
-Lowest integration requirement.
+Each has a different observation boundary.
 
-Usually weakest observation boundary.
-
-The evidence must say so.
+PROVENANCE must preserve that distinction.
 
 ---
 
-# 9. Hot-Path Rule
+# 28. Non-Interference
 
-The capture path should perform the minimum work necessary to preserve accurate evidence.
+No PROVENANCE module may silently alter monitored behavior.
 
-Prefer:
+Forbidden hidden operations include:
 
 ```text
-capture
-→ assign minimal metadata
-→ preserve bytes/reference
+rewrite prompt
+rewrite response
+change model settings
+retry request
+suppress tool call
+change tool output
+change decision
+reorder monitored action
+```
+
+An integrating application may explicitly choose such behavior.
+
+That application decision then belongs to the monitored system, not PROVENANCE.
+
+---
+
+# 29. Hot-Path Architecture
+
+The monitored hot path should perform the minimum work required for accurate capture.
+
+Preferred:
+
+```text
+observe
+→ capture bytes/reference
+→ minimal metadata
 → enqueue/store
+→ return
 ```
 
-Avoid placing expensive work on the monitored hot path when it can safely occur later.
-
-Possible deferred work:
+Move nonessential work off the hot path:
 
 ```text
-index construction
-report generation
+indexing
+search
+timeline construction
 visualization
-search indexing
-timeline generation
-nonessential derived analysis
+report generation
+derived analysis
 ```
 
-Cryptographic work may be streamed or deferred only where doing so does not create an undeclared integrity gap.
+Cryptographic operations may be streamed or deferred only when doing so does not create an undeclared integrity gap.
 
 ---
 
-# 10. Bounded Collection
+# 30. Bounded Collection
 
-Observation machinery must be bounded.
+PROVENANCE must not use unbounded memory merely to avoid admitting that evidence was lost.
 
-Unbounded queues or memory growth are not acceptable merely to avoid dropping evidence.
+Collectors need explicit bounded behavior.
 
-A collector must define behavior for resource exhaustion.
-
-Possible states include:
+Possible outcomes:
 
 ```text
 RECORDED
@@ -723,50 +1191,75 @@ COLLECTION_FAILED
 EVIDENCE_GAP_OPENED
 ```
 
-The implementation must never silently discard evidence while presenting uninterrupted custody.
+Silently dropping evidence while presenting continuity is forbidden.
 
 ---
 
-# 11. Backpressure
+# 31. Backpressure
 
-PROVENANCE itself should not silently impose new application control semantics.
+PROVENANCE should not secretly become application flow control.
 
-If evidence cannot be recorded fast enough, the collector should report the condition.
+Possible integration policies include:
 
-The host integration may choose its own declared policy.
+```text
+best effort
+bounded buffer
+synchronous evidence capture
+application-defined fail closed
+application-defined fail open
+```
+
+The host chooses the policy.
+
+PROVENANCE records or exposes which policy applies.
+
+---
+
+# 32. Failure Architecture
+
+Failure is evidence.
 
 Examples:
 
 ```text
-best-effort observation
-bounded buffering
-synchronous capture
-application-defined failure policy
+capture failure
+serialization failure
+storage failure
+hash failure
+queue overflow
+network failure
+permission failure
+unsupported field
+process termination
 ```
 
-PROVENANCE must record or expose which policy applies.
+Correct behavior:
 
-It must not secretly choose one.
+```text
+DETECT
+  ↓
+PRESERVE WHAT IS KNOWN
+  ↓
+MARK UNKNOWN / MISSING PORTION
+  ↓
+REPORT GAP
+```
+
+Never:
+
+```text
+FAILURE
+  ↓
+INVENT REPLACEMENT
+```
 
 ---
 
-# 12. Time and Ordering
+# 33. Time and Ordering
 
-PROVENANCE should preserve both:
+PROVENANCE should retain both time and ordering information without treating them as identical.
 
-```text
-TIME
-```
-
-and:
-
-```text
-ORDER
-```
-
-without assuming they are equivalent.
-
-Potential event metadata may include:
+Possible fields:
 
 ```text
 capture_time
@@ -777,629 +1270,707 @@ clock_source
 clock_precision
 ```
 
-A global total order must not be manufactured when only partial ordering is supported by evidence.
+Do not manufacture a global total order when evidence supports only partial ordering.
 
 ---
 
-# 13. Failure Architecture
+# 34. Replay
 
-Failure is a first-class record state.
+Replay is optional evidence.
 
-Collector failures may include:
-
-```text
-capture failure
-serialization failure
-storage failure
-hashing failure
-queue overflow
-process crash
-network failure
-permission failure
-unsupported source data
-```
-
-Failure handling follows:
-
-```text
-detect
-→ preserve what is known
-→ identify missing portion
-→ report gap
-```
-
-Never:
-
-```text
-detect
-→ invent replacement
-→ hide failure
-```
-
----
-
-# 14. Assurance Is Multidimensional
-
-PROVENANCE must not reduce trust to one universal Boolean.
-
-Different properties may be independently verified.
-
-For example:
-
-```text
-integrity
-custody
-signature
-replay
-schema
-observation completeness
-external anchoring
-```
-
-Possible state:
-
-```text
-integrity = VERIFIED
-signature = NOT_PRESENT
-replay = NOT_POSSIBLE
-custody = PARTIAL
-```
-
-This may still be valid historical evidence.
-
-A single field such as:
-
-```text
-trusted=true
-```
-
-must not erase those distinctions.
-
----
-
-# 15. Replay Is Optional Evidence
-
-Replay may strengthen some records.
-
-Replay is not universally required.
+It is not a universal validity requirement.
 
 ```text
 HISTORICAL OBSERVATION
-```
-
-and:
-
-```text
+!=
 LATER REPLAY
 ```
 
-remain different evidence.
-
-A legal or medical AI interaction may be impossible to reproduce because:
+Replay may be:
 
 ```text
-model revision disappeared
-provider changed
-external source disappeared
-environment no longer exists
-nondeterministic behavior cannot be recreated
+VERIFIED
+FAILED
+NOT_POSSIBLE
+NOT_ATTEMPTED
 ```
 
-The original evidence does not become invalid merely because replay is unavailable.
+The inability to replay an old model or external system does not invalidate authentic historical evidence.
 
 ---
 
-# 16. Storage Efficiency
+# 35. Reference and Optimized Paths
 
-PROVENANCE should avoid unnecessary duplication.
+Where practical, important operations should retain a straightforward reference path.
 
-Preferred approaches may include:
+Example:
 
 ```text
-content-addressed artifacts
-streaming hashes
-deduplicated immutable content
-small event envelopes
-artifact references
-bounded metadata
+                 ┌── reference verifier
+evidence ────────┤
+                 └── optimized verifier
+
+results must agree
 ```
 
-If ten events reference the same exact retained artifact:
+Allowed optimization mechanisms include:
 
 ```text
-store artifact once
-reference it ten times
-```
-
-where the storage backend permits this safely.
-
-Deduplication must be based on strong content identity, not filename similarity.
-
----
-
-# 17. Optimization Rules
-
-Optimization is subordinate to correctness.
-
-Allowed:
-
-```text
-batching
 streaming
-content deduplication
-proven-equivalent caching
-bounded parallel verification
+deduplication
 incremental verification
+proven-equivalent caching
+bounded parallelism
 verified dependency reuse
 ```
 
 Required condition:
 
 ```text
-OPTIMIZED_RESULT
+OPTIMIZED SEMANTICS
 ==
-REFERENCE_RESULT
+REFERENCE SEMANTICS
 ```
-
-under the declared exactness contract.
-
-Reuse must bind the complete effective input identity.
-
-Failed or partial work must never become reusable authoritative state.
 
 ---
 
-# 18. Reference Path
+# 36. Caching
 
-Where practical, the project should retain a small canonical implementation against which optimized paths can be tested.
+Cache entries are not trusted merely because they exist.
+
+Reuse requires:
 
 ```text
-              ┌── reference path
-input ────────┤
-              └── optimized path
-
-results must agree
+COMPLETE EFFECTIVE INPUT IDENTITY
++
+VALIDATED OUTPUT IDENTITY
++
+SUCCESSFUL PRIOR GENERATION
++
+PRESERVED SEMANTIC CONTRACT
 ```
 
-The optimized implementation must not become its own correctness oracle.
+A failed or interrupted operation must never publish authoritative reusable state.
+
+For cheap cryptographic verification:
+
+```text
+prefer recomputation
+```
+
+over complicated caching.
 
 ---
 
-# 19. Privacy Boundary
+# 37. Module Independence Test
 
-Evidence completeness does not mean collecting everything available.
+Each optional module should be removable.
 
-Before retaining sensitive content, integrations must distinguish:
+Deleting:
 
 ```text
-needed for evidence contract
-optional contextual material
-unnecessary secret
+provenance-ui
 ```
 
-Credentials and private keys are not ordinary provenance payloads.
+must not invalidate evidence.
 
-Potential mechanisms may include:
+Deleting:
 
 ```text
-content omission
+provenance-mcp
+```
+
+must not invalidate evidence.
+
+Deleting:
+
+```text
+provenance-adapters/ollama
+```
+
+must not break the verifier.
+
+Replacing:
+
+```text
+provenance-store
+```
+
+must not change core evidence semantics.
+
+This is a central architectural test.
+
+---
+
+# 38. Interface Consistency
+
+All interfaces should ultimately use the same core contracts.
+
+```text
+CLI ─────┐
+MCP ─────┤
+UI ──────┤
+SDK ─────┤
+Adapters ┘
+         ↓
+   provenance-core
+```
+
+There must not be:
+
+```text
+MCP evidence format
+UI evidence format
+CLI evidence format
+```
+
+with subtly different meanings.
+
+One evidence contract.
+
+Many interfaces.
+
+---
+
+# 39. Privacy
+
+Evidence completeness does not require collecting everything.
+
+An adapter should distinguish:
+
+```text
+required evidence
+optional context
+unnecessary sensitive data
+secret material
+```
+
+Credentials and private keys must not become ordinary evidence payloads.
+
+Supported strategies may include:
+
+```text
 digest-only retention
 encryption
-redaction derivatives
+redaction derivative
+content omission
 access-controlled storage
-retention policy
+retention policies
 ```
 
-If content is intentionally omitted:
-
-```text
-OMITTED
-```
-
-must not become:
-
-```text
-RETAINED
-```
+If content is omitted, that fact must remain explicit.
 
 ---
 
-# 20. Framework Neutrality
+# 40. Framework Neutrality
 
-The universal evidence core must not contain provider-specific assumptions.
-
-Correct direction:
+The architecture must support:
 
 ```text
-OpenAI adapter ───┐
-Claude adapter ───┤
-Gemini adapter ───┤
-Grok adapter ─────┤
-Ollama adapter ───┤
-Custom adapter ───┘
-                  ↓
-          PROVENANCE CORE
+OpenAI
+Anthropic
+Google
+xAI
+Ollama
+llama.cpp
+future unknown providers
+non-AI systems
 ```
 
-Incorrect direction:
+without changing the universal evidence semantics.
+
+Correct:
+
+```text
+provider
+   ↓
+adapter
+   ↓
+PROVENANCE CORE
+```
+
+Wrong:
 
 ```text
 PROVENANCE CORE
 =
-one vendor API schema
+one provider schema
 +
-special cases for everyone else
+patches for everyone else
 ```
 
 ---
 
-# 21. Language Neutrality
+# 41. Language Neutrality
 
-The evidence contract should be independently implementable.
+The reference implementation may initially use one language.
 
-The reference implementation may initially use one programming language.
+The evidence contract must not depend on language-specific object representation.
 
-The architecture must not make that language's runtime-specific representation the protocol.
-
-For example:
+Forbidden protocol authority includes:
 
 ```text
-Python dict ordering
 Python repr()
-Python pickle
-process-local object IDs
+pickle
+process object IDs
+dict insertion accidents
+runtime hash()
 ```
 
-must not define portable evidence identity.
+Independent implementations must eventually be possible.
 
 ---
 
-# 22. Proposed Minimal Repository Shape
+# 42. Dependency Direction
 
-This is a direction, not a requirement to create all paths immediately.
-
-```text
-PROVENANCE/
-│
-├── README.md
-├── README4AIs.md
-├── AGENTS.md
-├── INVARIANTS.md
-├── ARCHITECTURE.md
-├── DONORS.md
-├── LINEAGE.md
-│
-├── schemas/
-│   └── ...
-│
-├── provenance/
-│   ├── core
-│   ├── canonical
-│   ├── identity
-│   ├── record
-│   ├── verify
-│   └── adapters
-│
-└── tests/
-    ├── fixtures
-    └── ...
-```
-
-Create directories only when implementation requires them.
-
-Do not scaffold an empty framework for appearance.
-
----
-
-# 23. Minimal Initial Implementation
-
-The first executable implementation should prove only the smallest useful evidence contract.
-
-Suggested order:
+Hard direction:
 
 ```text
-1. canonical structured bytes
-2. cryptographic artifact identity
-3. minimal event record
-4. artifact reference
-5. core/envelope separation
-6. manifest creation
-7. manifest verification
-8. tamper fixtures
+provenance-ui
+      ↓
+provenance-mcp / provenance-cli
+      ↓
+provenance-adapters / provenance-store
+      ↓
+provenance-core
 ```
 
-Only after this works should the project add:
-
-```text
-custody chains
-signatures
-external anchors
-adapter SDKs
-streaming collectors
-databases
-distributed storage
-dashboards
-formal verification
-```
-
-unless an earlier requirement demonstrates the need.
-
----
-
-# 24. Reference MVP Flow
-
-A minimal end-to-end reference should eventually demonstrate:
-
-```text
-INPUT
-  ↓
-OBSERVE
-  ↓
-EVENT RECORD
-  ↓
-ARTIFACT IDENTITY
-  ↓
-MANIFEST
-  ↓
-FINALIZE
-  ↓
-TAMPER
-  ↓
-VERIFY
-  ↓
-FAIL
-```
-
-and:
-
-```text
-INPUT
-  ↓
-OBSERVE
-  ↓
-EVENT RECORD
-  ↓
-ARTIFACT IDENTITY
-  ↓
-MANIFEST
-  ↓
-FINALIZE
-  ↓
-VERIFY
-  ↓
-PASS
-```
-
-That is sufficient to establish the first real PROVENANCE core.
-
----
-
-# 25. Architectural Anti-Patterns
-
-Avoid:
-
-```text
-mandatory central server
-mandatory database
-mandatory blockchain
-mandatory cloud service
-mandatory AI provider
-mandatory replay
-mandatory policy engine
-mandatory UI
-hidden normalization
-opaque binary protocol
-unbounded event queues
-global mutable recorder state
-single "trusted" Boolean
-provider-specific core schema
-```
-
-None are required to prove provenance.
-
----
-
-# 26. Blockchain Is Not the Architecture
-
-External anchoring may eventually use many mechanisms.
-
-Examples:
-
-```text
-signed release
-timestamp authority
-transparency log
-DOI record
-Git commit
-external signature
-append-only service
-blockchain
-```
-
-PROVENANCE must not equate:
-
-```text
-CHAIN OF CUSTODY
-```
-
-with:
-
-```text
-BLOCKCHAIN
-```
-
-Cryptographic custody is an evidence problem, not a cryptocurrency requirement.
-
----
-
-# 27. Deployment Model
-
-PROVENANCE should support progressive deployment.
-
-```text
-LEVEL 0
-library / local recorder
-
-LEVEL 1
-application adapter
-
-LEVEL 2
-sidecar / proxy
-
-LEVEL 3
-central evidence service
-
-LEVEL 4
-distributed / externally anchored custody
-```
-
-Higher deployment complexity is optional.
-
-A small local application should not need infrastructure designed for a national medical network merely to record a verifiable event.
-
----
-
-# 28. Dependency Direction
-
-Preferred conceptual dependency direction:
-
-```text
-adapters
-   ↓
-recording API
-   ↓
-core evidence model
-   ↓
-canonicalization / identity
-```
-
-Verification should depend on evidence contracts, not adapter runtime behavior:
-
-```text
-evidence bundle
-   ↓
-verifier
-```
-
-Presentation depends on verified/read evidence:
+Independent branch:
 
 ```text
 evidence
    ↓
-presentation
+provenance-verify
+   ↓
+verification report
 ```
 
-Core evidence semantics must never depend on:
+Forbidden dependency direction:
 
 ```text
-dashboard
-specific adapter
-specific AI vendor
-application policy
+provenance-core
+      ↓
+provenance-ui
+```
+
+or:
+
+```text
+provenance-verify
+      ↓
+Ollama adapter
 ```
 
 ---
 
-# 29. Architectural Success Test
+# 43. Bootstrap Module Order
 
-A correct architecture should allow this:
+Do not build every module immediately.
 
-```text
-small CLI program
-+
-PROVENANCE
-```
-
-without requiring a server.
-
-And also this:
+Preferred implementation order:
 
 ```text
-large distributed AI platform
-+
-PROVENANCE adapters
-+
-remote evidence storage
-+
-independent verifier
+PHASE 1
+provenance-core
+    canonical bytes
+    artifact identity
+    event
+    manifest
+
+PHASE 2
+provenance-verify
+    manifest verification
+    tamper detection
+    fixtures
+
+PHASE 3
+provenance-store
+    simple local storage
+    content deduplication
+
+PHASE 4
+provenance-adapters/ollama
+    real AI observation
+    GitHub Actions integration
+
+PHASE 5
+provenance-mcp
+    stdio tools/resources
+
+PHASE 6
+provenance-cli
+    inspection and verification
+
+PHASE 7
+provenance-ui
+    evidence graph
+    timeline
+    gaps
+    artifact inspection
+
+PHASE 8
+additional adapters
+    OpenAI
+    Claude
+    Gemini
+    Grok
+    generic HTTP
 ```
 
-without changing the fundamental evidence semantics.
-
-The scale changes.
-
-The contract does not.
+Signatures, external anchoring, distributed custody, and formal verification come later unless a concrete requirement pulls them forward.
 
 ---
 
-# 30. Five-Year Test
+# 44. CI Architecture
+
+CI should also remain modular.
+
+```text
+core.yml
+    canonicalization
+    identity
+    manifests
+    tamper fixtures
+
+verify.yml
+    verifier contract
+    malformed evidence
+    integrity failures
+
+ollama.yml
+    real local model smoke test
+
+mcp.yml
+    MCP protocol surface
+
+ui.yml
+    lightweight presentation tests
+
+full.yml
+    integration / release-grade validation
+```
+
+Path filtering or equivalent selective execution may reduce routine CI cost once module boundaries stabilize.
+
+Invariant-sensitive changes must still escalate appropriately.
+
+---
+
+# 45. Ollama CI Principle
+
+The Ollama test validates PROVENANCE.
+
+It does not validate Ollama's intelligence.
+
+Do not assert:
+
+```text
+PROMPT X
+→ EXACT RESPONSE Y
+```
+
+Assert:
+
+```text
+REQUEST OBSERVED
+RESPONSE OBSERVED
+ARTIFACT IDENTITIES VALID
+EVENT RELATIONSHIPS VALID
+MANIFEST VALID
+VERIFY PASS
+```
+
+Then:
+
+```text
+TAMPER WITH ONE BYTE
+→ VERIFY FAIL
+```
+
+---
+
+# 46. MCP Self-Demonstration
+
+A useful integration test is:
+
+```text
+AI / client
+   ↓
+calls PROVENANCE through MCP
+   ↓
+PROVENANCE records interaction
+   ↓
+client requests evidence chain
+   ↓
+PROVENANCE returns verifiable record
+```
+
+This demonstrates the system using its own public integration surface.
+
+Self-observation must still preserve evidence classification boundaries.
+
+---
+
+# 47. Deployment Model
+
+The same modules should support several deployment sizes.
+
+## Minimal
+
+```text
+application
++
+provenance-core
++
+local store
+```
+
+## Developer / AI
+
+```text
+application
++
+adapter
++
+core
++
+store
++
+MCP
+```
+
+## Investigator
+
+```text
+evidence bundle
++
+provenance-verify
++
+CLI/UI
+```
+
+## Large deployment
+
+```text
+many adapters
++
+core-compatible evidence service
++
+remote storage
++
+MCP/API
++
+UI
++
+external anchors
+```
+
+Scale changes.
+
+Evidence semantics do not.
+
+---
+
+# 48. Architectural Anti-Patterns
+
+Avoid making any of the following mandatory:
+
+```text
+central server
+database cluster
+cloud account
+AI provider
+MCP
+UI
+blockchain
+message broker
+container platform
+replay
+formal prover
+JavaScript framework
+```
+
+Optional infrastructure must remain optional.
+
+---
+
+# 49. No Mandatory Blockchain
+
+Chain of custody is not synonymous with blockchain.
+
+External anchoring may use:
+
+```text
+digital signature
+Git commit
+signed release
+timestamp service
+transparency log
+DOI record
+append-only service
+blockchain
+```
+
+PROVENANCE defines the evidence.
+
+Anchoring mechanisms are replaceable.
+
+---
+
+# 50. Architectural Success Tests
+
+The architecture succeeds if all of these are possible:
+
+### Tiny integration
+
+```text
+small CLI
++
+provenance-core
++
+local files
+```
+
+### Local AI integration
+
+```text
+Ollama
++
+adapter
++
+core
++
+store
+```
+
+### MCP integration
+
+```text
+AI client
++
+provenance-mcp
++
+core
+```
+
+### Human investigation
+
+```text
+old evidence bundle
++
+provenance-verify
++
+UI
+```
+
+### Large platform
+
+```text
+many systems
++
+many adapters
++
+shared store
++
+same evidence contract
+```
+
+---
+
+# 51. Five-Year Test
 
 Assume five years have passed.
 
-The original application no longer exists.
+The monitored application no longer exists.
 
-The AI provider no longer serves the model.
+The AI model is unavailable.
 
-The original developers are unavailable.
+The original developers are gone.
 
-An investigator possesses only:
+The UI has been completely rewritten.
+
+The MCP protocol implementation has changed.
+
+An investigator still possesses:
 
 ```text
-evidence artifacts
-event records
+artifacts
+events
 custody records
 manifests
+schemas
 public specifications
-verification software
 ```
 
-The architecture succeeds if the investigator can determine:
+A current independent verifier should still be able to determine:
 
 ```text
 what was captured
 what was retained
 what was declared
 what was derived
-what was not observed
+which bytes were hashed
+which identities recompute
 where gaps exist
-which bytes hashes identify
 which relationships are supported
-whether evidence changed
-whether verification succeeds
+what changed
+what verifies
 what cannot be known
 ```
 
-without requiring the original monitored application.
+If preserving evidence requires resurrecting the old UI, MCP server, Ollama adapter, or original application:
+
+```text
+ARCHITECTURE FAILED
+```
 
 ---
 
-# Final Architecture Rule
+# Final Architecture Law
 
-The system should always prefer:
+PROVENANCE should resemble a collection of small cooperating instruments:
 
 ```text
-SMALL
-EXPLICIT
-VERIFYABLE
-FRAMEWORK-NEUTRAL
-NON-INTERFERING
+CORE
+VERIFY
+STORE
+ADAPTERS
+MCP
+CLI
+UI
 ```
 
-over:
+rather than one monolithic application.
+
+Each module should know only what it needs to know.
+
+Each optional surface should remain replaceable.
+
+The core must remain boring.
+
+That is a feature.
 
 ```text
-CLEVER
-OPAQUE
-CENTRALIZED
-MAGICAL
+SMALL CORE
+CLEAR MODULES
+ONE EVIDENCE CONTRACT
+OPTIONAL INTEGRATIONS
+INDEPENDENT VERIFICATION
+MINIMUM OBSERVER EFFECT
 ```
 
-The architectural checksum is:
+Architectural checksum:
 
 ```text
-CAPTURE ONLY WHAT IS NEEDED.
+CAPTURE ONLY WHAT THE CONTRACT REQUIRES.
+
 PRESERVE EXACTLY WHAT WAS CAPTURED.
-DO NOT CLAIM WHAT WAS NOT CAPTURED.
-MAKE THE RESULT INDEPENDENTLY VERIFIABLE.
+
+KEEP THE CORE INDEPENDENT OF THE INTERFACES.
+
+MAKE EVERY OPTIONAL MODULE REPLACEABLE.
+
+MAKE THE EVIDENCE SURVIVE THE SOFTWARE THAT CREATED IT.
+
 GET OUT OF THE MONITORED SYSTEM'S WAY.
 ```
