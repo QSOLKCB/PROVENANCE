@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest import mock
@@ -369,6 +370,219 @@ class LocalEvidenceStoreTests(unittest.TestCase):
             )
             self.assertEqual(reopened.artifact_count, 1)
             self.assertTrue(reopened.verify_current().integrity_verified)
+
+    def test_relative_root_remains_bound_after_chdir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            first_cwd = base / "first"
+            second_cwd = base / "second"
+            first_cwd.mkdir()
+            second_cwd.mkdir()
+            original_cwd = Path.cwd()
+            try:
+                os.chdir(first_cwd)
+                store = LocalEvidenceStore("store")
+                expected_root = (first_cwd / "store").absolute()
+
+                os.chdir(second_cwd)
+                artifact = store.put_artifact(b"bound root")
+                store.put_event(_event_for(artifact.content_identity))
+                snapshot = store.finalize()
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertEqual(store.root, expected_root)
+            self.assertTrue((expected_root / "HEAD").is_file())
+            self.assertTrue(snapshot.path.is_relative_to(expected_root))
+            self.assertFalse((second_cwd / "store").exists())
+
+    def test_retained_artifact_cannot_be_downgraded_to_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"retained")
+            store.put_event(_event_for(artifact.content_identity))
+            store.finalize()
+
+            reopened = LocalEvidenceStore(root)
+            with self.assertRaisesRegex(StoreError, "cannot be downgraded"):
+                reopened.mark_missing(artifact.content_identity)
+
+    def test_retained_artifact_cannot_be_downgraded_to_digest_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(
+                b"retained",
+                media_type="text/plain",
+                retain_content=True,
+            )
+            store.put_event(_event_for(artifact.content_identity))
+            store.finalize()
+
+            reopened = LocalEvidenceStore(root)
+            with self.assertRaisesRegex(StoreError, "cannot be downgraded"):
+                reopened.put_artifact(
+                    b"retained",
+                    media_type="text/plain",
+                    retain_content=False,
+                )
+
+    def test_digest_only_can_upgrade_to_retained_with_stable_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            digest_only = store.put_artifact(
+                b"upgrade",
+                media_type="text/plain",
+                retain_content=False,
+            )
+            store.put_event(_event_for(digest_only.content_identity))
+            first = store.finalize()
+            self.assertTrue(first.verification.integrity_verified)
+
+            reopened = LocalEvidenceStore(root)
+            retained = reopened.put_artifact(
+                b"upgrade",
+                media_type="text/plain",
+                retain_content=True,
+            )
+            second = reopened.finalize()
+
+            self.assertEqual(retained.content_identity, digest_only.content_identity)
+            self.assertEqual(retained.retention, RetentionState.CONTENT_RETAINED)
+            self.assertNotEqual(first.manifest_identity, second.manifest_identity)
+            self.assertTrue(second.verification.integrity_verified)
+
+    def test_digest_only_upgrade_rejects_metadata_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(
+                b"stable metadata",
+                media_type="text/plain",
+                retain_content=False,
+            )
+            store.put_event(_event_for(artifact.content_identity))
+            store.finalize()
+
+            reopened = LocalEvidenceStore(root)
+            with self.assertRaisesRegex(StoreError, "stable metadata"):
+                reopened.put_artifact(
+                    b"stable metadata",
+                    media_type="application/octet-stream",
+                    retain_content=True,
+                )
+
+    def test_snapshot_files_do_not_share_writable_inodes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            first_artifact = store.put_artifact(b"shared artifact")
+            store.put_event(_event_for(first_artifact.content_identity))
+            first = store.finalize()
+
+            reopened = LocalEvidenceStore(root)
+            second_artifact = reopened.put_artifact(b"second artifact")
+            reopened.put_event(
+                _event_for(second_artifact.content_identity, operation="second")
+            )
+            second = reopened.finalize()
+
+            digest = first_artifact.content_identity.split(":", 1)[1]
+            object_path = root / "objects" / "artifacts" / "sha256" / digest
+            first_path = first.path / "artifacts" / "sha256" / digest
+            second_path = second.path / "artifacts" / "sha256" / digest
+
+            self.assertNotEqual(object_path.stat().st_ino, first_path.stat().st_ino)
+            self.assertNotEqual(object_path.stat().st_ino, second_path.stat().st_ino)
+            self.assertNotEqual(first_path.stat().st_ino, second_path.stat().st_ino)
+
+            second_path.write_bytes(b"tampered newer snapshot")
+
+            self.assertEqual(object_path.read_bytes(), b"shared artifact")
+            self.assertEqual(first_path.read_bytes(), b"shared artifact")
+            self.assertTrue(verify_bundle(first.path).integrity_verified)
+            self.assertFalse(verify_bundle(second.path).integrity_verified)
+
+    def test_head_rejects_snapshot_directory_with_different_manifest_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"identity binding")
+            store.put_event(_event_for(artifact.content_identity))
+            snapshot = store.finalize()
+
+            fake_identity = sha256_identity(b"forged head")
+            fake_digest = fake_identity.split(":", 1)[1]
+            fake_snapshot = root / "snapshots" / "sha256" / fake_digest
+            shutil.copytree(snapshot.path, fake_snapshot)
+            (root / "HEAD").write_text(fake_identity + "\n", encoding="ascii")
+
+            with self.assertRaisesRegex(
+                StoreError,
+                "manifest identity does not match expected identity",
+            ):
+                LocalEvidenceStore(root)
+
+    def test_existing_snapshot_reuse_requires_matching_manifest_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"expected snapshot")
+            event = _event_for(artifact.content_identity)
+            store.put_event(event)
+
+            core = store_module.ManifestCore.build(
+                artifacts=store._artifacts.values(),
+                events=store._events,
+                scope="closed",
+            )
+            expected_manifest = store_module.ManifestEnvelope.seal(core)
+            expected_digest = expected_manifest.manifest_identity.split(":", 1)[1]
+            expected_path = root / "snapshots" / "sha256" / expected_digest
+
+            other_root = Path(tmp) / "other"
+            other = LocalEvidenceStore(other_root)
+            other_artifact = other.put_artifact(b"other snapshot")
+            other.put_event(_event_for(other_artifact.content_identity))
+            other_snapshot = other.finalize()
+            shutil.copytree(other_snapshot.path, expected_path)
+
+            with self.assertRaisesRegex(
+                StoreError,
+                "manifest identity does not match expected identity",
+            ):
+                store.finalize()
+
+            self.assertFalse((root / "HEAD").exists())
+
+    def test_snapshot_directory_fsync_failure_prevents_head_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"durability")
+            store.put_event(_event_for(artifact.content_identity))
+            real_fsync_directory = store_module._fsync_directory
+            calls = 0
+
+            def fail_during_snapshot(fd: int) -> None:
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    raise StoreError("injected directory fsync failure")
+                real_fsync_directory(fd)
+
+            with mock.patch.object(
+                store_module,
+                "_fsync_directory",
+                side_effect=fail_during_snapshot,
+            ):
+                with self.assertRaisesRegex(StoreError, "fsync"):
+                    store.finalize()
+
+            self.assertFalse((root / "HEAD").exists())
+            self.assertIsNone(store.current_manifest_identity)
 
     def test_corrupt_head_snapshot_is_rejected_on_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
