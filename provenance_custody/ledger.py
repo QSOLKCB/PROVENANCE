@@ -303,15 +303,27 @@ class LocalCustodyLedger:
                     raise CustodyLedgerError(
                         "custody lock must be a regular file"
                     )
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                fcntl.lockf(
+                    fd,
+                    fcntl.LOCK_EX,
+                    0,
+                    0,
+                    os.SEEK_SET,
+                )
                 yield
             except OSError as exc:
                 raise CustodyLedgerError(
-                    f"custody lock operation failed: {exc}"
+                    f"custody POSIX lock operation failed: {exc}"
                 ) from exc
             finally:
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    fcntl.lockf(
+                        fd,
+                        fcntl.LOCK_UN,
+                        0,
+                        0,
+                        os.SEEK_SET,
+                    )
                 finally:
                     os.close(fd)
 
