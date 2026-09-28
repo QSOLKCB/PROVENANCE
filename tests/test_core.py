@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from provenance_core import (
+    MAX_SAFE_INTEGER,
     ArtifactRecord,
     CanonicalizationError,
     CollectionStatus,
@@ -10,9 +11,11 @@ from provenance_core import (
     EventCore,
     EventEnvelope,
     IdentityError,
+    ManifestArtifact,
     ManifestCore,
     ManifestEnvelope,
     Relationship,
+    RetentionState,
     canonical_json_bytes,
     domain_identity,
     parse_canonical_json_bytes,
@@ -40,11 +43,13 @@ class CanonicalJsonTests(unittest.TestCase):
 
     def test_out_of_range_integer_is_rejected(self) -> None:
         with self.assertRaisesRegex(CanonicalizationError, "safe-integer"):
-            canonical_json_bytes({"n": 9_007_199_254_740_992})
+            canonical_json_bytes({"n": MAX_SAFE_INTEGER + 1})
 
-    def test_lone_surrogate_is_rejected_as_invalid_unicode(self) -> None:
+    def test_lone_surrogate_is_rejected_as_canonicalization_error(self) -> None:
         with self.assertRaisesRegex(CanonicalizationError, "invalid Unicode"):
             canonical_json_bytes({"text": "\ud800"})
+        with self.assertRaises(CanonicalizationError):
+            parse_canonical_json_bytes(b'"\\ud800"\n')
 
     def test_bom_and_float_are_rejected(self) -> None:
         with self.assertRaisesRegex(CanonicalizationError, "BOM"):
@@ -64,13 +69,95 @@ class IdentityTests(unittest.TestCase):
         with self.assertRaises(IdentityError):
             domain_identity(b"PROVENANCE/TEST/v1", {"x": 1})
 
+    def test_fixed_v1_identity_fixtures(self) -> None:
+        artifact = ArtifactRecord.from_bytes(b"fixture", media_type="text/plain")
+        self.assertEqual(
+            artifact.content_identity,
+            "sha256:f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+        )
+        self.assertEqual(
+            artifact.record_identity,
+            "sha256:c5329634201793d2ecf76f3667da28164fe3449db7c2afd2979e5daf9273ada6",
+        )
+
+        event = EventEnvelope.seal(
+            EventCore(
+                evidence_class=EvidenceClass.OBSERVED,
+                actor="adapter:test",
+                operation="capture",
+                outputs=(artifact.content_identity,),
+            )
+        )
+        self.assertEqual(
+            event.event_identity,
+            "sha256:409e540e19f7952d90d6d866a7da623808d5c4acbba18f1b839f530d4cff6401",
+        )
+
+        manifest = ManifestEnvelope.seal(
+            ManifestCore.build(artifacts=[artifact], events=[event.event_identity])
+        )
+        self.assertEqual(
+            manifest.manifest_identity,
+            "sha256:8f61ba370addc2f1a1004598d07aac41c819193586c949e9ebb3b3e6cbbc67d1",
+        )
+
 
 class RecordTests(unittest.TestCase):
-    def test_artifact_record_binds_exact_bytes(self) -> None:
+    def test_from_bytes_defaults_to_digest_only(self) -> None:
         record = ArtifactRecord.from_bytes(b"prompt", media_type="text/plain")
         self.assertEqual(record.byte_count, 6)
         self.assertEqual(record.content_identity, sha256_identity(b"prompt"))
-        self.assertEqual(record.to_dict()["retention"], "CONTENT_RETAINED")
+        self.assertEqual(record.retention, RetentionState.DIGEST_ONLY)
+
+        retained = ArtifactRecord.from_bytes(
+            b"prompt",
+            media_type="text/plain",
+            retention=RetentionState.CONTENT_RETAINED,
+        )
+        self.assertEqual(retained.retention, RetentionState.CONTENT_RETAINED)
+
+    def test_artifact_record_rejects_noncanonical_byte_count(self) -> None:
+        digest = sha256_identity(b"x")
+        with self.assertRaisesRegex(ValueError, "canonical safe integer"):
+            ArtifactRecord(
+                content_identity=digest,
+                byte_count=MAX_SAFE_INTEGER + 1,
+                media_type="application/octet-stream",
+            )
+
+    def test_artifact_record_identity_binds_metadata(self) -> None:
+        content_identity = sha256_identity(b"same bytes")
+        plain = ArtifactRecord(
+            content_identity=content_identity,
+            byte_count=10,
+            media_type="text/plain",
+            retention=RetentionState.DIGEST_ONLY,
+        )
+        binary = ArtifactRecord(
+            content_identity=content_identity,
+            byte_count=10,
+            media_type="application/octet-stream",
+            retention=RetentionState.DIGEST_ONLY,
+        )
+        retained = ArtifactRecord(
+            content_identity=content_identity,
+            byte_count=10,
+            media_type="text/plain",
+            retention=RetentionState.CONTENT_RETAINED,
+        )
+        self.assertEqual(plain.content_identity, binary.content_identity)
+        self.assertNotEqual(plain.record_identity, binary.record_identity)
+        self.assertNotEqual(plain.record_identity, retained.record_identity)
+
+        first_manifest = ManifestEnvelope.seal(
+            ManifestCore.build(artifacts=[plain])
+        )
+        second_manifest = ManifestEnvelope.seal(
+            ManifestCore.build(artifacts=[binary])
+        )
+        self.assertNotEqual(
+            first_manifest.manifest_identity, second_manifest.manifest_identity
+        )
 
     def test_event_core_rejects_mutable_collections_and_untyped_enums(self) -> None:
         artifact = ArtifactRecord.from_bytes(b"x")
@@ -87,6 +174,31 @@ class RecordTests(unittest.TestCase):
                 actor="adapter:test",
                 operation="capture",
             )
+
+    def test_derived_event_requires_source(self) -> None:
+        with self.assertRaisesRegex(ValueError, "DERIVED event"):
+            EventCore(
+                evidence_class=EvidenceClass.DERIVED,
+                actor="analysis:test",
+                operation="calculation",
+            )
+
+        source = ArtifactRecord.from_bytes(b"source").content_identity
+        by_input = EventCore(
+            evidence_class=EvidenceClass.DERIVED,
+            actor="analysis:test",
+            operation="calculation",
+            inputs=(source,),
+        )
+        self.assertEqual(by_input.inputs, (source,))
+
+        by_relationship = EventCore(
+            evidence_class=EvidenceClass.DERIVED,
+            actor="analysis:test",
+            operation="calculation",
+            relationships=(Relationship("derived_from", source),),
+        )
+        self.assertEqual(by_relationship.relationships[0].target, source)
 
     def test_event_identity_changes_when_core_changes(self) -> None:
         artifact = ArtifactRecord.from_bytes(b"response")
@@ -135,15 +247,15 @@ class RecordTests(unittest.TestCase):
             Relationship(kind="derived_from", target="not-an-identity")
 
     def test_manifest_membership_is_order_independent_but_exact(self) -> None:
-        a = ArtifactRecord.from_bytes(b"a").content_identity
-        b = ArtifactRecord.from_bytes(b"b").content_identity
+        a = ArtifactRecord.from_bytes(b"a")
+        b = ArtifactRecord.from_bytes(b"b")
         event = EventEnvelope.seal(
             EventCore(
                 evidence_class=EvidenceClass.OBSERVED,
                 actor="adapter:test",
                 operation="capture",
-                inputs=(a,),
-                outputs=(b,),
+                inputs=(a.content_identity,),
+                outputs=(b.content_identity,),
             )
         )
         left = ManifestEnvelope.seal(
@@ -158,6 +270,40 @@ class RecordTests(unittest.TestCase):
             ManifestCore.build(artifacts=[a], events=[event.event_identity])
         )
         self.assertNotEqual(left.manifest_identity, changed.manifest_identity)
+
+    def test_manifest_encodes_missing_artifact_explicitly(self) -> None:
+        missing_id = sha256_identity(b"lost bytes")
+        missing = ManifestArtifact.missing(missing_id)
+        opened = ManifestEnvelope.seal(
+            ManifestCore.build(artifacts=[missing], scope="open")
+        )
+        self.assertEqual(
+            opened.core.to_dict()["artifacts"],
+            [
+                {
+                    "content_identity": missing_id,
+                    "record_identity": None,
+                    "retention": "MISSING",
+                }
+            ],
+        )
+        with self.assertRaisesRegex(ValueError, "closed manifest"):
+            ManifestCore.build(artifacts=[missing], scope="closed")
+
+    def test_manifest_rejects_conflicting_metadata_for_same_content(self) -> None:
+        content_identity = sha256_identity(b"same")
+        first = ArtifactRecord(
+            content_identity=content_identity,
+            byte_count=4,
+            media_type="text/plain",
+        )
+        second = ArtifactRecord(
+            content_identity=content_identity,
+            byte_count=4,
+            media_type="application/octet-stream",
+        )
+        with self.assertRaisesRegex(ValueError, "conflicting metadata"):
+            ManifestCore.build(artifacts=[first, second])
 
     def test_self_hash_fields_are_outside_hashed_core(self) -> None:
         artifact = ArtifactRecord.from_bytes(b"evidence")
