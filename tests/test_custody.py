@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import os
 from pathlib import Path
 import tempfile
@@ -243,7 +242,7 @@ class CustodyVerifierTests(unittest.TestCase):
 
 class ClockObservationTests(unittest.TestCase):
     def test_chrony_nts_selected_source_is_authenticated_network(self) -> None:
-        fixed = datetime(2026, 9, 29, 0, 0, 0, tzinfo=timezone.utc)
+        fixed_ns = 1_790_640_000_000_000_000
 
         def run(argv: list[str], *, timeout: float) -> str:
             if argv[-1] == "sources":
@@ -270,8 +269,8 @@ class ClockObservationTests(unittest.TestCase):
             side_effect=run,
         ), mock.patch.object(
             time_module,
-            "_system_now",
-            return_value=fixed,
+            "_system_now_ns",
+            return_value=fixed_ns,
         ):
             observation = chrony_clock_observation()
 
@@ -282,7 +281,7 @@ class ClockObservationTests(unittest.TestCase):
         self.assertIn("chrony:192.0.2.10;auth=NTS", observation.clock_source)
 
     def test_ntpdate_query_applies_median_offset(self) -> None:
-        fixed = datetime(2026, 9, 29, 0, 0, 0, tzinfo=timezone.utc)
+        fixed_ns = 1_790_640_000_000_000_000
         output = "\n".join(
             [
                 "server 192.0.2.1, stratum 2, offset -0.002000, delay 0.02",
@@ -301,8 +300,8 @@ class ClockObservationTests(unittest.TestCase):
             return_value=output,
         ), mock.patch.object(
             time_module,
-            "_system_now",
-            return_value=fixed,
+            "_system_now_ns",
+            return_value=fixed_ns,
         ):
             observation = ntpdate_clock_observation("pool.ntp.org")
 
@@ -316,8 +315,8 @@ class ClockObservationTests(unittest.TestCase):
         )
         self.assertIn("offset=+0.001000000s", observation.clock_source)
 
-    def test_auto_clock_falls_back_to_local_system_time(self) -> None:
-        fixed = datetime(2026, 9, 29, 0, 0, 0, tzinfo=timezone.utc)
+    def test_auto_clock_never_initiates_ntpdate_network_query(self) -> None:
+        fixed_ns = 1_790_640_000_000_000_000
 
         with mock.patch.object(
             time_module,
@@ -326,16 +325,41 @@ class ClockObservationTests(unittest.TestCase):
         ), mock.patch.object(
             time_module,
             "ntpdate_clock_observation",
-            side_effect=TimeSourceError("no ntpdate"),
-        ), mock.patch.object(
+            side_effect=AssertionError("automatic network query is forbidden"),
+        ) as ntpdate, mock.patch.object(
             time_module,
-            "_system_now",
-            return_value=fixed,
+            "_system_now_ns",
+            return_value=fixed_ns,
         ):
             observation = observe_clock()
 
+        ntpdate.assert_not_called()
         self.assertEqual(observation.clock_assurance, ClockAssurance.LOCAL)
         self.assertEqual(observation.clock_source, "system-clock")
+        self.assertEqual(
+            observation.recorded_at,
+            "2026-09-29T00:00:00.000000Z",
+        )
+
+    def test_decimal_offset_parsing_is_exact_integer_nanoseconds(self) -> None:
+        self.assertEqual(
+            time_module._parse_decimal_seconds_to_ns("-0.002269"),
+            -2_269_000,
+        )
+        self.assertEqual(
+            time_module._parse_decimal_seconds_to_ns("+1.000000001"),
+            1_000_000_001,
+        )
+        self.assertEqual(
+            time_module._median_ns([-2_000_000, 4_000_000]),
+            1_000_000,
+        )
+        self.assertEqual(
+            time_module._format_offset_ns(-2_269_000),
+            "-0.002269000s",
+        )
+        with self.assertRaisesRegex(TimeSourceError, "at most 9"):
+            time_module._parse_decimal_seconds_to_ns("0.0000000001")
 
 
 class LocalCustodyLedgerTests(unittest.TestCase):
@@ -409,6 +433,27 @@ class LocalCustodyLedgerTests(unittest.TestCase):
             tips = dict(report.tips)
             self.assertEqual(tips[first], first_record.custody_identity)
             self.assertEqual(tips[second], second_record.custody_identity)
+
+    def test_append_uses_posix_record_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = LocalCustodyLedger(Path(tmp) / "custody")
+            subject = sha256_identity(b"lock subject")
+            real_lockf = ledger_module.fcntl.lockf
+
+            with mock.patch.object(
+                ledger_module.fcntl,
+                "lockf",
+                wraps=real_lockf,
+            ) as lockf:
+                ledger.append(
+                    subject,
+                    CustodyAction.CAPTURED,
+                    clock=_clock(),
+                )
+
+            commands = [call.args[1] for call in lockf.call_args_list]
+            self.assertIn(ledger_module.fcntl.LOCK_EX, commands)
+            self.assertIn(ledger_module.fcntl.LOCK_UN, commands)
 
     def test_interrupted_publication_leaves_no_authoritative_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
