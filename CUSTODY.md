@@ -175,7 +175,11 @@ A local reference clock remains:
 clock_assurance = LOCAL
 ~~~
 
-When chrony is unavailable, the implementation may query:
+When chrony is unavailable, ordinary custody recording falls back directly to the host system clock.
+
+PROVENANCE does not automatically initiate a network time query.
+
+An operator may explicitly request the diagnostic helper:
 
 ~~~text
 ntpdate -q pool.ntp.org
@@ -183,11 +187,13 @@ ntpdate -q pool.ntp.org
 
 or another explicitly supplied server token.
 
-The query is observation-only.
+That query is observation-only and opt-in.
 
 PROVENANCE does not start a time service and does not open UDP/TCP time listeners.
 
-The recorded timestamp may use the observed query offset while retaining:
+If the explicit diagnostic helper is used, its decimal offset text is parsed into integer nanoseconds without binary floating-point arithmetic. The host clock is read as integer nanoseconds, offset arithmetic is integer-only, and base-60/RFC3339 conversion occurs only at the presentation boundary.
+
+The recorded diagnostic timestamp may retain:
 
 ~~~text
 clock_source = ntpdate:<server>;offset=<observed-offset>
@@ -231,6 +237,8 @@ It does not upgrade unrelated custody claims.
 ---
 
 # Local custody ledger
+
+The Phase 4 reference ledger uses POSIX-style advisory record locking through fcntl record locks rather than flock-specific locking.
 
 The Phase 4 reference ledger uses:
 
@@ -329,7 +337,9 @@ An invalid existing ledger blocks new append operations.
 
 Verification failures remain verification failures.
 
-Clock observation failure does not break custody recording if a lower-assurance local system timestamp is explicitly recorded instead.
+Clock observation failure does not break custody recording if a lower-assurance local system timestamp is recorded instead.
+
+The default observation path must not create network traffic merely to obtain time.
 
 ---
 
