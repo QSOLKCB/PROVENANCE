@@ -319,6 +319,32 @@ class LocalEvidenceStoreTests(unittest.TestCase):
             self.assertTrue(first.path.exists())
             self.assertTrue(verify_bundle(first.path).integrity_verified)
 
+    def test_stale_store_instance_cannot_overwrite_newer_head(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            first = LocalEvidenceStore(root)
+            stale = LocalEvidenceStore(root)
+
+            first_artifact = first.put_artifact(b"first writer")
+            first.put_event(_event_for(first_artifact.content_identity))
+            first_snapshot = first.finalize()
+
+            stale_artifact = stale.put_artifact(b"stale writer")
+            stale.put_event(
+                _event_for(stale_artifact.content_identity, operation="stale")
+            )
+
+            with self.assertRaisesRegex(StoreError, "HEAD changed"):
+                stale.finalize()
+
+            reopened = LocalEvidenceStore(root)
+            self.assertEqual(
+                reopened.current_manifest_identity,
+                first_snapshot.manifest_identity,
+            )
+            self.assertEqual(reopened.artifact_count, 1)
+            self.assertTrue(reopened.verify_current().integrity_verified)
+
     def test_corrupt_head_snapshot_is_rejected_on_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "store"
