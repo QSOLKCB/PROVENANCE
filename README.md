@@ -695,6 +695,8 @@ The initial Python reference module is imported as `provenance_core`; the hyphen
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the module contracts and dependency rules.
 
+See [BUNDLE.md](BUNDLE.md) for the Phase 2 evidence-bundle layout consumed by the independent verifier.
+
 ---
 
 # Implementation Roadmap
