@@ -143,6 +143,7 @@ A valid bundle may not contain:
 - missing declared files;
 - undeclared extra files;
 - symbolic links;
+- FIFOs, sockets, device nodes, or other non-regular filesystem entries;
 - substituted artifact-record files;
 - retained content for DIGEST_ONLY or MISSING entries.
 
@@ -163,6 +164,8 @@ report = verify_bundle(Path("bundle"))
 print(report.integrity_verified)
 print(report.errors)
 ~~~
+
+Before reading JSON evidence, the verifier requires each record to be a regular, non-symlink file. Special filesystem objects are rejected rather than opened.
 
 The verifier is read-only.
 
