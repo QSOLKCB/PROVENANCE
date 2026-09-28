@@ -699,6 +699,8 @@ See [BUNDLE.md](BUNDLE.md) for the Phase 2 evidence-bundle layout consumed by th
 
 See [STORE.md](STORE.md) for the Phase 3 local content-addressed storage contract.
 
+See [CUSTODY.md](CUSTODY.md) for the Phase 4 append-only custody and clock-observation contract.
+
 ---
 
 # Implementation Roadmap
@@ -783,7 +785,7 @@ That is the target.
 
 # Status
 
-**Bootstrap / Phase 3 implementation.**
+**Bootstrap / Phase 4 implementation.**
 
 The constitutional and architectural foundation is in place. The first executable module is now `provenance_core`, covering the initial Phase 1 surface:
 
@@ -803,7 +805,9 @@ The independent verifier is now implemented in `provenance_verify`, with canonic
 
 The local evidence store is now implemented in `provenance_store`, with content-addressed immutable objects, atomic no-overwrite publication, exact-byte deduplication, verifier-gated snapshots, atomic `HEAD` publication, reopen-from-verified-state, stale-writer rejection, and explicit recovery from previously missing evidence.
 
-Custody semantics remain Phase 4. Adapters, Ollama integration, MCP, CLI, and UI remain later roadmap phases.
+The minimal custody chain is now implemented through `provenance_core`, `provenance_verify`, and `provenance_custody`: domain-separated custody identities, append-only per-subject chains, explicit unknown actor/source values, clock-source assurance, independent chain verification, and a local immutable custody ledger.
+
+Adapters, Ollama integration, MCP, the Rust TUI/CLI, and the local pure-HTML/CSS/JS viewer remain later roadmap phases.
 
 Interfaces and compatibility guarantees should still be considered unstable until explicitly versioned and released.
 
