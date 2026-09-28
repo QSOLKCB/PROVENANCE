@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -573,6 +576,76 @@ class LocalCustodyLedgerTests(unittest.TestCase):
                 "failed verification",
             ):
                 LocalCustodyLedger(root)
+
+    def test_second_instance_open_cannot_release_held_custody_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "custody"
+            ledger = LocalCustodyLedger(root)
+            lock_path = root / ".custody.lock"
+            ready = Path(tmp) / "child-ready"
+            acquired = Path(tmp) / "child-acquired"
+            script = (
+                "import fcntl, os, pathlib, sys\n"
+                "lock_path, ready, acquired = sys.argv[1:4]\n"
+                "fd = os.open(lock_path, os.O_RDWR)\n"
+                "pathlib.Path(ready).write_text('ready')\n"
+                "fcntl.lockf(fd, fcntl.LOCK_EX, 0, 0, os.SEEK_SET)\n"
+                "pathlib.Path(acquired).write_text('acquired')\n"
+                "fcntl.lockf(fd, fcntl.LOCK_UN, 0, 0, os.SEEK_SET)\n"
+                "os.close(fd)\n"
+            )
+            constructed: list[LocalCustodyLedger] = []
+            constructor_errors: list[BaseException] = []
+            constructor: threading.Thread | None = None
+            child: subprocess.Popen[str] | None = None
+
+            def construct_second() -> None:
+                try:
+                    constructed.append(LocalCustodyLedger(root))
+                except BaseException as exc:
+                    constructor_errors.append(exc)
+
+            try:
+                with ledger._exclusive_lock():
+                    child = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-c",
+                            script,
+                            str(lock_path),
+                            str(ready),
+                            str(acquired),
+                        ],
+                        text=True,
+                    )
+                    deadline = time.monotonic() + 3.0
+                    while not ready.exists() and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(ready.exists())
+
+                    constructor = threading.Thread(target=construct_second)
+                    constructor.start()
+                    time.sleep(0.15)
+
+                    self.assertTrue(constructor.is_alive())
+                    self.assertFalse(acquired.exists())
+                    self.assertIsNone(child.poll())
+
+                assert constructor is not None
+                constructor.join(timeout=5)
+                self.assertFalse(constructor.is_alive())
+                assert child is not None
+                self.assertEqual(child.wait(timeout=5), 0)
+            finally:
+                if constructor is not None and constructor.is_alive():
+                    constructor.join(timeout=5)
+                if child is not None and child.poll() is None:
+                    child.terminate()
+                    child.wait(timeout=5)
+
+            self.assertEqual(constructor_errors, [])
+            self.assertEqual(len(constructed), 1)
+            self.assertTrue(acquired.exists())
 
     def test_append_uses_posix_record_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
