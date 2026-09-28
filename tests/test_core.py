@@ -68,6 +68,22 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(record.content_identity, sha256_identity(b"prompt"))
         self.assertEqual(record.to_dict()["retention"], "CONTENT_RETAINED")
 
+    def test_event_core_rejects_mutable_collections_and_untyped_enums(self) -> None:
+        artifact = ArtifactRecord.from_bytes(b"x")
+        with self.assertRaisesRegex(TypeError, "tuples"):
+            EventCore(
+                evidence_class=EvidenceClass.OBSERVED,
+                actor="adapter:test",
+                operation="capture",
+                inputs=[artifact.content_identity],  # type: ignore[arg-type]
+            )
+        with self.assertRaisesRegex(TypeError, "EvidenceClass"):
+            EventCore(
+                evidence_class="OBSERVED",  # type: ignore[arg-type]
+                actor="adapter:test",
+                operation="capture",
+            )
+
     def test_event_identity_changes_when_core_changes(self) -> None:
         artifact = ArtifactRecord.from_bytes(b"response")
         first = EventEnvelope.seal(
