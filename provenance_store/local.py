@@ -61,7 +61,7 @@ def _directory_flags() -> int:
         (os.mkdir, "dir_fd support for os.mkdir"),
         (os.unlink, "dir_fd support for os.unlink"),
         (os.link, "dir_fd support for os.link"),
-        (os.replace, "dir_fd support for os.replace"),
+        (os.rename, "dir_fd support for os.rename"),
     ):
         if function not in os.supports_dir_fd:
             missing.append(description)
@@ -577,7 +577,7 @@ class LocalEvidenceStore:
                         fd = None
 
                 try:
-                    os.replace(
+                    os.rename(
                         temp_name,
                         _HEAD,
                         src_dir_fd=root_fd,
