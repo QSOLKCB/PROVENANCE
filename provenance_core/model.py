@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
-from .canonical import CANONICALIZATION_ID
+from .canonical import CANONICALIZATION_ID, MAX_SAFE_INTEGER
 from .identity import (
+    artifact_record_identity,
     event_identity,
     manifest_identity,
     require_sha256_identity,
@@ -34,6 +35,7 @@ class CollectionStatus(str, Enum):
 class RetentionState(str, Enum):
     CONTENT_RETAINED = "CONTENT_RETAINED"
     DIGEST_ONLY = "DIGEST_ONLY"
+    MISSING = "MISSING"
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,14 +57,22 @@ class ArtifactRecord:
     content_identity: str
     byte_count: int
     media_type: str
-    retention: RetentionState = RetentionState.CONTENT_RETAINED
+    retention: RetentionState = RetentionState.DIGEST_ONLY
 
     def __post_init__(self) -> None:
         if not isinstance(self.retention, RetentionState):
             raise TypeError("artifact retention must be a RetentionState")
+        if self.retention is RetentionState.MISSING:
+            raise ValueError("MISSING is a manifest gap state, not an ArtifactRecord retention")
         require_sha256_identity(self.content_identity, label="artifact content identity")
-        if type(self.byte_count) is not int or self.byte_count < 0:
-            raise ValueError("artifact byte_count must be a non-negative integer")
+        if (
+            type(self.byte_count) is not int
+            or self.byte_count < 0
+            or self.byte_count > MAX_SAFE_INTEGER
+        ):
+            raise ValueError(
+                "artifact byte_count must be a non-negative canonical safe integer"
+            )
         if not isinstance(self.media_type, str) or not self.media_type:
             raise ValueError("artifact media_type must be a non-empty string")
 
@@ -72,7 +82,7 @@ class ArtifactRecord:
         data: bytes,
         *,
         media_type: str = "application/octet-stream",
-        retention: RetentionState = RetentionState.CONTENT_RETAINED,
+        retention: RetentionState = RetentionState.DIGEST_ONLY,
     ) -> "ArtifactRecord":
         return cls(
             content_identity=sha256_identity(data),
@@ -81,6 +91,10 @@ class ArtifactRecord:
             retention=retention,
         )
 
+    @property
+    def record_identity(self) -> str:
+        return artifact_record_identity(self.to_dict())
+
     def to_dict(self) -> dict[str, object]:
         return {
             "schema": ARTIFACT_SCHEMA,
@@ -88,6 +102,52 @@ class ArtifactRecord:
             "content_identity": self.content_identity,
             "byte_count": self.byte_count,
             "media_type": self.media_type,
+            "retention": self.retention.value,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestArtifact:
+    content_identity: str
+    retention: RetentionState
+    record_identity: str | None
+
+    def __post_init__(self) -> None:
+        require_sha256_identity(self.content_identity, label="manifest artifact content identity")
+        if not isinstance(self.retention, RetentionState):
+            raise TypeError("manifest artifact retention must be a RetentionState")
+        if self.retention is RetentionState.MISSING:
+            if self.record_identity is not None:
+                raise ValueError("missing artifact must not claim an ArtifactRecord identity")
+        else:
+            if self.record_identity is None:
+                raise ValueError("non-missing artifact must bind an ArtifactRecord identity")
+            require_sha256_identity(
+                self.record_identity, label="manifest artifact record identity"
+            )
+
+    @classmethod
+    def from_record(cls, record: ArtifactRecord) -> "ManifestArtifact":
+        if not isinstance(record, ArtifactRecord):
+            raise TypeError("manifest artifact source must be an ArtifactRecord")
+        return cls(
+            content_identity=record.content_identity,
+            retention=record.retention,
+            record_identity=record.record_identity,
+        )
+
+    @classmethod
+    def missing(cls, content_identity: str) -> "ManifestArtifact":
+        return cls(
+            content_identity=content_identity,
+            retention=RetentionState.MISSING,
+            record_identity=None,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "content_identity": self.content_identity,
+            "record_identity": self.record_identity,
             "retention": self.retention.value,
         }
 
@@ -121,6 +181,14 @@ class EventCore:
             require_sha256_identity(value, label=f"event input[{index}]")
         for index, value in enumerate(self.outputs):
             require_sha256_identity(value, label=f"event output[{index}]")
+        if self.evidence_class is EvidenceClass.DERIVED:
+            has_derived_source = bool(self.inputs) or any(
+                item.kind == "derived_from" for item in self.relationships
+            )
+            if not has_derived_source:
+                raise ValueError(
+                    "DERIVED event must identify at least one source input or derived_from relationship"
+                )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -163,21 +231,26 @@ class EventEnvelope:
 
 @dataclass(frozen=True, slots=True)
 class ManifestCore:
-    artifacts: tuple[str, ...]
+    artifacts: tuple[ManifestArtifact, ...]
     events: tuple[str, ...]
     scope: str = "closed"
 
     def __post_init__(self) -> None:
         if not isinstance(self.artifacts, tuple) or not isinstance(self.events, tuple):
             raise TypeError("manifest artifacts and events must be tuples")
+        if not all(isinstance(item, ManifestArtifact) for item in self.artifacts):
+            raise TypeError("manifest artifacts must contain ManifestArtifact values")
         if self.scope not in {"open", "closed"}:
             raise ValueError("manifest scope must be 'open' or 'closed'")
-        if tuple(sorted(set(self.artifacts))) != self.artifacts:
-            raise ValueError("manifest artifacts must be sorted and unique")
+        keys = tuple(item.content_identity for item in self.artifacts)
+        if tuple(sorted(keys)) != keys or len(set(keys)) != len(keys):
+            raise ValueError("manifest artifacts must be sorted and unique by content identity")
+        if self.scope == "closed" and any(
+            item.retention is RetentionState.MISSING for item in self.artifacts
+        ):
+            raise ValueError("closed manifest cannot contain missing artifacts")
         if tuple(sorted(set(self.events))) != self.events:
             raise ValueError("manifest events must be sorted and unique")
-        for index, value in enumerate(self.artifacts):
-            require_sha256_identity(value, label=f"manifest artifact[{index}]")
         for index, value in enumerate(self.events):
             require_sha256_identity(value, label=f"manifest event[{index}]")
 
@@ -185,12 +258,28 @@ class ManifestCore:
     def build(
         cls,
         *,
-        artifacts: Iterable[str] = (),
+        artifacts: Iterable[ArtifactRecord | ManifestArtifact] = (),
         events: Iterable[str] = (),
         scope: str = "closed",
     ) -> "ManifestCore":
+        normalized: dict[str, ManifestArtifact] = {}
+        for item in artifacts:
+            if isinstance(item, ArtifactRecord):
+                entry = ManifestArtifact.from_record(item)
+            elif isinstance(item, ManifestArtifact):
+                entry = item
+            else:
+                raise TypeError(
+                    "manifest artifacts must be ArtifactRecord or ManifestArtifact values"
+                )
+            prior = normalized.get(entry.content_identity)
+            if prior is not None and prior != entry:
+                raise ValueError(
+                    "manifest contains conflicting metadata for one artifact content identity"
+                )
+            normalized[entry.content_identity] = entry
         return cls(
-            artifacts=tuple(sorted(set(artifacts))),
+            artifacts=tuple(normalized[key] for key in sorted(normalized)),
             events=tuple(sorted(set(events))),
             scope=scope,
         )
@@ -199,7 +288,7 @@ class ManifestCore:
         return {
             "schema": MANIFEST_SCHEMA,
             "canonicalization": CANONICALIZATION_ID,
-            "artifacts": list(self.artifacts),
+            "artifacts": [item.to_dict() for item in self.artifacts],
             "events": list(self.events),
             "scope": self.scope,
         }
