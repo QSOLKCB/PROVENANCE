@@ -790,6 +790,7 @@ Baseline principles:
 terminal-native
 POSIX-style filesystem semantics
 POSIX advisory record locks
+same-process mutexes around process-owned POSIX lock files
 integer evidentiary time arithmetic
 no Bash requirement
 no systemd requirement
@@ -814,6 +815,8 @@ explicit operator diagnostic
 ```
 
 PROVENANCE should execute subprocesses through explicit argv vectors, never by interpolating evidence into shell command strings.
+
+Because classic POSIX record locks are process-owned, a record lock alone is not sufficient for multiple threads or instances in one process. Lock-file open/close operations must be serialized by the same process-local mutex used around acquisition of the POSIX record lock.
 
 Presentation may use RFC3339/base-60 clock notation, but custody time calculations remain integer-only.
 
