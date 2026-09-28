@@ -584,6 +584,228 @@ class LocalEvidenceStoreTests(unittest.TestCase):
             self.assertFalse((root / "HEAD").exists())
             self.assertIsNone(store.current_manifest_identity)
 
+    def test_prior_artifact_record_identity_is_verified_before_upgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(
+                b"upgrade identity",
+                media_type="text/plain",
+                retain_content=False,
+            )
+            store.put_event(_event_for(artifact.content_identity))
+            store.finalize()
+
+            reopened = LocalEvidenceStore(root)
+            tampered = store_module.ArtifactRecord(
+                content_identity=artifact.content_identity,
+                byte_count=artifact.byte_count,
+                media_type="application/octet-stream",
+                retention=RetentionState.DIGEST_ONLY,
+            )
+            _record_object(root, artifact.record_identity).write_bytes(
+                store_module.canonical_json_bytes(tampered.to_dict())
+            )
+
+            with self.assertRaisesRegex(StoreError, "does not match its identity"):
+                reopened.put_artifact(
+                    b"upgrade identity",
+                    media_type="application/octet-stream",
+                    retain_content=True,
+                )
+
+    def test_recovered_snapshot_is_refsynced_before_head_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"recovered durability")
+            store.put_event(_event_for(artifact.content_identity))
+
+            real_rename = store_module.os.rename
+            real_fsync_directory = store_module._fsync_directory
+            snapshot_renamed = False
+            injected = False
+
+            def observe_rename(src, dst, *args, **kwargs):
+                nonlocal snapshot_renamed
+                result = real_rename(src, dst, *args, **kwargs)
+                if dst != "HEAD":
+                    snapshot_renamed = True
+                return result
+
+            def fail_post_rename_fsync(fd: int) -> None:
+                nonlocal injected
+                if snapshot_renamed and not injected:
+                    injected = True
+                    raise StoreError("injected post-rename parent fsync failure")
+                real_fsync_directory(fd)
+
+            with mock.patch.object(
+                store_module.os,
+                "rename",
+                side_effect=observe_rename,
+            ), mock.patch.object(
+                store_module,
+                "_fsync_directory",
+                side_effect=fail_post_rename_fsync,
+            ):
+                with self.assertRaisesRegex(StoreError, "post-rename"):
+                    store.finalize()
+
+            self.assertFalse((root / "HEAD").exists())
+            finalized = [
+                path
+                for path in (root / "snapshots" / "sha256").iterdir()
+                if path.is_dir() and not path.name.startswith(".")
+            ]
+            self.assertEqual(len(finalized), 1)
+            self.assertTrue(verify_bundle(finalized[0]).integrity_verified)
+
+            with mock.patch.object(
+                store_module,
+                "_fsync_directory",
+                side_effect=StoreError("retry must refsync snapshot parent"),
+            ):
+                with self.assertRaisesRegex(StoreError, "retry must refsync"):
+                    store.finalize()
+
+            self.assertFalse((root / "HEAD").exists())
+            final = store.finalize()
+            self.assertTrue(final.verification.integrity_verified)
+            self.assertTrue((root / "HEAD").is_file())
+
+    def test_reopen_revalidates_manifest_used_for_state_reconstruction(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"manifest swap")
+            store.put_event(_event_for(artifact.content_identity))
+            snapshot = store.finalize()
+
+            empty_manifest = store_module.ManifestEnvelope.seal(
+                store_module.ManifestCore.build(
+                    artifacts=[],
+                    events=[],
+                    scope="closed",
+                )
+            )
+            empty_bytes = store_module.canonical_json_bytes(
+                empty_manifest.to_dict()
+            )
+            original_verify = LocalEvidenceStore._verify_snapshot_identity
+
+            def verify_then_swap(self, path, expected_identity, *, label):
+                report = original_verify(
+                    self,
+                    path,
+                    expected_identity,
+                    label=label,
+                )
+                if label == "HEAD snapshot":
+                    (path / "manifest.json").write_bytes(empty_bytes)
+                return report
+
+            with mock.patch.object(
+                LocalEvidenceStore,
+                "_verify_snapshot_identity",
+                new=verify_then_swap,
+            ):
+                with self.assertRaisesRegex(StoreError, "changed after verification"):
+                    LocalEvidenceStore(root)
+
+            self.assertEqual(
+                snapshot.manifest_identity,
+                store.current_manifest_identity,
+            )
+
+    def test_failed_snapshot_assembly_removes_temporary_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"x" * 1024)
+            event = _event_for(artifact.content_identity)
+            store.put_event(event)
+            _event_object(root, event.event_identity).unlink()
+
+            snapshots_dir = root / "snapshots" / "sha256"
+            for _ in range(3):
+                with self.assertRaisesRegex(StoreError, "required object is missing"):
+                    store.finalize()
+                leftovers = [
+                    path
+                    for path in snapshots_dir.iterdir()
+                    if path.name.startswith(".") and path.name.endswith(".tmp")
+                ]
+                self.assertEqual(leftovers, [])
+
+    def test_store_format_marker_is_persisted_and_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            LocalEvidenceStore(root)
+            marker_path = root / "STORE_FORMAT"
+
+            self.assertEqual(
+                marker_path.read_text(encoding="ascii"),
+                store_module.STORE_FORMAT + "\n",
+            )
+
+            marker_path.write_text(
+                "provenance.local-store.v999\n",
+                encoding="ascii",
+            )
+            with self.assertRaisesRegex(StoreError, "STORE_FORMAT"):
+                LocalEvidenceStore(root)
+
+    def test_ancestor_symlink_retarget_cannot_redirect_existing_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            first_parent = base / "first"
+            second_parent = base / "second"
+            first_parent.mkdir()
+            second_parent.mkdir()
+            alias = base / "alias"
+            alias.symlink_to(first_parent, target_is_directory=True)
+
+            store = LocalEvidenceStore(alias / "store")
+            LocalEvidenceStore(second_parent / "store")
+
+            alias.unlink()
+            alias.symlink_to(second_parent, target_is_directory=True)
+
+            artifact = store.put_artifact(b"pinned through ancestor")
+            store.put_event(_event_for(artifact.content_identity))
+            store.finalize()
+
+            self.assertTrue((first_parent / "store" / "HEAD").is_file())
+            self.assertFalse((second_parent / "store" / "HEAD").exists())
+            self.assertEqual(
+                store.root,
+                (first_parent / "store").resolve(),
+            )
+
+    def test_reopen_rejects_missing_or_changed_object_pool_members(self) -> None:
+        cases = ("content", "record", "event")
+
+        for missing_kind in cases:
+            with self.subTest(missing_kind=missing_kind):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp) / "store"
+                    store = LocalEvidenceStore(root)
+                    artifact = store.put_artifact(b"pool completeness")
+                    event = _event_for(artifact.content_identity)
+                    store.put_event(event)
+                    store.finalize()
+
+                    if missing_kind == "content":
+                        _content_object(root, artifact.content_identity).unlink()
+                    elif missing_kind == "record":
+                        _record_object(root, artifact.record_identity).unlink()
+                    else:
+                        _event_object(root, event.event_identity).unlink()
+
+                    with self.assertRaisesRegex(StoreError, "object pool"):
+                        LocalEvidenceStore(root)
+
     def test_corrupt_head_snapshot_is_rejected_on_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "store"
