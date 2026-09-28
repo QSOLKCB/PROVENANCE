@@ -566,6 +566,8 @@ It consumes evidence.
 
 It does not modify it.
 
+The Phase 2 physical bundle contract is defined in [BUNDLE.md](BUNDLE.md). The bootstrap verifier validates canonical manifest/event/artifact records, exact physical membership, retained-content byte counts and SHA-256 identities, self-hash exclusion, and internal reference closure.
+
 Typical verification operations include:
 
 ```text
