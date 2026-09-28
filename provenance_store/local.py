@@ -759,122 +759,137 @@ class LocalEvidenceStore:
         temp_snapshot = self.root.joinpath(*_SNAPSHOTS, temp_name)
         created_final = False
 
-        with self._root_fd() as root_fd:
-            snapshots_parent_fd = self._open_dir_chain(
-                root_fd,
-                _SNAPSHOTS,
-                create=True,
-            )
-            try:
-                if self._existing_snapshot_is_safe(snapshots_parent_fd, digest):
-                    self._verify_snapshot_identity(
-                        final_snapshot,
-                        manifest.manifest_identity,
-                        label="existing snapshot",
-                    )
-                    return final_snapshot
-
+        try:
+            with self._root_fd() as root_fd:
+                snapshots_parent_fd = self._open_dir_chain(
+                    root_fd,
+                    _SNAPSHOTS,
+                    create=True,
+                )
                 try:
-                    os.mkdir(
-                        temp_name,
-                        mode=0o700,
-                        dir_fd=snapshots_parent_fd,
-                    )
-                except OSError as exc:
-                    raise StoreError(
-                        f"temporary snapshot cannot be created: {exc}"
-                    ) from exc
-
-                try:
-                    temp_snapshot_fd = os.open(
-                        temp_name,
-                        _directory_flags(),
-                        dir_fd=snapshots_parent_fd,
-                    )
-                except OSError as exc:
-                    raise StoreError(
-                        f"temporary snapshot cannot be opened safely: {exc}"
-                    ) from exc
-
-                try:
-                    for entry in self._artifacts.values():
-                        if entry.retention is RetentionState.MISSING:
-                            continue
-                        if entry.record_identity is None:
-                            raise StoreError(
-                                "non-missing artifact lacks record identity"
-                            )
-
-                        record_digest = _digest(
-                            entry.record_identity,
-                            label="artifact record identity",
+                    if self._existing_snapshot_is_safe(
+                        snapshots_parent_fd,
+                        digest,
+                    ):
+                        self._verify_snapshot_identity(
+                            final_snapshot,
+                            manifest.manifest_identity,
+                            label="existing snapshot",
                         )
-                        self._copy_object_into_snapshot(
-                            root_fd,
-                            temp_snapshot_fd,
-                            source_category=_OBJECT_RECORDS,
-                            source_name=record_digest + ".json",
-                            destination_category=("artifact_records", "sha256"),
-                            destination_name=record_digest + ".json",
-                        )
+                        # A previous finalize may have failed immediately after
+                        # renaming this snapshot. Re-establish parent durability
+                        # before allowing HEAD to advance on this retry.
+                        _fsync_directory(snapshots_parent_fd)
+                        return final_snapshot
 
-                        if entry.retention is RetentionState.CONTENT_RETAINED:
-                            content_digest = _digest(
-                                entry.content_identity,
-                                label="artifact content identity",
+                    try:
+                        os.mkdir(
+                            temp_name,
+                            mode=0o700,
+                            dir_fd=snapshots_parent_fd,
+                        )
+                        _fsync_directory(snapshots_parent_fd)
+                    except OSError as exc:
+                        raise StoreError(
+                            f"temporary snapshot cannot be created: {exc}"
+                        ) from exc
+
+                    try:
+                        temp_snapshot_fd = os.open(
+                            temp_name,
+                            _directory_flags(),
+                            dir_fd=snapshots_parent_fd,
+                        )
+                    except OSError as exc:
+                        raise StoreError(
+                            f"temporary snapshot cannot be opened safely: {exc}"
+                        ) from exc
+
+                    try:
+                        for entry in self._artifacts.values():
+                            if entry.retention is RetentionState.MISSING:
+                                continue
+                            if entry.record_identity is None:
+                                raise StoreError(
+                                    "non-missing artifact lacks record identity"
+                                )
+
+                            record_digest = _digest(
+                                entry.record_identity,
+                                label="artifact record identity",
                             )
                             self._copy_object_into_snapshot(
                                 root_fd,
                                 temp_snapshot_fd,
-                                source_category=_OBJECT_ARTIFACTS,
-                                source_name=content_digest,
-                                destination_category=("artifacts", "sha256"),
-                                destination_name=content_digest,
+                                source_category=_OBJECT_RECORDS,
+                                source_name=record_digest + ".json",
+                                destination_category=("artifact_records", "sha256"),
+                                destination_name=record_digest + ".json",
                             )
 
-                    for event_identity_value in self._events:
-                        event_digest = _digest(
-                            event_identity_value,
-                            label="event identity",
-                        )
-                        self._copy_object_into_snapshot(
-                            root_fd,
+                            if entry.retention is RetentionState.CONTENT_RETAINED:
+                                content_digest = _digest(
+                                    entry.content_identity,
+                                    label="artifact content identity",
+                                )
+                                self._copy_object_into_snapshot(
+                                    root_fd,
+                                    temp_snapshot_fd,
+                                    source_category=_OBJECT_ARTIFACTS,
+                                    source_name=content_digest,
+                                    destination_category=("artifacts", "sha256"),
+                                    destination_name=content_digest,
+                                )
+
+                        for event_identity_value in self._events:
+                            event_digest = _digest(
+                                event_identity_value,
+                                label="event identity",
+                            )
+                            self._copy_object_into_snapshot(
+                                root_fd,
+                                temp_snapshot_fd,
+                                source_category=_OBJECT_EVENTS,
+                                source_name=event_digest + ".json",
+                                destination_category=("events", "sha256"),
+                                destination_name=event_digest + ".json",
+                            )
+
+                        self._write_snapshot_manifest(
                             temp_snapshot_fd,
-                            source_category=_OBJECT_EVENTS,
-                            source_name=event_digest + ".json",
-                            destination_category=("events", "sha256"),
-                            destination_name=event_digest + ".json",
+                            manifest,
                         )
+                    finally:
+                        os.close(temp_snapshot_fd)
 
-                    self._write_snapshot_manifest(
-                        temp_snapshot_fd,
-                        manifest,
-                    )
-                finally:
-                    os.close(temp_snapshot_fd)
-
-                if self._existing_snapshot_is_safe(snapshots_parent_fd, digest):
-                    shutil.rmtree(temp_snapshot, ignore_errors=True)
-                else:
-                    try:
-                        os.rename(
-                            temp_name,
-                            digest,
-                            src_dir_fd=snapshots_parent_fd,
-                            dst_dir_fd=snapshots_parent_fd,
-                        )
-                        created_final = True
+                    if self._existing_snapshot_is_safe(
+                        snapshots_parent_fd,
+                        digest,
+                    ):
+                        shutil.rmtree(temp_snapshot)
                         _fsync_directory(snapshots_parent_fd)
-                    except FileExistsError:
-                        shutil.rmtree(temp_snapshot, ignore_errors=True)
-                    except OSError as exc:
-                        raise StoreError(
-                            f"snapshot publication failed: {exc}"
-                        ) from exc
-            finally:
-                os.close(snapshots_parent_fd)
+                    else:
+                        try:
+                            os.rename(
+                                temp_name,
+                                digest,
+                                src_dir_fd=snapshots_parent_fd,
+                                dst_dir_fd=snapshots_parent_fd,
+                            )
+                            created_final = True
+                        except FileExistsError:
+                            shutil.rmtree(temp_snapshot)
+                        except OSError as exc:
+                            raise StoreError(
+                                f"snapshot publication failed: {exc}"
+                            ) from exc
 
-        try:
+                        # Required for both a fresh rename and a raced existing
+                        # snapshot before HEAD may become authoritative.
+                        _fsync_directory(snapshots_parent_fd)
+                finally:
+                    os.close(snapshots_parent_fd)
+
             try:
                 self._verify_snapshot_identity(
                     final_snapshot,
@@ -1058,6 +1073,162 @@ class LocalEvidenceStore:
             )
         return envelope
 
+    def _open_regular_member(
+        self,
+        parent_fd: int,
+        name: str,
+        *,
+        label: str,
+    ) -> int:
+        try:
+            fd = os.open(
+                name,
+                _file_read_flags(),
+                dir_fd=parent_fd,
+            )
+        except OSError as exc:
+            raise StoreError(f"{label} is missing or unsafe: {exc}") from exc
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise StoreError(f"{label} is not a regular file")
+            return fd
+        except Exception:
+            os.close(fd)
+            raise
+
+    def _assert_pool_member_matches_snapshot(
+        self,
+        root_fd: int,
+        snapshot_fd: int,
+        *,
+        pool_category: tuple[str, ...],
+        pool_name: str,
+        snapshot_category: tuple[str, ...],
+        snapshot_name: str,
+        label: str,
+    ) -> None:
+        pool_parent_fd = self._open_dir_chain(
+            root_fd,
+            pool_category,
+            create=False,
+        )
+        snapshot_parent_fd = self._open_dir_chain(
+            snapshot_fd,
+            snapshot_category,
+            create=False,
+        )
+        try:
+            pool_fd = self._open_regular_member(
+                pool_parent_fd,
+                pool_name,
+                label=f"object pool {label}",
+            )
+            snapshot_member_fd = self._open_regular_member(
+                snapshot_parent_fd,
+                snapshot_name,
+                label=f"verified snapshot {label}",
+            )
+            try:
+                while True:
+                    pool_chunk = os.read(pool_fd, _CHUNK_SIZE)
+                    snapshot_chunk = os.read(snapshot_member_fd, _CHUNK_SIZE)
+                    if pool_chunk != snapshot_chunk:
+                        raise StoreError(
+                            f"object pool {label} differs from verified snapshot"
+                        )
+                    if not pool_chunk:
+                        break
+            finally:
+                os.close(pool_fd)
+                os.close(snapshot_member_fd)
+        finally:
+            os.close(pool_parent_fd)
+            os.close(snapshot_parent_fd)
+
+    def _validate_object_pool_against_snapshot(
+        self,
+        snapshot_identity: str,
+        artifacts: dict[str, ManifestArtifact],
+        events: set[str],
+    ) -> None:
+        snapshot_digest = _digest(
+            snapshot_identity,
+            label="snapshot manifest identity",
+        )
+        with self._root_fd() as root_fd:
+            snapshots_parent_fd = self._open_dir_chain(
+                root_fd,
+                _SNAPSHOTS,
+                create=False,
+            )
+            try:
+                try:
+                    snapshot_fd = os.open(
+                        snapshot_digest,
+                        _directory_flags(),
+                        dir_fd=snapshots_parent_fd,
+                    )
+                except OSError as exc:
+                    raise StoreError(
+                        f"verified snapshot cannot be reopened safely: {exc}"
+                    ) from exc
+            finally:
+                os.close(snapshots_parent_fd)
+
+            try:
+                for entry in artifacts.values():
+                    if entry.retention is RetentionState.MISSING:
+                        continue
+                    if entry.record_identity is None:
+                        raise StoreError(
+                            "verified snapshot artifact lacks record identity"
+                        )
+                    record_digest = _digest(
+                        entry.record_identity,
+                        label="artifact record identity",
+                    )
+                    self._assert_pool_member_matches_snapshot(
+                        root_fd,
+                        snapshot_fd,
+                        pool_category=_OBJECT_RECORDS,
+                        pool_name=record_digest + ".json",
+                        snapshot_category=("artifact_records", "sha256"),
+                        snapshot_name=record_digest + ".json",
+                        label=f"artifact record {entry.record_identity}",
+                    )
+
+                    if entry.retention is RetentionState.CONTENT_RETAINED:
+                        content_digest = _digest(
+                            entry.content_identity,
+                            label="artifact content identity",
+                        )
+                        self._assert_pool_member_matches_snapshot(
+                            root_fd,
+                            snapshot_fd,
+                            pool_category=_OBJECT_ARTIFACTS,
+                            pool_name=content_digest,
+                            snapshot_category=("artifacts", "sha256"),
+                            snapshot_name=content_digest,
+                            label=f"artifact content {entry.content_identity}",
+                        )
+
+                for event_identity_value in events:
+                    event_digest = _digest(
+                        event_identity_value,
+                        label="event identity",
+                    )
+                    self._assert_pool_member_matches_snapshot(
+                        root_fd,
+                        snapshot_fd,
+                        pool_category=_OBJECT_EVENTS,
+                        pool_name=event_digest + ".json",
+                        snapshot_category=("events", "sha256"),
+                        snapshot_name=event_digest + ".json",
+                        label=f"event {event_identity_value}",
+                    )
+            finally:
+                os.close(snapshot_fd)
+
     def _load_head(self) -> None:
         identity = self._read_head()
         if identity is None:
@@ -1107,6 +1278,12 @@ class LocalEvidenceStore:
                 raise StoreError("verified snapshot event identity is not a string")
             _digest(value, label="verified snapshot event identity")
             loaded_events.add(value)
+
+        self._validate_object_pool_against_snapshot(
+            identity,
+            loaded_artifacts,
+            loaded_events,
+        )
 
         self._artifacts = loaded_artifacts
         self._events = loaded_events
