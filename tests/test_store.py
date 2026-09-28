@@ -102,7 +102,7 @@ class LocalEvidenceStoreTests(unittest.TestCase):
             store = LocalEvidenceStore(Path(tmp) / "store")
             store.put_artifact(b"same", media_type="text/plain")
 
-            with self.assertRaisesRegex(StoreError, "different metadata"):
+            with self.assertRaisesRegex(StoreError, "different state"):
                 store.put_artifact(
                     b"same",
                     media_type="application/octet-stream",
@@ -137,6 +137,32 @@ class LocalEvidenceStoreTests(unittest.TestCase):
             self.assertTrue(snapshot.verification.integrity_verified)
             self.assertEqual(snapshot.verification.manifest_scope, "open")
             self.assertEqual(snapshot.verification.known_missing_artifacts, 1)
+
+    def test_reopened_open_snapshot_can_resolve_prior_missing_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            first_store = LocalEvidenceStore(root)
+            missing_bytes = b"later recovered"
+            missing_identity = sha256_identity(missing_bytes)
+            first_store.mark_missing(missing_identity)
+            first_store.put_event(_event_for(missing_identity))
+            first = first_store.finalize(scope="open")
+            self.assertEqual(first.verification.known_missing_artifacts, 1)
+
+            reopened = LocalEvidenceStore(root)
+            recovered = reopened.put_artifact(
+                missing_bytes,
+                media_type="application/octet-stream",
+                retain_content=True,
+            )
+            second = reopened.finalize(scope="closed")
+
+            self.assertEqual(recovered.content_identity, missing_identity)
+            self.assertNotEqual(first.manifest_identity, second.manifest_identity)
+            self.assertEqual(second.verification.known_missing_artifacts, 0)
+            self.assertEqual(second.verification.manifest_scope, "closed")
+            self.assertTrue(second.verification.integrity_verified)
+            self.assertTrue(verify_bundle(first.path).integrity_verified)
 
     def test_interrupted_object_write_never_publishes_partial_final_object(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
