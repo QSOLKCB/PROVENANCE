@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -146,10 +147,7 @@ class LocalEvidenceStore:
         return len(self._events)
 
     def _initialize(self) -> None:
-        try:
-            self.root.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise StoreError(f"store root cannot be created: {exc}") from exc
+        self._ensure_root_directory_durable()
         try:
             root_stat = self.root.lstat()
         except OSError as exc:
@@ -169,6 +167,87 @@ class LocalEvidenceStore:
                 fd = self._open_dir_chain(root_fd, parts, create=True)
                 os.close(fd)
             self._ensure_lock_file(root_fd)
+
+    def _ensure_root_directory_durable(self) -> None:
+        """Create missing root ancestors and persist every new directory entry."""
+
+        if self.root.anchor == "":
+            raise StoreError("store root must be absolute")
+
+        missing: list[str] = []
+        ancestor = self.root
+        while not ancestor.exists():
+            missing.append(ancestor.name)
+            parent = ancestor.parent
+            if parent == ancestor:
+                break
+            ancestor = parent
+
+        if not ancestor.exists():
+            raise StoreError("no existing ancestor for store root")
+        if ancestor.is_symlink():
+            raise StoreError("resolved store ancestor must not be a symbolic link")
+        try:
+            ancestor_mode = ancestor.lstat().st_mode
+        except OSError as exc:
+            raise StoreError(
+                f"store ancestor cannot be inspected: {exc}"
+            ) from exc
+        if not stat.S_ISDIR(ancestor_mode):
+            raise StoreError("nearest existing store ancestor must be a directory")
+
+        try:
+            current_fd = os.open(ancestor, _directory_flags())
+        except OSError as exc:
+            raise StoreError(
+                f"store ancestor cannot be opened safely: {exc}"
+            ) from exc
+        try:
+            for part in reversed(missing):
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=current_fd)
+                except FileExistsError:
+                    pass
+                except OSError as exc:
+                    raise StoreError(
+                        f"store root component {part!r} cannot be created: {exc}"
+                    ) from exc
+
+                # Always sync the parent, including recovery when a prior
+                # attempt created the child but failed its durability barrier.
+                _fsync_directory(current_fd)
+
+                try:
+                    next_fd = os.open(
+                        part,
+                        _directory_flags(),
+                        dir_fd=current_fd,
+                    )
+                except OSError as exc:
+                    raise StoreError(
+                        f"store root component {part!r} is missing or unsafe: {exc}"
+                    ) from exc
+                os.close(current_fd)
+                current_fd = next_fd
+
+            # If the root already existed, re-establish durability of its
+            # directory entry when its parent can be opened safely.
+            if not missing and self.root.parent != self.root:
+                try:
+                    parent_fd = os.open(
+                        self.root.parent,
+                        _directory_flags(),
+                    )
+                except OSError as exc:
+                    raise StoreError(
+                        f"store root parent cannot be opened safely: {exc}"
+                    ) from exc
+                try:
+                    _fsync_directory(parent_fd)
+                finally:
+                    os.close(parent_fd)
+        finally:
+            os.close(current_fd)
 
     @contextmanager
     def _root_fd(self) -> Iterator[int]:
@@ -206,13 +285,15 @@ class LocalEvidenceStore:
                 if create:
                     try:
                         os.mkdir(part, mode=0o700, dir_fd=current_fd)
-                        _fsync_directory(current_fd)
                     except FileExistsError:
                         pass
                     except OSError as exc:
                         raise StoreError(
                             f"managed directory {part!r} cannot be created: {exc}"
                         ) from exc
+                    # Re-establish the parent-entry durability barrier even
+                    # when the child exists from a failed prior attempt.
+                    _fsync_directory(current_fd)
                 try:
                     next_fd = os.open(part, _directory_flags(), dir_fd=current_fd)
                 except OSError as exc:
