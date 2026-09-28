@@ -1,0 +1,35 @@
+name: custody
+
+on:
+  pull_request:
+    paths:
+      - "provenance_core/**"
+      - "provenance_verify/custody.py"
+      - "provenance_custody/**"
+      - "CUSTODY.md"
+      - "tests/test_custody.py"
+      - ".github/workflows/custody.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "provenance_core/**"
+      - "provenance_verify/custody.py"
+      - "provenance_custody/**"
+      - "CUSTODY.md"
+      - "tests/test_custody.py"
+      - ".github/workflows/custody.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  custody:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run custody chain tests
+        run: python3 -m unittest discover -s tests -p "test_custody.py" -v
