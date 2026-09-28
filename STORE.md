@@ -51,6 +51,8 @@ HEAD points to the currently finalized manifest identity.
 
 Snapshots beneath snapshots/sha256/ conform to BUNDLE.md and are independently verified before HEAD advances.
 
+The directory name, HEAD identity, and manifest identity must agree. An internally valid bundle stored beneath the wrong snapshot identity is rejected.
+
 ---
 
 # Object publication
@@ -109,7 +111,9 @@ finalize() builds a verifier-compatible snapshot from the currently bound:
 
 The snapshot manifest is sealed using the Phase 1 evidence model.
 
-Before publication through HEAD, the snapshot must pass provenance_verify.
+Snapshot members are copied into independent inodes rather than hard-linked to the mutable object pool or other snapshots. Editing one exported snapshot therefore cannot rewrite the object pool or another historical snapshot through inode aliasing.
+
+Before publication through HEAD, the snapshot must pass provenance_verify and its verified manifest identity must match the identity being published.
 
 If verification fails:
 
@@ -128,6 +132,16 @@ Opening an existing store reads HEAD, independently verifies the referenced snap
 The store does not trust unverified mutable process state from an earlier run.
 
 A previously finalized open snapshot may later be extended into a new snapshot.
+
+Evidence availability is monotonic across finalized snapshots:
+
+~~~text
+MISSING → DIGEST_ONLY → CONTENT_RETAINED
+~~~
+
+Downgrades are rejected.
+
+A DIGEST_ONLY → CONTENT_RETAINED upgrade must preserve stable artifact metadata such as content identity, byte count, and media type.
 
 For example:
 
@@ -161,7 +175,13 @@ Phase 3 tests cover:
 - HEAD publication failure;
 - corrupt current snapshots;
 - reopen and extension;
-- resolution of previously missing evidence.
+- resolution of previously missing evidence;
+- rejection of evidence-availability downgrades;
+- stale concurrent finalizers;
+- HEAD/manifest identity substitution;
+- snapshot inode isolation;
+- relative-root changes after chdir;
+- directory-fsync durability failures.
 
 A failure must not silently publish partial evidence as the current state.
 
@@ -171,11 +191,15 @@ A failure must not silently publish partial evidence as the current state.
 
 The initial local store intentionally targets POSIX-style descriptor-relative filesystem support.
 
+The supplied store root is bound to an absolute path at construction time so later process working-directory changes cannot redirect an existing store instance.
+
 Managed directories are opened without following symlinks.
 
 Object publication uses no-overwrite semantics.
 
-Finalization uses a local exclusive lock to serialize HEAD publication.
+Finalization uses a local exclusive lock to serialize HEAD publication. While holding that lock, the instance compares its loaded HEAD generation with the current on-disk HEAD; stale instances must reopen instead of replacing a newer authoritative snapshot.
+
+Snapshot files and containing directories are fsynced before snapshot publication, and the snapshots parent is fsynced after the final snapshot rename. HEAD is advanced only after that durability sequence and independent verification succeed.
 
 This lock is an operational store mechanism.
 
