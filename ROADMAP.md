@@ -176,11 +176,12 @@ This is intentionally interoperable with ordinary forensic and cryptographic too
 Structured PROVENANCE records use explicit semantic domains:
 
 ```text
+PROVENANCE/ARTIFACT-RECORD/v1
 PROVENANCE/EVENT/v1
 PROVENANCE/MANIFEST/v1
 ```
 
-A future structured artifact descriptor may receive its own record domain, but that must not change the ordinary SHA-256 identity of the underlying raw artifact bytes.
+The structured artifact-record identity binds metadata such as media type, byte count, and retention state without changing the ordinary SHA-256 identity of the underlying raw artifact bytes. Manifests bind artifact-record identity and retention state, including explicit known-missing entries.
 
 ## Exit Gate
 
