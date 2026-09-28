@@ -46,6 +46,13 @@ class RetentionState(str, Enum):
     MISSING = "MISSING"
 
 
+class ClockAssurance(str, Enum):
+    LOCAL = "LOCAL"
+    NETWORK = "NETWORK"
+    AUTHENTICATED_NETWORK = "AUTHENTICATED_NETWORK"
+    SIGNED_ATTESTATION = "SIGNED_ATTESTATION"
+
+
 class CustodyAction(str, Enum):
     CAPTURED = "CAPTURED"
     STORED = "STORED"
@@ -72,6 +79,8 @@ class CustodyCore:
     subject_identity: str
     action: CustodyAction
     recorded_at: str
+    clock_source: str
+    clock_assurance: ClockAssurance
     actor: str | None = None
     source: str | None = None
     previous_custody: str | None = None
@@ -84,6 +93,12 @@ class CustodyCore:
         if not isinstance(self.action, CustodyAction):
             raise TypeError("custody action must be a CustodyAction")
         _validate_custody_time(self.recorded_at)
+        if not isinstance(self.clock_source, str) or not self.clock_source:
+            raise ValueError("custody clock_source must be a non-empty string")
+        if not isinstance(self.clock_assurance, ClockAssurance):
+            raise TypeError(
+                "custody clock_assurance must be a ClockAssurance"
+            )
         for label, value in (("actor", self.actor), ("source", self.source)):
             if value is not None and (
                 not isinstance(value, str) or not value
@@ -104,6 +119,8 @@ class CustodyCore:
             "subject_identity": self.subject_identity,
             "action": self.action.value,
             "recorded_at": self.recorded_at,
+            "clock_source": self.clock_source,
+            "clock_assurance": self.clock_assurance.value,
             "actor": self.actor,
             "source": self.source,
             "previous_custody": self.previous_custody,
