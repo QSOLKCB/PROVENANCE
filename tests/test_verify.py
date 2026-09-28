@@ -4,7 +4,10 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
+
+import provenance_verify.verifier as verifier_module
 
 from provenance_core import (
     ArtifactRecord,
@@ -461,6 +464,289 @@ class VerifyBundleTests(unittest.TestCase):
             self.assertTrue(
                 any("nesting depth" in item for item in report.errors),
                 report.errors,
+            )
+
+    def test_oversized_integer_returns_failed_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            huge = b"9" * 5000
+            (bundle / "manifest.json").write_bytes(b'{"n":' + huge + b"}\n")
+
+            report = verify_bundle(bundle)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertTrue(
+                any("cannot be parsed" in item for item in report.errors),
+                report.errors,
+            )
+
+    def test_container_valued_enum_fields_return_failed_reports(self) -> None:
+        invalid_values = ([], {}, None, True, 1)
+
+        for invalid in invalid_values:
+            with self.subTest(field="manifest scope", invalid=invalid):
+                with tempfile.TemporaryDirectory() as tmp:
+                    bundle = Path(tmp) / "bundle"
+                    bundle.mkdir()
+                    _write_bundle(bundle)
+                    path = bundle / "manifest.json"
+                    envelope = _read_json(path)
+                    core = envelope["core"]
+                    assert isinstance(core, dict)
+                    core["scope"] = invalid
+                    envelope["manifest_identity"] = manifest_identity(core)
+                    _write_json(path, envelope)
+
+                    report = verify_bundle(bundle)
+
+                    self.assertFalse(report.integrity_verified)
+                    self.assertTrue(
+                        any("manifest scope is invalid" in item for item in report.errors),
+                        report.errors,
+                    )
+
+            with self.subTest(field="manifest retention", invalid=invalid):
+                with tempfile.TemporaryDirectory() as tmp:
+                    bundle = Path(tmp) / "bundle"
+                    bundle.mkdir()
+                    _write_bundle(bundle)
+                    path = bundle / "manifest.json"
+                    envelope = _read_json(path)
+                    core = envelope["core"]
+                    assert isinstance(core, dict)
+                    artifacts = core["artifacts"]
+                    assert isinstance(artifacts, list)
+                    entry = artifacts[0]
+                    assert isinstance(entry, dict)
+                    entry["retention"] = invalid
+                    envelope["manifest_identity"] = manifest_identity(core)
+                    _write_json(path, envelope)
+
+                    report = verify_bundle(bundle)
+
+                    self.assertFalse(report.integrity_verified)
+                    self.assertTrue(
+                        any(
+                            "manifest artifact[0] retention is invalid" in item
+                            for item in report.errors
+                        ),
+                        report.errors,
+                    )
+
+            with self.subTest(field="artifact retention", invalid=invalid):
+                with tempfile.TemporaryDirectory() as tmp:
+                    bundle = Path(tmp) / "bundle"
+                    bundle.mkdir()
+                    fixture = _write_bundle(bundle)
+                    artifact = fixture["artifact"]
+                    path = _record_path(bundle, artifact.record_identity)
+                    record = _read_json(path)
+                    record["retention"] = invalid
+                    _write_json(path, record)
+
+                    report = verify_bundle(bundle)
+
+                    self.assertFalse(report.integrity_verified)
+                    self.assertTrue(
+                        any(
+                            "artifact record retention is invalid" in item
+                            for item in report.errors
+                        ),
+                        report.errors,
+                    )
+
+            for field in ("evidence_class", "collection_status"):
+                with self.subTest(field=field, invalid=invalid):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        bundle = Path(tmp) / "bundle"
+                        bundle.mkdir()
+                        fixture = _write_bundle(bundle)
+                        event = fixture["event"]
+                        path = _event_path(bundle, event.event_identity)
+                        envelope = _read_json(path)
+                        core = envelope["core"]
+                        assert isinstance(core, dict)
+                        core[field] = invalid
+                        _write_json(path, envelope)
+
+                        report = verify_bundle(bundle)
+
+                        self.assertFalse(report.integrity_verified)
+                        self.assertTrue(
+                            any(
+                                f"event {field} is invalid" in item
+                                for item in report.errors
+                            ),
+                            report.errors,
+                        )
+
+    def test_symlinked_event_parent_is_never_treated_as_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            _write_bundle(bundle)
+
+            events = bundle / "events"
+            outside_events = root / "outside-events"
+            events.rename(outside_events)
+            events.symlink_to(outside_events, target_is_directory=True)
+
+            report = verify_bundle(bundle)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertTrue(
+                any(
+                    "non-regular filesystem entries are forbidden" in item
+                    and "events" in item
+                    for item in report.errors
+                ),
+                report.errors,
+            )
+            self.assertNotIn(
+                "event identities and references verified",
+                report.checks,
+            )
+
+    def test_symlinked_artifact_record_parent_is_never_treated_as_verified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            _write_bundle(bundle)
+
+            records = bundle / "artifact_records"
+            outside_records = root / "outside-records"
+            records.rename(outside_records)
+            records.symlink_to(outside_records, target_is_directory=True)
+
+            report = verify_bundle(bundle)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertTrue(
+                any(
+                    "non-regular filesystem entries are forbidden" in item
+                    and "artifact_records" in item
+                    for item in report.errors
+                ),
+                report.errors,
+            )
+            self.assertNotIn(
+                "artifact metadata and available content verified",
+                report.checks,
+            )
+
+    def test_retained_artifact_is_hashed_in_bounded_chunks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+
+            payload = b"x" * (verifier_module.READ_CHUNK_SIZE * 3 + 123)
+            artifact = ArtifactRecord.from_bytes(
+                payload,
+                media_type="application/octet-stream",
+                retention=RetentionState.CONTENT_RETAINED,
+            )
+            event = EventEnvelope.seal(
+                EventCore(
+                    evidence_class=EvidenceClass.OBSERVED,
+                    actor="adapter:test",
+                    operation="capture",
+                    outputs=(artifact.content_identity,),
+                )
+            )
+            manifest = ManifestEnvelope.seal(
+                ManifestCore.build(
+                    artifacts=[artifact],
+                    events=[event.event_identity],
+                )
+            )
+            _write_json(bundle / "manifest.json", manifest.to_dict())
+            _write_json(
+                _record_path(bundle, artifact.record_identity),
+                artifact.to_dict(),
+            )
+            _write_json(_event_path(bundle, event.event_identity), event.to_dict())
+            content_path = _content_path(bundle, artifact.content_identity)
+            content_path.parent.mkdir(parents=True, exist_ok=True)
+            content_path.write_bytes(payload)
+
+            real_read = os.read
+            requested_sizes: list[int] = []
+
+            def bounded_read(fd: int, size: int) -> bytes:
+                requested_sizes.append(size)
+                return real_read(fd, size)
+
+            with mock.patch.object(verifier_module.os, "read", side_effect=bounded_read):
+                report = verify_bundle(bundle)
+
+            self.assertTrue(report.integrity_verified, report.errors)
+            self.assertTrue(requested_sizes)
+            self.assertLessEqual(
+                max(requested_sizes),
+                verifier_module.READ_CHUNK_SIZE,
+            )
+            self.assertGreaterEqual(len(requested_sizes), 4)
+
+    def test_enumeration_failure_returns_failed_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            _write_bundle(bundle)
+
+            with mock.patch.object(
+                verifier_module,
+                "_physical_files",
+                side_effect=verifier_module.VerificationError(
+                    "cannot enumerate bundle directory blocked: permission denied"
+                ),
+            ):
+                report = verify_bundle(bundle)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertTrue(
+                any("cannot enumerate bundle" in item for item in report.errors),
+                report.errors,
+            )
+            self.assertNotIn(
+                "physical bundle membership exactly matches the manifest",
+                report.checks,
+            )
+
+    def test_record_removed_after_enumeration_fails_overall_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            fixture = _write_bundle(bundle)
+            event = fixture["event"]
+            event_path = _event_path(bundle, event.event_identity)
+            original_physical_files = verifier_module._physical_files
+
+            def enumerate_then_remove(root_fd: int) -> tuple[set[str], list[str]]:
+                result = original_physical_files(root_fd)
+                event_path.unlink()
+                return result
+
+            with mock.patch.object(
+                verifier_module,
+                "_physical_files",
+                side_effect=enumerate_then_remove,
+            ):
+                report = verify_bundle(bundle)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertTrue(
+                any(
+                    "events/sha256/" in item and "missing or unsafe" in item
+                    for item in report.errors
+                ),
+                report.errors,
+            )
+            self.assertNotIn(
+                "event identities and references verified",
+                report.checks,
             )
 
     def test_manifest_self_hash_exclusion_defect_fails(self) -> None:
