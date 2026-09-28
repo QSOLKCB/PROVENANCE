@@ -10,6 +10,7 @@ from urllib import request as urllib_request
 
 from provenance_core import (
     ArtifactRecord,
+    CollectionStatus,
     CustodyAction,
     EvidenceClass,
     EventCore,
@@ -20,11 +21,45 @@ from provenance_custody import ClockObservation, LocalCustodyLedger, observe_clo
 from provenance_store import LocalEvidenceStore, StoredSnapshot
 
 ADAPTER_ID = "provenance-adapter:ollama/v1"
+_ENDPOINT_ACTOR = "ollama:local-endpoint"
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 class OllamaAdapterError(RuntimeError):
     """Raised when the local Ollama observation cannot satisfy its contract."""
+
+
+class _TransportFailure(OllamaAdapterError):
+    """Transport failure with any raw HTTP response bytes already observed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int | None = None,
+        response_bytes: bytes | None = None,
+    ):
+        super().__init__(message)
+        self.status = status
+        self.response_bytes = response_bytes
+
+
+class _RejectRedirects(urllib_request.HTTPRedirectHandler):
+    """Reject redirects without issuing a request to their destination."""
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        try:
+            fp.close()
+        finally:
+            raise _TransportFailure(
+                f"Ollama endpoint returned forbidden HTTP redirect {code}",
+                status=code,
+            )
+
+    http_error_301 = http_error_302
+    http_error_303 = http_error_302
+    http_error_307 = http_error_302
+    http_error_308 = http_error_302
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,8 +160,21 @@ class OllamaAdapter:
         if type(timeout_seconds) is not int or timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be a positive integer")
 
-        self.base_url = base_url.rstrip("/")
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("Ollama base URL contains an invalid port") from exc
+
+        # Avoid DNS entirely for the documented localhost spelling.
+        host = "127.0.0.1" if parsed.hostname == "localhost" else parsed.hostname
+        display_host = f"[{host}]" if host == "::1" else host
+        port_suffix = f":{port}" if port is not None else ""
+        self.base_url = f"http://{display_host}{port_suffix}"
         self.timeout_seconds = timeout_seconds
+        self._opener = urllib_request.build_opener(
+            urllib_request.ProxyHandler({}),
+            _RejectRedirects(),
+        )
 
     def _post_generate(self, request_bytes: bytes) -> bytes:
         request = urllib_request.Request(
@@ -139,33 +187,117 @@ class OllamaAdapter:
             method="POST",
         )
         try:
-            with urllib_request.urlopen(
+            with self._opener.open(
                 request,
                 timeout=self.timeout_seconds,
             ) as response:
                 status = getattr(response, "status", None)
+                body = response.read()
                 if status != 200:
-                    raise OllamaAdapterError(
-                        f"Ollama generate returned HTTP status {status}"
+                    raise _TransportFailure(
+                        f"Ollama generate returned HTTP status {status}",
+                        status=status,
+                        response_bytes=body,
                     )
-                return response.read()
+                return body
+        except _TransportFailure:
+            raise
         except urllib_error.HTTPError as exc:
             try:
-                detail = exc.read().decode("utf-8", errors="replace")
+                body = exc.read()
             except Exception:
-                detail = ""
-            suffix = f": {detail}" if detail else ""
-            raise OllamaAdapterError(
-                f"Ollama generate returned HTTP {exc.code}{suffix}"
+                body = b""
+            raise _TransportFailure(
+                f"Ollama generate returned HTTP {exc.code}",
+                status=exc.code,
+                response_bytes=body or None,
             ) from exc
         except urllib_error.URLError as exc:
-            raise OllamaAdapterError(
+            raise _TransportFailure(
                 f"local Ollama endpoint is unavailable: {exc.reason}"
             ) from exc
         except OSError as exc:
-            raise OllamaAdapterError(
+            raise _TransportFailure(
                 f"local Ollama request failed: {exc}"
             ) from exc
+
+    def _append_verified_custody(
+        self,
+        *,
+        custody: LocalCustodyLedger,
+        snapshot: StoredSnapshot,
+        subjects: tuple[str, ...],
+    ) -> None:
+        for subject in (*subjects, snapshot.manifest_identity):
+            custody.append(
+                subject,
+                CustodyAction.VERIFIED,
+                actor="provenance-verify",
+                source=ADAPTER_ID,
+                related_identity=(
+                    snapshot.manifest_identity
+                    if subject != snapshot.manifest_identity
+                    else None
+                ),
+            )
+
+        report = custody.verify()
+        if not report.integrity_verified:
+            raise OllamaAdapterError(
+                "Ollama observation custody chain failed verification: "
+                + "; ".join(report.errors)
+            )
+
+    def _finalize_failure(
+        self,
+        *,
+        store: LocalEvidenceStore,
+        custody: LocalCustodyLedger,
+        request_record: ArtifactRecord,
+        request_event: EventEnvelope,
+        operation: str,
+        original_error: OllamaAdapterError,
+        response_record: ArtifactRecord | None = None,
+    ) -> None:
+        outputs = (
+            (response_record.content_identity,)
+            if response_record is not None
+            else ()
+        )
+        failure_event = EventEnvelope.seal(
+            EventCore(
+                evidence_class=EvidenceClass.OBSERVED,
+                actor=ADAPTER_ID,
+                operation=operation,
+                inputs=(request_record.content_identity,),
+                outputs=outputs,
+                relationships=(
+                    Relationship(
+                        "attempted_from",
+                        request_event.event_identity,
+                    ),
+                ),
+                collection_status=CollectionStatus.COLLECTION_FAILED,
+            )
+        )
+        store.put_event(failure_event)
+
+        try:
+            snapshot = store.finalize(scope="closed")
+            subjects = (request_record.content_identity,) + outputs
+            self._append_verified_custody(
+                custody=custody,
+                snapshot=snapshot,
+                subjects=subjects,
+            )
+        except Exception as evidence_error:
+            raise OllamaAdapterError(
+                f"{original_error}; evidence finalization failed: {evidence_error}"
+            ) from original_error
+
+        raise OllamaAdapterError(
+            f"{original_error}; evidence_manifest={snapshot.manifest_identity}"
+        ) from original_error
 
     def observe_generate(
         self,
@@ -206,7 +338,7 @@ class OllamaAdapter:
             request_record.content_identity,
             CustodyAction.CAPTURED,
             actor=ADAPTER_ID,
-            source="ollama:/api/generate request",
+            source="adapter-prepared:/api/generate request body",
             clock=request_clock,
         )
         custody.append(
@@ -220,28 +352,58 @@ class OllamaAdapter:
             EventCore(
                 evidence_class=EvidenceClass.OBSERVED,
                 actor=ADAPTER_ID,
-                operation="ollama.generate.request",
+                operation="ollama.generate.request.prepared",
                 outputs=(request_record.content_identity,),
             )
         )
         store.put_event(request_event)
 
-        response_bytes = self._post_generate(request_bytes)
-        response_clock: ClockObservation = observe_clock()
-        parsed_response = _parse_response(response_bytes)
-        declared_model = str(parsed_response["model"])
-        response_text = str(parsed_response["response"])
+        try:
+            response_bytes = self._post_generate(request_bytes)
+        except _TransportFailure as exc:
+            response_record: ArtifactRecord | None = None
+            if exc.response_bytes is not None:
+                response_record = store.put_artifact(
+                    exc.response_bytes,
+                    media_type="application/octet-stream",
+                    retain_content=True,
+                )
+                custody.append(
+                    response_record.content_identity,
+                    CustodyAction.CAPTURED,
+                    actor=ADAPTER_ID,
+                    source="ollama:/api/generate error response bytes",
+                )
+                custody.append(
+                    response_record.content_identity,
+                    CustodyAction.STORED,
+                    actor="provenance-store:local",
+                    source=ADAPTER_ID,
+                )
+            self._finalize_failure(
+                store=store,
+                custody=custody,
+                request_record=request_record,
+                request_event=request_event,
+                operation="ollama.generate.transport.failed",
+                original_error=exc,
+                response_record=response_record,
+            )
+            raise AssertionError("unreachable")
 
+        response_clock: ClockObservation = observe_clock()
+
+        # Retain exactly what was observed before parsing or deriving claims.
         response_record = store.put_artifact(
             response_bytes,
-            media_type="application/json",
+            media_type="application/octet-stream",
             retain_content=True,
         )
         custody.append(
             response_record.content_identity,
             CustodyAction.CAPTURED,
-            actor=f"ollama:{declared_model}",
-            source="ollama:/api/generate response",
+            actor=ADAPTER_ID,
+            source="ollama:/api/generate response bytes",
             clock=response_clock,
         )
         custody.append(
@@ -251,11 +413,28 @@ class OllamaAdapter:
             source=ADAPTER_ID,
         )
 
+        try:
+            parsed_response = _parse_response(response_bytes)
+        except OllamaAdapterError as exc:
+            self._finalize_failure(
+                store=store,
+                custody=custody,
+                request_record=request_record,
+                request_event=request_event,
+                operation="ollama.generate.response.invalid",
+                original_error=exc,
+                response_record=response_record,
+            )
+            raise AssertionError("unreachable")
+
+        declared_model = str(parsed_response["model"])
+        response_text = str(parsed_response["response"])
+
         response_event = EventEnvelope.seal(
             EventCore(
                 evidence_class=EvidenceClass.OBSERVED,
-                actor=f"ollama:{declared_model}",
-                operation="ollama.generate.response",
+                actor=ADAPTER_ID,
+                operation="ollama.generate.response.received",
                 inputs=(request_record.content_identity,),
                 outputs=(response_record.content_identity,),
                 relationships=(
@@ -271,7 +450,7 @@ class OllamaAdapter:
         declaration_event = EventEnvelope.seal(
             EventCore(
                 evidence_class=EvidenceClass.DECLARED,
-                actor=f"ollama:{declared_model}",
+                actor=_ENDPOINT_ACTOR,
                 operation="ollama.model.declared",
                 inputs=(response_record.content_identity,),
                 relationships=(
@@ -290,27 +469,14 @@ class OllamaAdapter:
                 "Ollama observation snapshot failed independent verification"
             )
 
-        for subject in (
-            request_record.content_identity,
-            response_record.content_identity,
-            snapshot.manifest_identity,
-        ):
-            custody.append(
-                subject,
-                CustodyAction.VERIFIED,
-                actor="provenance-verify",
-                source=ADAPTER_ID,
-                related_identity=snapshot.manifest_identity
-                if subject != snapshot.manifest_identity
-                else None,
-            )
-
-        custody_report = custody.verify()
-        if not custody_report.integrity_verified:
-            raise OllamaAdapterError(
-                "Ollama observation custody chain failed verification: "
-                + "; ".join(custody_report.errors)
-            )
+        self._append_verified_custody(
+            custody=custody,
+            snapshot=snapshot,
+            subjects=(
+                request_record.content_identity,
+                response_record.content_identity,
+            ),
+        )
 
         return OllamaObservation(
             declared_model=declared_model,
