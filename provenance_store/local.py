@@ -118,7 +118,7 @@ class LocalEvidenceStore:
     """Local content-addressed store with verifier-gated immutable snapshots."""
 
     def __init__(self, root: Path | str):
-        self.root = Path(root)
+        self.root = Path(root).expanduser().absolute()
         self._artifacts: dict[str, ManifestArtifact] = {}
         self._events: set[str] = set()
         self._current_manifest_identity: str | None = None
@@ -191,6 +191,7 @@ class LocalEvidenceStore:
                 if create:
                     try:
                         os.mkdir(part, mode=0o700, dir_fd=current_fd)
+                        _fsync_directory(current_fd)
                     except FileExistsError:
                         pass
                     except OSError as exc:
@@ -357,6 +358,51 @@ class LocalEvidenceStore:
             finally:
                 os.close(parent_fd)
 
+    def _read_artifact_record_object(
+        self,
+        record_identity: str,
+    ) -> dict[str, object]:
+        digest = _digest(record_identity, label="artifact record identity")
+        with self._root_fd() as root_fd:
+            parent_fd = self._open_dir_chain(
+                root_fd,
+                _OBJECT_RECORDS,
+                create=False,
+            )
+            try:
+                try:
+                    fd = os.open(
+                        digest + ".json",
+                        _file_read_flags(),
+                        dir_fd=parent_fd,
+                    )
+                except OSError as exc:
+                    raise StoreError(
+                        f"prior artifact record {record_identity} cannot be opened: {exc}"
+                    ) from exc
+                try:
+                    if not stat.S_ISREG(os.fstat(fd).st_mode):
+                        raise StoreError(
+                            f"prior artifact record {record_identity} is not a regular file"
+                        )
+                    raw = _read_all(fd)
+                finally:
+                    os.close(fd)
+            finally:
+                os.close(parent_fd)
+
+        try:
+            value = parse_canonical_json_bytes(raw)
+        except (CanonicalizationError, RecursionError) as exc:
+            raise StoreError(
+                f"prior artifact record {record_identity} is not canonical: {exc}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise StoreError(
+                f"prior artifact record {record_identity} must be an object"
+            )
+        return value
+
     def put_artifact(
         self,
         data: bytes,
@@ -377,7 +423,7 @@ class LocalEvidenceStore:
             retention=retention,
         )
         entry = ManifestArtifact.from_record(record)
-        self._check_artifact_rebinding(entry)
+        self._check_artifact_rebinding(entry, new_record=record)
 
         content_digest = _digest(
             record.content_identity,
@@ -399,10 +445,16 @@ class LocalEvidenceStore:
         self._session_changed_artifacts.add(record.content_identity)
         return record
 
-    def _check_artifact_rebinding(self, entry: ManifestArtifact) -> None:
+    def _check_artifact_rebinding(
+        self,
+        entry: ManifestArtifact,
+        *,
+        new_record: ArtifactRecord | None = None,
+    ) -> None:
         prior = self._artifacts.get(entry.content_identity)
         if prior is None or prior == entry:
             return
+
         if (
             self._current_manifest_identity is None
             or entry.content_identity in self._session_changed_artifacts
@@ -411,6 +463,53 @@ class LocalEvidenceStore:
                 "current working snapshot already binds a different state "
                 "to this content identity"
             )
+
+        if prior.retention is RetentionState.CONTENT_RETAINED:
+            raise StoreError(
+                "artifact availability cannot be downgraded from CONTENT_RETAINED"
+            )
+
+        if entry.retention is RetentionState.MISSING:
+            raise StoreError(
+                "artifact availability cannot be downgraded to MISSING"
+            )
+
+        if prior.retention is RetentionState.MISSING:
+            if entry.retention in {
+                RetentionState.DIGEST_ONLY,
+                RetentionState.CONTENT_RETAINED,
+            }:
+                return
+
+        if (
+            prior.retention is RetentionState.DIGEST_ONLY
+            and entry.retention is RetentionState.CONTENT_RETAINED
+        ):
+            if prior.record_identity is None or new_record is None:
+                raise StoreError(
+                    "DIGEST_ONLY upgrade requires the prior and new artifact records"
+                )
+            prior_record = self._read_artifact_record_object(
+                prior.record_identity
+            )
+            new_record_dict = new_record.to_dict()
+            for field in (
+                "schema",
+                "canonicalization",
+                "content_identity",
+                "byte_count",
+                "media_type",
+            ):
+                if prior_record.get(field) != new_record_dict.get(field):
+                    raise StoreError(
+                        "artifact retention upgrade changes stable metadata "
+                        f"field {field}"
+                    )
+            return
+
+        raise StoreError(
+            "artifact state change is not a monotonic availability upgrade"
+        )
 
     def mark_missing(self, content_identity: str) -> ManifestArtifact:
         entry = ManifestArtifact.missing(content_identity)
@@ -431,7 +530,7 @@ class LocalEvidenceStore:
         self._events.add(event.event_identity)
         return event.event_identity
 
-    def _link_object_into_snapshot(
+    def _copy_object_into_snapshot(
         self,
         root_fd: int,
         temp_snapshot_fd: int,
@@ -469,47 +568,42 @@ class LocalEvidenceStore:
                     + "/".join((*source_category, source_name))
                     + f": {exc}"
                 ) from exc
+
             try:
                 if not stat.S_ISREG(os.fstat(source_fd).st_mode):
                     raise StoreError(
                         "required object is not a regular file: "
                         + "/".join((*source_category, source_name))
                     )
+
+                try:
+                    destination_fd = os.open(
+                        destination_name,
+                        _file_create_flags(),
+                        0o600,
+                        dir_fd=destination_parent_fd,
+                    )
+                except OSError as exc:
+                    raise StoreError(
+                        f"snapshot object {destination_name} cannot be created: {exc}"
+                    ) from exc
+
+                try:
+                    while True:
+                        chunk = os.read(source_fd, _CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        _write_all(destination_fd, chunk)
+                    os.fsync(destination_fd)
+                except OSError as exc:
+                    raise StoreError(
+                        f"snapshot object {destination_name} copy failed: {exc}"
+                    ) from exc
+                finally:
+                    os.close(destination_fd)
             finally:
                 os.close(source_fd)
 
-            try:
-                os.link(
-                    source_name,
-                    destination_name,
-                    src_dir_fd=source_parent_fd,
-                    dst_dir_fd=destination_parent_fd,
-                    follow_symlinks=False,
-                )
-            except OSError as exc:
-                raise StoreError(
-                    "required object cannot be linked into snapshot: "
-                    + "/".join((*source_category, source_name))
-                    + f": {exc}"
-                ) from exc
-
-            try:
-                linked_fd = os.open(
-                    destination_name,
-                    _file_read_flags(),
-                    dir_fd=destination_parent_fd,
-                )
-            except OSError as exc:
-                raise StoreError(
-                    f"linked snapshot object {destination_name} cannot be opened safely: {exc}"
-                ) from exc
-            try:
-                if not stat.S_ISREG(os.fstat(linked_fd).st_mode):
-                    raise StoreError(
-                        f"linked snapshot object {destination_name} is not a regular file"
-                    )
-            finally:
-                os.close(linked_fd)
             _fsync_directory(destination_parent_fd)
         finally:
             os.close(source_parent_fd)
@@ -560,6 +654,26 @@ class LocalEvidenceStore:
             os.close(fd)
             return True
 
+    def _verify_snapshot_identity(
+        self,
+        snapshot: Path,
+        expected_identity: str,
+        *,
+        label: str,
+    ) -> VerificationReport:
+        report = verify_bundle(snapshot)
+        if not report.integrity_verified:
+            raise StoreError(
+                f"{label} failed independent verification: "
+                + "; ".join(report.errors)
+            )
+        if report.manifest_identity != expected_identity:
+            raise StoreError(
+                f"{label} manifest identity does not match expected identity "
+                f"{expected_identity}"
+            )
+        return report
+
     def _build_snapshot(self, manifest: ManifestEnvelope) -> Path:
         digest = _digest(manifest.manifest_identity, label="manifest identity")
         final_snapshot = self.root.joinpath(*_SNAPSHOTS, digest)
@@ -575,12 +689,11 @@ class LocalEvidenceStore:
             )
             try:
                 if self._existing_snapshot_is_safe(snapshots_parent_fd, digest):
-                    report = verify_bundle(final_snapshot)
-                    if not report.integrity_verified:
-                        raise StoreError(
-                            "existing snapshot for manifest identity failed verification: "
-                            + "; ".join(report.errors)
-                        )
+                    self._verify_snapshot_identity(
+                        final_snapshot,
+                        manifest.manifest_identity,
+                        label="existing snapshot",
+                    )
                     return final_snapshot
 
                 try:
@@ -618,7 +731,7 @@ class LocalEvidenceStore:
                             entry.record_identity,
                             label="artifact record identity",
                         )
-                        self._link_object_into_snapshot(
+                        self._copy_object_into_snapshot(
                             root_fd,
                             temp_snapshot_fd,
                             source_category=_OBJECT_RECORDS,
@@ -632,7 +745,7 @@ class LocalEvidenceStore:
                                 entry.content_identity,
                                 label="artifact content identity",
                             )
-                            self._link_object_into_snapshot(
+                            self._copy_object_into_snapshot(
                                 root_fd,
                                 temp_snapshot_fd,
                                 source_category=_OBJECT_ARTIFACTS,
@@ -646,7 +759,7 @@ class LocalEvidenceStore:
                             event_identity_value,
                             label="event identity",
                         )
-                        self._link_object_into_snapshot(
+                        self._copy_object_into_snapshot(
                             root_fd,
                             temp_snapshot_fd,
                             source_category=_OBJECT_EVENTS,
@@ -684,14 +797,16 @@ class LocalEvidenceStore:
                 os.close(snapshots_parent_fd)
 
         try:
-            report = verify_bundle(final_snapshot)
-            if not report.integrity_verified:
+            try:
+                self._verify_snapshot_identity(
+                    final_snapshot,
+                    manifest.manifest_identity,
+                    label="new snapshot",
+                )
+            except StoreError:
                 if created_final:
                     shutil.rmtree(final_snapshot, ignore_errors=True)
-                raise StoreError(
-                    "new snapshot failed independent verification: "
-                    + "; ".join(report.errors)
-                )
+                raise
             return final_snapshot
         except Exception:
             if temp_snapshot.exists():
@@ -756,12 +871,11 @@ class LocalEvidenceStore:
             )
             manifest = ManifestEnvelope.seal(core)
             snapshot_path = self._build_snapshot(manifest)
-            report = verify_bundle(snapshot_path)
-            if not report.integrity_verified:
-                raise StoreError(
-                    "snapshot failed verification before HEAD publication: "
-                    + "; ".join(report.errors)
-                )
+            report = self._verify_snapshot_identity(
+                snapshot_path,
+                manifest.manifest_identity,
+                label="snapshot before HEAD publication",
+            )
             self._update_head(manifest.manifest_identity)
             self._current_manifest_identity = manifest.manifest_identity
             self._session_changed_artifacts.clear()
@@ -782,9 +896,13 @@ class LocalEvidenceStore:
 
     def verify_current(self) -> VerificationReport:
         path = self.current_snapshot_path()
-        if path is None:
+        if path is None or self._current_manifest_identity is None:
             raise StoreError("store has no finalized snapshot")
-        return verify_bundle(path)
+        return self._verify_snapshot_identity(
+            path,
+            self._current_manifest_identity,
+            label="current snapshot",
+        )
 
     def _read_head(self) -> str | None:
         with self._root_fd() as root_fd:
@@ -853,12 +971,11 @@ class LocalEvidenceStore:
             return
         digest = _digest(identity, label="HEAD manifest identity")
         snapshot = self.root.joinpath(*_SNAPSHOTS, digest)
-        report = verify_bundle(snapshot)
-        if not report.integrity_verified:
-            raise StoreError(
-                "HEAD snapshot failed independent verification: "
-                + "; ".join(report.errors)
-            )
+        self._verify_snapshot_identity(
+            snapshot,
+            identity,
+            label="HEAD snapshot",
+        )
 
         envelope = self._read_snapshot_manifest(snapshot)
         core = envelope.get("core")
