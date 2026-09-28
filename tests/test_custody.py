@@ -76,6 +76,18 @@ class CustodyCoreTests(unittest.TestCase):
         second = _custody(subject, CustodyAction.CAPTURED)
         self.assertEqual(first.custody_identity, second.custody_identity)
 
+    def test_fixed_v1_custody_identity_fixture(self) -> None:
+        record = _custody(
+            "sha256:1182aacc53fdf9fbaa29c0cd18a20e6ac7429e3610cc3a381d49a0aef45cf62c",
+            CustodyAction.CAPTURED,
+            actor="fixture:actor",
+            source="fixture:source",
+        )
+        self.assertEqual(
+            record.custody_identity,
+            "sha256:845a235957f279bd2e09e52ec4bd9c111d3c1a12a076f9fdab4671abaee92126",
+        )
+
     def test_unknown_actor_and_source_remain_null(self) -> None:
         subject = sha256_identity(b"artifact")
         record = _custody(
