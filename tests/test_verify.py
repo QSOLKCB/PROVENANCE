@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -347,7 +348,10 @@ class VerifyBundleTests(unittest.TestCase):
 
             self.assertFalse(report.integrity_verified)
             self.assertTrue(
-                any("symbolic links are forbidden" in item for item in report.errors),
+                any(
+                    "non-regular filesystem entries are forbidden" in item
+                    for item in report.errors
+                ),
                 report.errors,
             )
 
@@ -366,7 +370,7 @@ class VerifyBundleTests(unittest.TestCase):
 
             self.assertFalse(report.integrity_verified)
             self.assertIn(
-                "manifest.json must not be a symbolic link",
+                "manifest.json must be a regular non-symlink file",
                 report.errors,
             )
 
@@ -400,6 +404,63 @@ class VerifyBundleTests(unittest.TestCase):
             self.assertNotIn(
                 "event identities and references verified",
                 report.checks,
+            )
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX mkfifo")
+    def test_undeclared_fifo_is_rejected_as_special_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            _write_bundle(bundle)
+            fifo = bundle / "undeclared.fifo"
+            os.mkfifo(fifo)
+
+            report = verify_bundle(bundle)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertTrue(
+                any(
+                    "non-regular filesystem entries are forbidden" in item
+                    and "undeclared.fifo" in item
+                    for item in report.errors
+                ),
+                report.errors,
+            )
+            self.assertNotIn(
+                "physical bundle membership exactly matches the manifest",
+                report.checks,
+            )
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "requires POSIX mkfifo")
+    def test_fifo_manifest_is_rejected_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            os.mkfifo(bundle / "manifest.json")
+
+            report = verify_bundle(bundle)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertIn(
+                "manifest.json must be a regular non-symlink file",
+                report.errors,
+            )
+
+    def test_deeply_nested_manifest_returns_failed_report(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            depth = 2000
+            (bundle / "manifest.json").write_bytes(
+                (b"[" * depth) + b"{}" + (b"]" * depth) + b"\n"
+            )
+
+            report = verify_bundle(bundle)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertTrue(
+                any("nesting depth" in item for item in report.errors),
+                report.errors,
             )
 
     def test_manifest_self_hash_exclusion_defect_fails(self) -> None:
