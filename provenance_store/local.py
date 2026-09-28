@@ -114,6 +114,7 @@ class LocalEvidenceStore:
         self._artifacts: dict[str, ManifestArtifact] = {}
         self._events: set[str] = set()
         self._current_manifest_identity: str | None = None
+        self._session_changed_artifacts: set[str] = set()
         self._initialize()
         self._load_head()
 
@@ -373,11 +374,7 @@ class LocalEvidenceStore:
             retention=retention,
         )
         entry = ManifestArtifact.from_record(record)
-        prior = self._artifacts.get(record.content_identity)
-        if prior is not None and prior != entry:
-            raise StoreError(
-                "current snapshot already binds different metadata to this content identity"
-            )
+        self._check_artifact_rebinding(entry)
 
         content_digest = _digest(
             record.content_identity,
@@ -396,16 +393,27 @@ class LocalEvidenceStore:
             canonical_json_bytes(record.to_dict()),
         )
         self._artifacts[record.content_identity] = entry
+        self._session_changed_artifacts.add(record.content_identity)
         return record
+
+    def _check_artifact_rebinding(self, entry: ManifestArtifact) -> None:
+        prior = self._artifacts.get(entry.content_identity)
+        if prior is None or prior == entry:
+            return
+        if (
+            self._current_manifest_identity is None
+            or entry.content_identity in self._session_changed_artifacts
+        ):
+            raise StoreError(
+                "current working snapshot already binds a different state "
+                "to this content identity"
+            )
 
     def mark_missing(self, content_identity: str) -> ManifestArtifact:
         entry = ManifestArtifact.missing(content_identity)
-        prior = self._artifacts.get(content_identity)
-        if prior is not None and prior != entry:
-            raise StoreError(
-                "current snapshot already binds a different state to this content identity"
-            )
+        self._check_artifact_rebinding(entry)
         self._artifacts[content_identity] = entry
+        self._session_changed_artifacts.add(content_identity)
         return entry
 
     def put_event(self, event: EventEnvelope) -> str:
@@ -613,6 +621,7 @@ class LocalEvidenceStore:
                 )
             self._update_head(manifest.manifest_identity)
             self._current_manifest_identity = manifest.manifest_identity
+            self._session_changed_artifacts.clear()
             return StoredSnapshot(
                 manifest_identity=manifest.manifest_identity,
                 path=snapshot_path,
@@ -749,3 +758,4 @@ class LocalEvidenceStore:
         self._artifacts = loaded_artifacts
         self._events = loaded_events
         self._current_manifest_identity = identity
+        self._session_changed_artifacts.clear()
