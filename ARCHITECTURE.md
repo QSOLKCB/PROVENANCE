@@ -780,6 +780,45 @@ It must not reshape the universal core schema around one vendor.
 
 ---
 
+# 16A. POSIX-First Local Portability
+
+The local reference implementation should remain usable on ordinary Unix-like systems without requiring a desktop environment or network service.
+
+Baseline principles:
+
+```text
+terminal-native
+POSIX-style filesystem semantics
+POSIX advisory record locks
+integer evidentiary time arithmetic
+no Bash requirement
+no systemd requirement
+no GNU-command requirement
+no Node requirement
+no automatic network dependency
+```
+
+Host-specific tools are optional observers.
+
+For example:
+
+```text
+chronyc present
+→ inspect existing host clock discipline
+
+chronyc absent
+→ use local system clock
+
+explicit operator diagnostic
+→ ntpdate -q <server>
+```
+
+PROVENANCE should execute subprocesses through explicit argv vectors, never by interpolating evidence into shell command strings.
+
+Presentation may use RFC3339/base-60 clock notation, but custody time calculations remain integer-only.
+
+---
+
 # 17. Ollama Reference Adapter
 
 The first AI adapter should be Ollama.
