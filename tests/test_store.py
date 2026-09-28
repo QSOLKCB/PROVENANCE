@@ -956,12 +956,195 @@ class LocalEvidenceStoreTests(unittest.TestCase):
                                 snapshot_name=artifact.record_identity.split(":", 1)[1]
                                 + ".json",
                                 label="artifact record",
+                                member_kind="artifact_record",
+                                expected_identity=artifact.record_identity,
                             )
                 finally:
                     os.close(snapshot_fd)
 
             after = len(list(Path("/proc/self/fd").iterdir()))
             self.assertEqual(after, before)
+
+    def test_new_store_root_ancestors_are_fsynced(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "base"
+            base.mkdir()
+            root = base / "new-parent" / "store"
+            real_sync = store_module._fsync_directory
+            synced: set[tuple[int, int]] = set()
+
+            def record_sync(fd: int) -> None:
+                st = os.fstat(fd)
+                synced.add((st.st_dev, st.st_ino))
+                real_sync(fd)
+
+            with mock.patch.object(
+                store_module,
+                "_fsync_directory",
+                side_effect=record_sync,
+            ):
+                LocalEvidenceStore(root)
+
+            base_stat = base.stat()
+            parent_stat = (base / "new-parent").stat()
+            self.assertIn((base_stat.st_dev, base_stat.st_ino), synced)
+            self.assertIn((parent_stat.st_dev, parent_stat.st_ino), synced)
+
+    @unittest.skipUnless(
+        Path("/proc/self/fd").is_dir(),
+        "requires Linux-style /proc/self/fd",
+    )
+    def test_managed_directory_retry_refsyncs_existing_child_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            real_sync = store_module._fsync_directory
+            failed = False
+
+            def fail_artifacts_parent_once(fd: int) -> None:
+                nonlocal failed
+                path = os.readlink(f"/proc/self/fd/{fd}")
+                if path.endswith("/objects/artifacts") and not failed:
+                    failed = True
+                    raise StoreError("injected managed-directory fsync failure")
+                real_sync(fd)
+
+            with mock.patch.object(
+                store_module,
+                "_fsync_directory",
+                side_effect=fail_artifacts_parent_once,
+            ):
+                with self.assertRaisesRegex(StoreError, "managed-directory"):
+                    LocalEvidenceStore(root)
+
+            self.assertTrue(
+                (root / "objects" / "artifacts" / "sha256").is_dir()
+            )
+
+            synced_paths: list[str] = []
+
+            def record_sync(fd: int) -> None:
+                synced_paths.append(os.readlink(f"/proc/self/fd/{fd}"))
+                real_sync(fd)
+
+            with mock.patch.object(
+                store_module,
+                "_fsync_directory",
+                side_effect=record_sync,
+            ):
+                LocalEvidenceStore(root)
+
+            self.assertTrue(
+                any(path.endswith("/objects/artifacts") for path in synced_paths),
+                synced_paths,
+            )
+
+    def test_recovered_snapshot_reuse_rejects_missing_pool_member(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"recovered snapshot pool")
+            store.put_event(_event_for(artifact.content_identity))
+
+            with mock.patch.object(
+                store,
+                "_update_head",
+                side_effect=StoreError("injected HEAD failure"),
+            ):
+                with self.assertRaisesRegex(StoreError, "HEAD failure"):
+                    store.finalize()
+
+            self.assertFalse((root / "HEAD").exists())
+            _content_object(root, artifact.content_identity).unlink()
+
+            with self.assertRaisesRegex(StoreError, "object pool"):
+                store.finalize()
+
+            self.assertFalse((root / "HEAD").exists())
+
+    def test_reopen_rejects_post_verification_extra_manifest_envelope_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"extra envelope field")
+            store.put_event(_event_for(artifact.content_identity))
+            store.finalize()
+
+            original_verify = LocalEvidenceStore._verify_snapshot_identity
+
+            def verify_then_add_field(
+                self,
+                path: Path,
+                expected_identity: str,
+                *,
+                label: str,
+            ):
+                report = original_verify(
+                    self,
+                    path,
+                    expected_identity,
+                    label=label,
+                )
+                if label == "HEAD snapshot":
+                    envelope = _read_json(path / "manifest.json")
+                    envelope["unexpected"] = "field"
+                    (path / "manifest.json").write_bytes(
+                        store_module.canonical_json_bytes(envelope)
+                    )
+                return report
+
+            with mock.patch.object(
+                LocalEvidenceStore,
+                "_verify_snapshot_identity",
+                new=verify_then_add_field,
+            ):
+                with self.assertRaisesRegex(
+                    StoreError,
+                    "envelope has unexpected fields",
+                ):
+                    LocalEvidenceStore(root)
+
+    def test_reopen_binds_retained_content_identity_to_compared_descriptors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"descriptor-bound content")
+            store.put_event(_event_for(artifact.content_identity))
+            snapshot = store.finalize()
+
+            digest = artifact.content_identity.split(":", 1)[1]
+            snapshot_content = snapshot.path / "artifacts" / "sha256" / digest
+            pool_content = _content_object(root, artifact.content_identity)
+            original_verify = LocalEvidenceStore._verify_snapshot_identity
+
+            def verify_then_mutate_both(
+                self,
+                path: Path,
+                expected_identity: str,
+                *,
+                label: str,
+            ):
+                report = original_verify(
+                    self,
+                    path,
+                    expected_identity,
+                    label=label,
+                )
+                if label == "HEAD snapshot":
+                    tampered = b"same tampered bytes"
+                    snapshot_content.write_bytes(tampered)
+                    pool_content.write_bytes(tampered)
+                return report
+
+            with mock.patch.object(
+                LocalEvidenceStore,
+                "_verify_snapshot_identity",
+                new=verify_then_mutate_both,
+            ):
+                with self.assertRaisesRegex(
+                    StoreError,
+                    "expected content identity",
+                ):
+                    LocalEvidenceStore(root)
 
     def test_corrupt_head_snapshot_is_rejected_on_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
