@@ -42,6 +42,21 @@ PROVENANCE records that behaviour from the outside or through minimally invasive
 
 ---
 
+## Run the tests
+
+From the repository root, run the complete dependency-free test suite with:
+
+```bash
+cd ~/PROVENANCE
+python3 -m unittest discover -s tests -v
+```
+
+If you cloned PROVENANCE somewhere else, change the `cd` path accordingly.
+
+This runs all current module tests. GitHub Actions uses narrower module-specific lanes for speed, but the full local command above is the simplest way to reproduce the complete suite.
+
+---
+
 ## Why PROVENANCE Exists
 
 Modern AI systems rarely perform a single isolated operation.
@@ -764,7 +779,7 @@ That is the target.
 
 # Status
 
-**Bootstrap / Phase 1 implementation.**
+**Bootstrap / Phase 2 implementation.**
 
 The constitutional and architectural foundation is in place. The first executable module is now `provenance_core`, covering the initial Phase 1 surface:
 
@@ -780,7 +795,9 @@ The constitutional and architectural foundation is in place. The first executabl
 - normalized manifest membership; and
 - focused dependency-free regression tests.
 
-The independent verifier, evidence store, custody implementation, adapters, MCP server, CLI, and UI remain later roadmap phases.
+The independent verifier is now implemented in `provenance_verify`, with canonical bundle verification, artifact/event identity recomputation, exact physical membership checks, retained-content hash and byte-count verification, explicit missing-evidence handling, reference resolution, symlink rejection, and adversarial tamper tests.
+
+The evidence store, custody implementation, adapters, MCP server, CLI, and UI remain later roadmap phases.
 
 Interfaces and compatibility guarantees should still be considered unstable until explicitly versioned and released.
 
