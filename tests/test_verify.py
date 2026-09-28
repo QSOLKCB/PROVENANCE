@@ -372,8 +372,11 @@ class VerifyBundleTests(unittest.TestCase):
             report = verify_bundle(bundle)
 
             self.assertFalse(report.integrity_verified)
-            self.assertIn(
-                "manifest.json must be a regular non-symlink file",
+            self.assertTrue(
+                any(
+                    "manifest.json" in item and "unsafe" in item
+                    for item in report.errors
+                ),
                 report.errors,
             )
 
@@ -689,6 +692,39 @@ class VerifyBundleTests(unittest.TestCase):
                 verifier_module.READ_CHUNK_SIZE,
             )
             self.assertGreaterEqual(len(requested_sizes), 4)
+
+    @unittest.skipUnless(
+        os.name == "posix" and hasattr(os, "geteuid") and os.geteuid() != 0,
+        "requires unprivileged POSIX permissions",
+    )
+    def test_unreadable_subtree_fails_exact_membership(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = Path(tmp) / "bundle"
+            bundle.mkdir()
+            _write_bundle(bundle)
+
+            blocked = bundle / "blocked"
+            blocked.mkdir()
+            (blocked / "hidden.bin").write_bytes(b"hidden")
+            blocked.chmod(0)
+            try:
+                report = verify_bundle(bundle)
+            finally:
+                blocked.chmod(0o700)
+
+            self.assertFalse(report.integrity_verified)
+            self.assertTrue(
+                any(
+                    "cannot traverse bundle directory blocked" in item
+                    or "cannot enumerate bundle directory blocked" in item
+                    for item in report.errors
+                ),
+                report.errors,
+            )
+            self.assertNotIn(
+                "physical bundle membership exactly matches the manifest",
+                report.checks,
+            )
 
     def test_enumeration_failure_returns_failed_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
