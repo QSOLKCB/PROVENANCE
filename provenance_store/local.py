@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import threading
 import uuid
 from typing import Iterator
 
@@ -38,6 +39,9 @@ _HEAD = "HEAD"
 _LOCK = ".store.lock"
 _FORMAT = "STORE_FORMAT"
 _CHUNK_SIZE = 1024 * 1024
+_PROCESS_LOCKS_GUARD = threading.Lock()
+_PROCESS_LOCKS: dict[tuple[int, int, str], threading.Lock] = {}
+
 _DIR_FD_SUPPORT = {
     "open": os.open in os.supports_dir_fd,
     "mkdir": os.mkdir in os.supports_dir_fd,
@@ -117,6 +121,17 @@ def _fsync_directory(fd: int) -> None:
         os.fsync(fd)
     except OSError as exc:
         raise StoreError(f"directory fsync failed: {exc}") from exc
+
+
+def _process_lock_for_root(root_fd: int) -> threading.Lock:
+    root_stat = os.fstat(root_fd)
+    key = (root_stat.st_dev, root_stat.st_ino, _LOCK)
+    with _PROCESS_LOCKS_GUARD:
+        lock = _PROCESS_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _PROCESS_LOCKS[key] = lock
+        return lock
 
 
 class LocalEvidenceStore:
@@ -358,33 +373,43 @@ class LocalEvidenceStore:
         _fsync_directory(root_fd)
 
     def _ensure_lock_file(self, root_fd: int) -> None:
-        try:
-            fd = os.open(
-                _LOCK,
-                os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=root_fd,
-            )
-        except OSError as exc:
-            raise StoreError(f"store lock file cannot be created safely: {exc}") from exc
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                raise StoreError("store lock must be a regular file")
-        finally:
-            os.close(fd)
+        process_lock = _process_lock_for_root(root_fd)
+        with process_lock:
+            try:
+                fd = os.open(
+                    _LOCK,
+                    os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=root_fd,
+                )
+            except OSError as exc:
+                raise StoreError(
+                    f"store lock file cannot be created safely: {exc}"
+                ) from exc
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise StoreError("store lock must be a regular file")
+            finally:
+                os.close(fd)
 
     @contextmanager
     def _exclusive_finalize_lock(self) -> Iterator[None]:
         with self._root_fd() as root_fd:
+            process_lock = _process_lock_for_root(root_fd)
+            process_lock.acquire()
+            fd: int | None = None
+            posix_locked = False
             try:
-                fd = os.open(
-                    _LOCK,
-                    os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
-                    dir_fd=root_fd,
-                )
-            except OSError as exc:
-                raise StoreError(f"store lock cannot be opened: {exc}") from exc
-            try:
+                try:
+                    fd = os.open(
+                        _LOCK,
+                        os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW,
+                        dir_fd=root_fd,
+                    )
+                except OSError as exc:
+                    raise StoreError(
+                        f"store lock cannot be opened: {exc}"
+                    ) from exc
                 if not stat.S_ISREG(os.fstat(fd).st_mode):
                     raise StoreError("store lock must be a regular file")
                 try:
@@ -395,6 +420,7 @@ class LocalEvidenceStore:
                         0,
                         os.SEEK_SET,
                     )
+                    posix_locked = True
                 except OSError as exc:
                     raise StoreError(
                         f"store POSIX lock cannot be acquired: {exc}"
@@ -402,15 +428,18 @@ class LocalEvidenceStore:
                 yield
             finally:
                 try:
-                    fcntl.lockf(
-                        fd,
-                        fcntl.LOCK_UN,
-                        0,
-                        0,
-                        os.SEEK_SET,
-                    )
+                    if fd is not None and posix_locked:
+                        fcntl.lockf(
+                            fd,
+                            fcntl.LOCK_UN,
+                            0,
+                            0,
+                            os.SEEK_SET,
+                        )
                 finally:
-                    os.close(fd)
+                    if fd is not None:
+                        os.close(fd)
+                    process_lock.release()
 
     def _existing_bytes_match(self, parent_fd: int, name: str, data: bytes) -> bool:
         try:
