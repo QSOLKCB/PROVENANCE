@@ -170,83 +170,63 @@ class LocalEvidenceStore:
             self._ensure_lock_file(root_fd)
 
     def _ensure_root_directory_durable(self) -> None:
-        """Create missing root ancestors and persist every new directory entry."""
+        """Create/recover the root path and persist every containing entry."""
 
         if self.root.anchor == "":
             raise StoreError("store root must be absolute")
 
-        missing: list[str] = []
-        ancestor = self.root
-        while not ancestor.exists():
-            missing.append(ancestor.name)
-            parent = ancestor.parent
-            if parent == ancestor:
-                break
-            ancestor = parent
+        parts = self.root.parts
+        if not parts:
+            raise StoreError("store root path is empty")
 
-        if not ancestor.exists():
-            raise StoreError("no existing ancestor for store root")
-        if ancestor.is_symlink():
-            raise StoreError("resolved store ancestor must not be a symbolic link")
         try:
-            ancestor_mode = ancestor.lstat().st_mode
+            current_fd = os.open(self.root.anchor, _directory_flags())
         except OSError as exc:
             raise StoreError(
-                f"store ancestor cannot be inspected: {exc}"
+                f"store filesystem anchor cannot be opened safely: {exc}"
             ) from exc
-        if not stat.S_ISDIR(ancestor_mode):
-            raise StoreError("nearest existing store ancestor must be a directory")
 
         try:
-            current_fd = os.open(ancestor, _directory_flags())
-        except OSError as exc:
-            raise StoreError(
-                f"store ancestor cannot be opened safely: {exc}"
-            ) from exc
-        try:
-            for part in reversed(missing):
-                try:
-                    os.mkdir(part, mode=0o700, dir_fd=current_fd)
-                except FileExistsError:
-                    pass
-                except OSError as exc:
-                    raise StoreError(
-                        f"store root component {part!r} cannot be created: {exc}"
-                    ) from exc
-
-                # Always sync the parent, including recovery when a prior
-                # attempt created the child but failed its durability barrier.
-                _fsync_directory(current_fd)
-
+            for part in parts[1:]:
                 try:
                     next_fd = os.open(
                         part,
                         _directory_flags(),
                         dir_fd=current_fd,
                     )
+                except FileNotFoundError:
+                    try:
+                        os.mkdir(part, mode=0o700, dir_fd=current_fd)
+                    except OSError as exc:
+                        raise StoreError(
+                            f"store root component {part!r} cannot be created: {exc}"
+                        ) from exc
+                    try:
+                        next_fd = os.open(
+                            part,
+                            _directory_flags(),
+                            dir_fd=current_fd,
+                        )
+                    except OSError as exc:
+                        raise StoreError(
+                            f"new store root component {part!r} cannot be opened safely: {exc}"
+                        ) from exc
                 except OSError as exc:
                     raise StoreError(
                         f"store root component {part!r} is missing or unsafe: {exc}"
                     ) from exc
+
+                try:
+                    # Always re-establish the containing-directory durability
+                    # barrier. This deliberately covers a child that survived
+                    # a previous mkdir whose parent fsync failed.
+                    _fsync_directory(current_fd)
+                except Exception:
+                    os.close(next_fd)
+                    raise
+
                 os.close(current_fd)
                 current_fd = next_fd
-
-            # If the root already existed, re-establish durability of its
-            # directory entry when its parent can be opened safely.
-            if not missing and self.root.parent != self.root:
-                try:
-                    parent_fd = os.open(
-                        self.root.parent,
-                        _directory_flags(),
-                    )
-                except OSError as exc:
-                    raise StoreError(
-                        f"store root parent cannot be opened safely: {exc}"
-                    ) from exc
-                try:
-                    _fsync_directory(parent_fd)
-                finally:
-                    os.close(parent_fd)
         finally:
             os.close(current_fd)
 
@@ -359,13 +339,23 @@ class LocalEvidenceStore:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise StoreError("STORE_FORMAT marker must be a regular file")
             raw = _read_all(fd)
+            if raw != expected:
+                raise StoreError(
+                    "unsupported or corrupt STORE_FORMAT marker: "
+                    + raw.decode("ascii", errors="replace").rstrip("\n")
+                )
+            try:
+                os.fsync(fd)
+            except OSError as exc:
+                raise StoreError(
+                    f"existing STORE_FORMAT marker cannot be synced durably: {exc}"
+                ) from exc
         finally:
             os.close(fd)
-        if raw != expected:
-            raise StoreError(
-                "unsupported or corrupt STORE_FORMAT marker: "
-                + raw.decode("ascii", errors="replace").rstrip("\n")
-            )
+
+        # The initial marker publication may also have failed before its root
+        # directory entry was made durable.
+        _fsync_directory(root_fd)
 
     def _ensure_lock_file(self, root_fd: int) -> None:
         try:
