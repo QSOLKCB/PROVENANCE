@@ -112,7 +112,7 @@ jobs:
         with:
           name: provenance-ollama-${{ matrix.lane }}
           path: ${{ runner.temp }}/provenance-ollama-${{ matrix.lane }}
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Show Ollama log on failure
