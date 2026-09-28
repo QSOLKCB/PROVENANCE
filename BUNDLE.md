@@ -165,12 +165,17 @@ print(report.integrity_verified)
 print(report.errors)
 ~~~
 
-Before reading JSON evidence, the verifier requires each record to be a regular, non-symlink file. Special filesystem objects are rejected rather than opened.
+Before reading JSON evidence, the verifier requires each path component to resolve through trusted directory descriptors without following symlinks, and requires the final evidence object to be a regular file. Special filesystem objects are rejected rather than opened.
+
+Retained artifact bytes are hashed and counted incrementally in bounded chunks. Verification therefore does not require loading the complete retained artifact into memory.
+
+Directory membership is enumerated explicitly and enumeration failures are verification failures; unreadable subtrees must not silently disappear from bundle closure.
 
 The verifier is read-only.
 
 It does not:
 
+- provide an atomic snapshot of a concurrently mutable directory tree;
 - repair evidence;
 - rewrite canonical JSON;
 - fill missing files;
@@ -195,6 +200,8 @@ scientific falsehood
 ~~~
 
 Those are downstream interpretations.
+
+For claims that require snapshot-wide consistency, verify an immutable snapshot or otherwise freeze the evidence set before verification. Per-record descriptor-safe reads prevent symlink traversal and unsafe object substitution, but they do not turn a mutable directory into an atomic historical snapshot.
 
 ---
 
