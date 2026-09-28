@@ -1,0 +1,37 @@
+name: store
+
+on:
+  pull_request:
+    paths:
+      - "provenance_core/**"
+      - "provenance_verify/**"
+      - "provenance_store/**"
+      - "BUNDLE.md"
+      - "STORE.md"
+      - "tests/test_store.py"
+      - ".github/workflows/store.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "provenance_core/**"
+      - "provenance_verify/**"
+      - "provenance_store/**"
+      - "BUNDLE.md"
+      - "STORE.md"
+      - "tests/test_store.py"
+      - ".github/workflows/store.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  store:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run local evidence-store tests
+        run: python3 -m unittest discover -s tests -p "test_store.py" -v
