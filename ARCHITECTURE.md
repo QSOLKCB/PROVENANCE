@@ -941,6 +941,8 @@ A local application should be able to use PROVENANCE without operating a network
 
 The CLI is the simplest human and automation interface.
 
+The preferred interactive implementation direction is a Rust TUI with keyboard-first slash-command discovery. Typing `/` should open/filter a compact command palette rather than requiring users to memorize flags for common interactive operations.
+
 Initial commands may conceptually include:
 
 ```text
@@ -955,6 +957,10 @@ The CLI should expose core functionality directly.
 
 It should not contain a second implementation of verification semantics.
 
+Provider authentication belongs behind an interface boundary. Supported modes may include API keys, OAuth device authorization, OAuth browser/loopback authorization, or no authentication for local endpoints. Tokens and credentials are operational secrets, not ordinary evidence payloads.
+
+OpenAI-compatible API surfaces may be supported as a generic interoperability adapter because many providers and local/open-source systems implement similar request/response shapes. That compatibility must remain outside the universal evidence core.
+
 ---
 
 # 23. `provenance-ui`
@@ -962,6 +968,8 @@ It should not contain a second implementation of verification semantics.
 The UI is an evidence viewer.
 
 It has no evidentiary authority.
+
+The initial viewer should be served by a tiny local HTTP server bound to loopback by default and implemented with pure HTML/CSS plus minimal vanilla JavaScript. No frontend framework or Node runtime is required unless a later concrete requirement earns that complexity.
 
 Its job is to make the chain understandable.
 
@@ -979,6 +987,15 @@ evidence gaps
 The UI consumes existing evidence.
 
 It does not define evidence.
+
+Network exposure is explicit:
+
+```text
+default = 127.0.0.1
+LAN/public = operator opt-in
+```
+
+Do not expose unrelated inetd-style utility services as part of the viewer.
 
 ---
 
