@@ -208,7 +208,7 @@ must hold exactly.
 ## Status
 
 ```text
-IMPLEMENTED
+COMPLETE
 ```
 
 ## Goal
@@ -277,6 +277,12 @@ Changing one covered byte must fail verification.
 
 # Phase 3 — Local Evidence Store
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Implement the first `provenance-store`.
@@ -295,14 +301,16 @@ A database is not required.
 
 ## Responsibilities
 
-Store:
+Persist the Phase 3 evidence objects:
 
 ```text
-artifacts
+artifact content
+artifact records
 events
-manifests
-custody records
+manifests / verified snapshots
 ```
+
+Custody records and custody semantics begin in Phase 4. The Phase 3 filesystem backend must not manufacture custody claims from storage activity alone.
 
 Derived indexes may be added only when needed.
 
