@@ -56,6 +56,8 @@ provenance.local-store.v1
 
 A non-empty store root without this marker is rejected rather than silently interpreted as the current implementation format. An unknown or corrupt marker is also rejected.
 
+When a valid marker already exists, initialization re-fsyncs the marker file itself and then the store-root directory before accepting it. This recovers the durability barrier if an earlier marker write completed in cache but its file-data or directory-entry fsync failed.
+
 HEAD points to the currently finalized manifest identity.
 
 Snapshots beneath snapshots/sha256/ conform to BUNDLE.md and are independently verified before HEAD advances.
@@ -210,7 +212,9 @@ Phase 3 tests cover:
 - managed-directory creation retry durability;
 - recovered-snapshot publication with a missing pool member;
 - unexpected manifest-envelope fields during reconstruction;
-- descriptor-bound retained-content identity during reopen.
+- descriptor-bound retained-content identity during reopen;
+- recovered root-ancestor parent-fsync barriers;
+- recovered STORE_FORMAT file-data and directory-entry durability.
 
 A failure must not silently publish partial evidence as the current state.
 
@@ -220,7 +224,9 @@ A failure must not silently publish partial evidence as the current state.
 
 The initial local store intentionally targets POSIX-style descriptor-relative filesystem support.
 
-The supplied store root is resolved through existing symlink ancestors at construction time and bound to that resolved path. Dangling root symlinks are rejected rather than followed. Missing root ancestors are created one component at a time, and each newly created directory entry is made durable by fsyncing its containing directory.
+The supplied store root is resolved through existing symlink ancestors at construction time and bound to that resolved path. Dangling root symlinks are rejected rather than followed.
+
+Initialization walks the complete resolved root path from the filesystem anchor. For every component it re-fsyncs the containing directory whether the child was newly created or already existed. This both persists newly created ancestors and recovers a surviving directory entry whose earlier parent-fsync failed.
 
 The store also records the root directory device/inode identity and rejects later opens if the filesystem object at that path changes. Retargeting an ancestor symlink or changing the process working directory therefore cannot silently redirect an existing store instance.
 
