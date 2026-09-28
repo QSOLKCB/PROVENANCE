@@ -644,131 +644,75 @@ Where practical, evidence bundles and cryptographic claims should be independent
 
 ---
 
-# Proposed Architecture
+# Modular Architecture
 
-The project is expected to evolve around several small, separable components:
+PROVENANCE is being built as a **modular monorepo** with one evidence contract and replaceable surfaces.
 
 ```text
-┌─────────────────────────────────────────────┐
-│              MONITORED SYSTEM               │
-│                                             │
-│   LLM / Agent / Application / Service       │
-└──────────────────────┬──────────────────────┘
-                       │ observations
-                       ▼
-┌─────────────────────────────────────────────┐
-│                 ADAPTER                     │
-│                                             │
-│ Converts framework-specific events into     │
-│ framework-neutral observations              │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│                RECORDER                     │
-│                                             │
-│ timestamps · identities · relationships     │
-│ hashes · event metadata · custody           │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│             EVIDENCE STORE                  │
-│                                             │
-│ append-only records · artifacts · manifests │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│                VERIFIER                     │
-│                                             │
-│ integrity · continuity · signatures         │
-│ manifests · artifact identities             │
-└──────────────────────┬──────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────┐
-│          PRESENTATION / EXPORT              │
-│                                             │
-│ timelines · reports · bundles · inspection  │
-└─────────────────────────────────────────────┘
+provenance-ui
+      ↓
+provenance-mcp / provenance-cli
+      ↓
+provenance-adapters / provenance-store
+      ↓
+provenance-core
+
+evidence
+   ↓
+provenance-verify
 ```
 
-The boundaries matter.
+The core must remain independent of UI, transport, provider, storage backend, and application policy.
 
-The verifier should not need to trust the presentation layer.
+The logical modules are:
 
-The evidence store should not need to understand a legal conclusion.
+| Module | Responsibility |
+|---|---|
+| `provenance-core` | Canonical evidence semantics, identities, events, relationships, manifests |
+| `provenance-verify` | Independent recomputation and verification |
+| `provenance-store` | Replaceable evidence persistence |
+| `provenance-adapters` | Framework-specific observation |
+| `provenance-mcp` | MCP tools and resources |
+| `provenance-cli` | Lightweight operator interface |
+| `provenance-ui` | Read-only human inspection |
 
-The adapter should not get to rewrite the monitored system's behaviour.
+The initial Python reference module is imported as `provenance_core`; the hyphenated names above describe architectural modules rather than Python import syntax.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the module contracts and dependency rules.
 
 ---
 
-# Early Roadmap
+# Implementation Roadmap
 
-PROVENANCE is currently at the beginning of its development.
+Development is phase-gated.
 
-Initial work is expected to establish the evidence contract before building large integrations.
+The current sequence begins:
 
-### Phase 0 — Constitution
+```text
+Phase 0  Constitutional foundation
+   ↓
+Phase 1  Canonical evidence core
+   ↓
+Phase 2  Independent verifier
+   ↓
+Phase 3  Local evidence store
+   ↓
+Phase 4  Minimal custody
+   ↓
+Phase 5  Ollama reference adapter
+   ↓
+Phase 6  Ollama GitHub Actions smoke test
+   ↓
+Phase 7  MCP
+   ↓
+CLI / UI / additional adapters
+```
 
-Define:
+The full roadmap, exit gates, CI progression, and later trust/privacy/distributed phases are defined in [ROADMAP.md](ROADMAP.md).
 
-- threat model;
-- evidence terminology;
-- trust boundaries;
-- non-interference requirements;
-- chain-of-custody invariants;
-- canonical representation;
-- hashing rules;
-- event identity;
-- evidence classifications;
-- failure semantics.
+The implementation rule is deliberately simple:
 
-### Phase 1 — Minimal Evidence Core
-
-Implement:
-
-- canonical event records;
-- content hashing;
-- linked event sequences;
-- evidence manifests;
-- independent verification;
-- tamper detection.
-
-### Phase 2 — Reference Recorder
-
-Provide a minimal recorder that can observe a simple program without changing its normal operation.
-
-### Phase 3 — AI Adapter
-
-Capture an end-to-end model interaction including:
-
-- request;
-- configuration;
-- model identity;
-- response;
-- external artifacts;
-- tool calls;
-- tool results.
-
-### Phase 4 — Evidence Bundles
-
-Export self-contained evidence packages that can be independently inspected and verified.
-
-### Phase 5 — Framework Adapters
-
-Develop adapters without changing the underlying evidence contract.
-
-Potential targets may include hosted APIs, local inference engines, agent frameworks, and conventional software runtimes.
-
-### Phase 6 — Forensic Inspection
-
-Provide tooling for:
-
-- timelines;
-- dependency graphs;
-- custody inspection;
-- verification;
-- evidence-gap identification;
-- artifact comparison;
-- human-readable reports.
+> **Build the smallest trustworthy layer. Prove it. Then add the next layer.**
 
 ---
 
@@ -820,11 +764,25 @@ That is the target.
 
 # Status
 
-**Early development / specification stage.**
+**Bootstrap / Phase 1 implementation.**
 
-The repository currently defines the direction of the project. Interfaces, schemas, cryptographic structures, and compatibility guarantees should be considered unstable until explicitly versioned and released.
+The constitutional and architectural foundation is in place. The first executable module is now `provenance_core`, covering the initial Phase 1 surface:
 
-The immediate priority is to establish the evidence contract correctly before building convenience layers around it.
+- canonical UTF-8 JSON records;
+- duplicate-key, BOM, non-finite and unsupported-number rejection;
+- ordinary SHA-256 raw-content identities;
+- domain-separated artifact-record, event, and manifest identities;
+- `OBSERVED`, `DECLARED`, and `DERIVED` evidence classes;
+- collection-status and retention-state vocabulary;
+- source-bound DERIVED events;
+- explicit retained, digest-only, and missing artifact states in manifests;
+- core/envelope self-hash exclusion;
+- normalized manifest membership; and
+- focused dependency-free regression tests.
+
+The independent verifier, evidence store, custody implementation, adapters, MCP server, CLI, and UI remain later roadmap phases.
+
+Interfaces and compatibility guarantees should still be considered unstable until explicitly versioned and released.
 
 ---
 

@@ -304,6 +304,7 @@ Conceptually:
 Artifact
 ├── schema
 ├── content identity
+├── structured record identity
 ├── byte count
 ├── media type
 ├── retention state
@@ -526,21 +527,27 @@ same digest
 
 ---
 
-# 9. Domain Separation
+# 9. Content Identity and Domain Separation
 
-Different cryptographic record classes should use explicit domains where appropriate.
-
-Conceptually:
+Raw artifact content uses ordinary algorithm-qualified cryptographic identity:
 
 ```text
-PROVENANCE/ARTIFACT/v1
+sha256:<SHA-256 of exact artifact bytes>
+```
+
+Raw artifact hashes are deliberately **not** domain-separated so that ordinary forensic and cryptographic tools can independently reproduce them.
+
+Structured PROVENANCE record identities should use explicit semantic domains where appropriate:
+
+```text
+PROVENANCE/ARTIFACT-RECORD/v1
 PROVENANCE/EVENT/v1
 PROVENANCE/MANIFEST/v1
 PROVENANCE/CUSTODY/v1
 PROVENANCE/CHECKPOINT/v1
 ```
 
-This prevents identical serialized bytes used in different semantic roles from being accidentally treated as the same kind of object.
+This prevents identical structured canonical bytes used in different semantic roles from being accidentally treated as the same kind of record while preserving standard content identity for source artifacts.
 
 ---
 

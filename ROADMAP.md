@@ -163,15 +163,25 @@ Raw artifacts must remain raw.
 
 Canonicalization applies to PROVENANCE records, not source evidence bytes.
 
-## Domain Separation
+## Content Identity and Domain Separation
 
-Define initial cryptographic domains such as:
+Raw artifact bytes use ordinary algorithm-qualified content identity:
 
 ```text
-PROVENANCE/ARTIFACT/v1
+sha256:<SHA-256 of the exact artifact bytes>
+```
+
+This is intentionally interoperable with ordinary forensic and cryptographic tooling.
+
+Structured PROVENANCE records use explicit semantic domains:
+
+```text
+PROVENANCE/ARTIFACT-RECORD/v1
 PROVENANCE/EVENT/v1
 PROVENANCE/MANIFEST/v1
 ```
+
+The structured artifact-record identity binds metadata such as media type, byte count, and retention state without changing the ordinary SHA-256 identity of the underlying raw artifact bytes. Manifests bind artifact-record identity and retention state, including explicit known-missing entries.
 
 ## Exit Gate
 

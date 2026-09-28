@@ -1,0 +1,29 @@
+name: core
+
+on:
+  pull_request:
+    paths:
+      - "provenance_core/**"
+      - "tests/**"
+      - ".github/workflows/core.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "provenance_core/**"
+      - "tests/**"
+      - ".github/workflows/core.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run bootstrap evidence-core tests
+        run: python3 -m unittest discover -s tests -v
