@@ -5,6 +5,7 @@ on:
     paths:
       - "provenance_adapters/**"
       - "tests/test_ollama_adapter.py"
+      - "tests/test_ollama_transport.py"
       - "scripts/ollama_smoke.py"
       - "OLLAMA.md"
       - ".github/workflows/ollama.yml"
@@ -13,6 +14,7 @@ on:
     paths:
       - "provenance_adapters/**"
       - "tests/test_ollama_adapter.py"
+      - "tests/test_ollama_transport.py"
       - "scripts/ollama_smoke.py"
       - "OLLAMA.md"
       - ".github/workflows/ollama.yml"
@@ -34,7 +36,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Run Ollama adapter unit tests
-        run: python3 -m unittest tests.test_ollama_adapter -v
+        run: >-
+          python3 -m unittest
+          tests.test_ollama_adapter
+          tests.test_ollama_transport
+          -v
 
   ollama-smoke:
     needs: adapter-unit
