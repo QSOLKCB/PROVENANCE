@@ -93,6 +93,12 @@ which invariants cannot silently change
 
 # Phase 1 — Canonical Evidence Core
 
+## Status
+
+```text
+COMPLETE
+```
+
 ## Goal
 
 Implement the smallest useful `provenance-core`.
@@ -198,6 +204,12 @@ must hold exactly.
 ---
 
 # Phase 2 — Independent Verifier
+
+## Status
+
+```text
+IMPLEMENTED
+```
 
 ## Goal
 

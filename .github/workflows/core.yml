@@ -4,13 +4,13 @@ on:
   pull_request:
     paths:
       - "provenance_core/**"
-      - "tests/**"
+      - "tests/test_core.py"
       - ".github/workflows/core.yml"
   push:
     branches: ["main"]
     paths:
       - "provenance_core/**"
-      - "tests/**"
+      - "tests/test_core.py"
       - ".github/workflows/core.yml"
   workflow_dispatch:
 
@@ -25,5 +25,5 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - name: Run bootstrap evidence-core tests
-        run: python3 -m unittest discover -s tests -v
+      - name: Run evidence-core tests
+        run: python3 -m unittest discover -s tests -p "test_core.py" -v

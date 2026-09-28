@@ -100,6 +100,8 @@ def parse_canonical_json_bytes(data: bytes) -> Any:
         raise
     except json.JSONDecodeError as exc:
         raise CanonicalizationError(f"input is not strict JSON: {exc}") from exc
+    except ValueError as exc:
+        raise CanonicalizationError(f"input JSON value cannot be parsed: {exc}") from exc
 
     _validate_value(value)
     if canonical_json_bytes(value) != data:
