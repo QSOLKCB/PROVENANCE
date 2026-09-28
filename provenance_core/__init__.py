@@ -2,14 +2,17 @@
 
 from .canonical import (
     CANONICALIZATION_ID,
+    MAX_SAFE_INTEGER,
     CanonicalizationError,
     canonical_json_bytes,
     parse_canonical_json_bytes,
 )
 from .identity import (
+    ARTIFACT_RECORD_DOMAIN,
     EVENT_DOMAIN,
     MANIFEST_DOMAIN,
     IdentityError,
+    artifact_record_identity,
     domain_identity,
     event_identity,
     manifest_identity,
@@ -25,6 +28,7 @@ from .model import (
     EvidenceClass,
     EventCore,
     EventEnvelope,
+    ManifestArtifact,
     ManifestCore,
     ManifestEnvelope,
     Relationship,
@@ -32,12 +36,14 @@ from .model import (
 )
 
 __all__ = [
+    "ARTIFACT_RECORD_DOMAIN",
     "ARTIFACT_SCHEMA",
     "CANONICALIZATION_ID",
     "EVENT_DOMAIN",
     "EVENT_SCHEMA",
     "MANIFEST_DOMAIN",
     "MANIFEST_SCHEMA",
+    "MAX_SAFE_INTEGER",
     "ArtifactRecord",
     "CanonicalizationError",
     "CollectionStatus",
@@ -45,10 +51,12 @@ __all__ = [
     "EventCore",
     "EventEnvelope",
     "IdentityError",
+    "ManifestArtifact",
     "ManifestCore",
     "ManifestEnvelope",
     "Relationship",
     "RetentionState",
+    "artifact_record_identity",
     "canonical_json_bytes",
     "domain_identity",
     "event_identity",
