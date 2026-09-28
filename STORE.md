@@ -122,7 +122,7 @@ The snapshot manifest is sealed using the Phase 1 evidence model.
 
 Snapshot members are copied into independent inodes rather than hard-linked to the mutable object pool or other snapshots. Editing one exported snapshot therefore cannot rewrite the object pool or another historical snapshot through inode aliasing.
 
-Before publication through HEAD, the snapshot must pass provenance_verify and its verified manifest identity must match the identity being published.
+Before publication through HEAD, the snapshot must pass provenance_verify and its verified manifest identity must match the identity being published. Reusing a recovered snapshot also requires the current object pool to be complete and byte/identity-consistent with that snapshot before HEAD may advance.
 
 If verification fails:
 
@@ -140,9 +140,11 @@ Temporary snapshot trees are removed whenever assembly fails before final public
 
 # Reopening
 
-Opening an existing store reads HEAD, independently verifies the referenced snapshot, then re-reads and revalidates the exact manifest used to reconstruct working state against the HEAD identity. A manifest swapped after the first verification step is therefore rejected.
+Opening an existing store reads HEAD, independently verifies the referenced snapshot, then re-reads and revalidates the exact manifest used to reconstruct working state against the HEAD identity. The reconstruction read requires the exact manifest envelope/core key sets accepted by the verifier; added top-level fields are rejected. A manifest swapped after the first verification step is therefore rejected.
 
-Before exposing mutable reopened state, every required object-pool artifact record, retained artifact, and event must still exist and match the corresponding bytes in the verified snapshot. A verified snapshot remains historical evidence, but an incomplete or divergent object pool is rejected as an extendable store.
+Before exposing mutable reopened state, every required object-pool artifact record, retained artifact, and event must still exist and match the corresponding bytes in the verified snapshot. The comparison also recomputes content, artifact-record, or event identity from the same open snapshot descriptor used for the byte comparison. A second independent snapshot verification runs after reconstruction checks and before mutable state is exposed.
+
+A verified snapshot remains historical evidence, but an incomplete or divergent object pool is rejected as an extendable store.
 
 The store does not trust unverified mutable process state from an earlier run.
 
@@ -203,7 +205,12 @@ Phase 3 tests cover:
 - temporary-snapshot cleanup after failed assembly;
 - persisted store-format enforcement;
 - ancestor-symlink retargeting;
-- missing or divergent object-pool members during reopen.
+- missing or divergent object-pool members during reopen;
+- newly created store-root ancestor durability;
+- managed-directory creation retry durability;
+- recovered-snapshot publication with a missing pool member;
+- unexpected manifest-envelope fields during reconstruction;
+- descriptor-bound retained-content identity during reopen.
 
 A failure must not silently publish partial evidence as the current state.
 
@@ -213,9 +220,11 @@ A failure must not silently publish partial evidence as the current state.
 
 The initial local store intentionally targets POSIX-style descriptor-relative filesystem support.
 
-The supplied store root is resolved through existing symlink ancestors at construction time and bound to that resolved path. The store also records the root directory device/inode identity and rejects later opens if the filesystem object at that path changes. Retargeting an ancestor symlink or changing the process working directory therefore cannot silently redirect an existing store instance.
+The supplied store root is resolved through existing symlink ancestors at construction time and bound to that resolved path. Dangling root symlinks are rejected rather than followed. Missing root ancestors are created one component at a time, and each newly created directory entry is made durable by fsyncing its containing directory.
 
-Managed directories are opened without following symlinks.
+The store also records the root directory device/inode identity and rejects later opens if the filesystem object at that path changes. Retargeting an ancestor symlink or changing the process working directory therefore cannot silently redirect an existing store instance.
+
+Managed directories are opened without following symlinks. When a managed child directory already exists from an interrupted creation attempt, its parent directory is re-fsynced before the child is accepted, re-establishing the skipped durability barrier.
 
 Object publication uses no-overwrite semantics.
 
