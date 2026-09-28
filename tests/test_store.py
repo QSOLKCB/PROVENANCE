@@ -806,6 +806,163 @@ class LocalEvidenceStoreTests(unittest.TestCase):
                     with self.assertRaisesRegex(StoreError, "object pool"):
                         LocalEvidenceStore(root)
 
+    def test_dangling_root_symlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            target = base / "missing-target"
+            alias = base / "store-link"
+            alias.symlink_to(target, target_is_directory=True)
+
+            self.assertTrue(alias.is_symlink())
+            self.assertFalse(alias.exists())
+            with self.assertRaisesRegex(StoreError, "must not be a symbolic link"):
+                LocalEvidenceStore(alias)
+
+            self.assertFalse(target.exists())
+
+    def test_object_publication_retry_refsyncs_recovered_directory_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            event = EventEnvelope.seal(
+                EventCore(
+                    evidence_class=EvidenceClass.OBSERVED,
+                    actor="test",
+                    operation="observe",
+                )
+            )
+
+            with mock.patch.object(
+                store_module,
+                "_fsync_directory",
+                side_effect=StoreError("injected object directory fsync failure"),
+            ):
+                with self.assertRaisesRegex(StoreError, "directory fsync"):
+                    store.put_event(event)
+
+            event_path = _event_object(root, event.event_identity)
+            self.assertTrue(event_path.is_file())
+
+            real_fsync_directory = store_module._fsync_directory
+            with mock.patch.object(
+                store_module,
+                "_fsync_directory",
+                wraps=real_fsync_directory,
+            ) as sync:
+                store.put_event(event)
+
+            self.assertGreater(sync.call_count, 0)
+
+    @unittest.skipUnless(
+        Path("/proc/self/fd").is_dir(),
+        "requires Linux-style /proc/self/fd",
+    )
+    def test_snapshot_destination_setup_failure_does_not_leak_source_fd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"descriptor leak test")
+            record_digest = artifact.record_identity.split(":", 1)[1]
+
+            temp_snapshot = root / "snapshots" / "sha256" / "manual-temp"
+            temp_snapshot.mkdir()
+            before = len(list(Path("/proc/self/fd").iterdir()))
+
+            original_open_dir_chain = store._open_dir_chain
+
+            def fail_destination(root_fd: int, parts: tuple[str, ...], *, create: bool):
+                if parts == ("artifact_records", "sha256"):
+                    raise StoreError("injected destination setup failure")
+                return original_open_dir_chain(root_fd, parts, create=create)
+
+            with store._root_fd() as root_fd:
+                temp_fd = os.open(temp_snapshot, store_module._directory_flags())
+                try:
+                    with mock.patch.object(
+                        store,
+                        "_open_dir_chain",
+                        side_effect=fail_destination,
+                    ):
+                        with self.assertRaisesRegex(
+                            StoreError,
+                            "destination setup failure",
+                        ):
+                            store._copy_object_into_snapshot(
+                                root_fd,
+                                temp_fd,
+                                source_category=(
+                                    "objects",
+                                    "artifact_records",
+                                    "sha256",
+                                ),
+                                source_name=record_digest + ".json",
+                                destination_category=("artifact_records", "sha256"),
+                                destination_name=record_digest + ".json",
+                            )
+                finally:
+                    os.close(temp_fd)
+
+            after = len(list(Path("/proc/self/fd").iterdir()))
+            self.assertEqual(after, before)
+
+    @unittest.skipUnless(
+        Path("/proc/self/fd").is_dir(),
+        "requires Linux-style /proc/self/fd",
+    )
+    def test_pool_validation_setup_failure_does_not_leak_parent_or_member_fds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"pool fd leak")
+            store.put_event(_event_for(artifact.content_identity))
+            snapshot = store.finalize()
+
+            before = len(list(Path("/proc/self/fd").iterdir()))
+            with store._root_fd() as root_fd:
+                snapshot_fd = os.open(snapshot.path, store_module._directory_flags())
+                try:
+                    original_open_dir_chain = store._open_dir_chain
+
+                    def fail_snapshot_parent(
+                        fd: int,
+                        parts: tuple[str, ...],
+                        *,
+                        create: bool,
+                    ):
+                        if parts == ("artifact_records", "sha256") and fd == snapshot_fd:
+                            raise StoreError("injected snapshot parent failure")
+                        return original_open_dir_chain(fd, parts, create=create)
+
+                    with mock.patch.object(
+                        store,
+                        "_open_dir_chain",
+                        side_effect=fail_snapshot_parent,
+                    ):
+                        with self.assertRaisesRegex(
+                            StoreError,
+                            "snapshot parent failure",
+                        ):
+                            store._assert_pool_member_matches_snapshot(
+                                root_fd,
+                                snapshot_fd,
+                                pool_category=(
+                                    "objects",
+                                    "artifact_records",
+                                    "sha256",
+                                ),
+                                pool_name=artifact.record_identity.split(":", 1)[1]
+                                + ".json",
+                                snapshot_category=("artifact_records", "sha256"),
+                                snapshot_name=artifact.record_identity.split(":", 1)[1]
+                                + ".json",
+                                label="artifact record",
+                            )
+                finally:
+                    os.close(snapshot_fd)
+
+            after = len(list(Path("/proc/self/fd").iterdir()))
+            self.assertEqual(after, before)
+
     def test_corrupt_head_snapshot_is_rejected_on_reopen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "store"
