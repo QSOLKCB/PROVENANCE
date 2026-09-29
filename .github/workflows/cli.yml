@@ -6,6 +6,11 @@ on:
     paths:
       - "provenance-cli/**"
       - "provenance_cli/**"
+      - "provenance_core/**"
+      - "provenance_store/**"
+      - "provenance_custody/**"
+      - "provenance_verify/**"
+      - "provenance_mcp/**"
       - "tests/test_cli.py"
       - "CLI.md"
       - "ROADMAP.md"
@@ -15,6 +20,11 @@ on:
     paths:
       - "provenance-cli/**"
       - "provenance_cli/**"
+      - "provenance_core/**"
+      - "provenance_store/**"
+      - "provenance_custody/**"
+      - "provenance_verify/**"
+      - "provenance_mcp/**"
       - "tests/test_cli.py"
       - "CLI.md"
       - "ROADMAP.md"
