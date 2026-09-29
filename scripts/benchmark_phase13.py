@@ -26,7 +26,10 @@ from provenance_verify import (
     verify_forensic_package,
     verify_forensic_package_reference,
 )
-from provenance_verify._parallel import DEFAULT_MAX_VERIFY_WORKERS
+from provenance_verify._parallel import (
+    DEFAULT_MAX_VERIFY_WORKERS,
+    VERIFY_WORKER_HARD_CAP,
+)
 
 
 def _cpu_model() -> str:
@@ -191,7 +194,8 @@ def main() -> int:
             ),
             "event_count": args.artifact_count,
             "repetitions": args.repetitions,
-            "default_max_verify_workers": DEFAULT_MAX_VERIFY_WORKERS,
+            "verify_worker_hard_cap": VERIFY_WORKER_HARD_CAP,
+            "default_effective_verify_workers": DEFAULT_MAX_VERIFY_WORKERS,
         },
         "bundle_verification": bundle,
         "forensic_package_verification": forensic_package,
