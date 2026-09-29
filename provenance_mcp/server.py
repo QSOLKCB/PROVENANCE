@@ -74,6 +74,10 @@ class ToolFailure(RuntimeError):
     """Expected tool failure returned as an MCP tool result."""
 
 
+class ResourceNotFoundError(LookupError):
+    """Requested provenance resource does not exist."""
+
+
 def _json_text(value: object) -> str:
     return json.dumps(
         value,
@@ -168,9 +172,13 @@ def _read_regular(root: Path, parts: tuple[str, ...], *, label: str) -> bytes:
                     _directory_flags(),
                     dir_fd=current_fd,
                 )
+            except FileNotFoundError as exc:
+                raise ResourceNotFoundError(
+                    f"{label} does not exist"
+                ) from exc
             except OSError as exc:
                 raise ValueError(
-                    f"{label} parent is missing or unsafe: {exc}"
+                    f"{label} parent is unsafe: {exc}"
                 ) from exc
             os.close(current_fd)
             current_fd = next_fd
@@ -181,8 +189,12 @@ def _read_regular(root: Path, parts: tuple[str, ...], *, label: str) -> bytes:
                 _file_flags(),
                 dir_fd=current_fd,
             )
+        except FileNotFoundError as exc:
+            raise ResourceNotFoundError(
+                f"{label} does not exist"
+            ) from exc
         except OSError as exc:
-            raise ValueError(f"{label} is missing or unsafe: {exc}") from exc
+            raise ValueError(f"{label} is unsafe: {exc}") from exc
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 raise ValueError(f"{label} must be a regular file")
@@ -864,7 +876,7 @@ class ProvenanceMCPServer:
             )
         return sorted(resources, key=lambda item: str(item["uri"]))
 
-    def read_resource(self, uri: object) -> dict[str, Any]:
+    def _read_resource(self, uri: object) -> dict[str, Any]:
         if not isinstance(uri, str) or not uri:
             raise MCPProtocolError(-32602, "resource uri must be a non-empty string")
         parsed = urlsplit(uri)
@@ -1000,13 +1012,26 @@ class ProvenanceMCPServer:
 
         raise MCPProtocolError(-32602, f"unsupported resource kind: {kind}")
 
+    def read_resource(self, uri: object) -> dict[str, Any]:
+        try:
+            return self._read_resource(uri)
+        except MCPProtocolError:
+            raise
+        except ResourceNotFoundError as exc:
+            data = {"uri": uri} if isinstance(uri, str) else None
+            raise MCPProtocolError(
+                -32602,
+                str(exc),
+                data,
+            ) from exc
+
     def _modern_params(self, params: object) -> bool:
         if not isinstance(params, dict):
             return False
         meta = params.get("_meta")
         if not isinstance(meta, dict):
             return False
-        return meta.get(_PROTOCOL_VERSION_META_KEY) == MODERN_PROTOCOL_VERSION
+        return _PROTOCOL_VERSION_META_KEY in meta
 
     def _validate_modern_envelope(self, params: object) -> None:
         if not isinstance(params, dict):
@@ -1147,6 +1172,11 @@ class ProvenanceMCPServer:
             return None
 
         if method == "ping":
+            if modern:
+                raise MCPProtocolError(
+                    -32601,
+                    "method not found: ping",
+                )
             result: dict[str, Any] = {}
         elif method == "tools/list":
             result = {"tools": list(TOOLS)}
