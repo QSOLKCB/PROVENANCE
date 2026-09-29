@@ -160,16 +160,23 @@ cd formal
 lake build
 ```
 
-The CI lane additionally runs independent proof checking through the pinned `leanprover/lean-action` integration:
+The CI lane installs the official Lean 4.34.1 Linux release bundle directly from GitHub and verifies its published SHA-256 before use:
 
 ```text
-Lean build
-leanchecker
-nanoda with sorry disallowed
-axiom audit
+sha256:47bf4bbd78f70c2e9670598ab7124d92b6efb7330ff33e5fbb4030f6fd72e4e4
 ```
 
-GitHub caching is disabled for this lane.
+It then runs:
+
+```text
+lake build
+lake env leanchecker
+formal-source placeholder scan
+```
+
+The placeholder scan rejects `sorry`, `admit`, and explicit `axiom` declarations in the proof source.
+
+No Lean build cache is authoritative in this lane.
 
 The formal workflow also verifies that:
 
