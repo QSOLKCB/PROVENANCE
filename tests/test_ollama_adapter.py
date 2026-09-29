@@ -3,6 +3,7 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import http.client as http_client
 import json
+import multiprocessing
 from pathlib import Path
 import tempfile
 import threading
@@ -55,6 +56,38 @@ class _FakeOllamaHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         return
+
+
+def _multiprocess_observe_worker(
+    store_root: str,
+    custody_root: str,
+    base_url: str,
+    start_event,
+    ready_queue,
+    result_queue,
+) -> None:
+    try:
+        store = LocalEvidenceStore(Path(store_root))
+        custody = LocalCustodyLedger(Path(custody_root))
+        adapter = OllamaAdapter(base_url, timeout_seconds=5)
+        ready_queue.put("ready")
+        if not start_event.wait(timeout=10):
+            result_queue.put(("error", "start event timeout"))
+            return
+
+        observation = adapter.observe_generate(
+            model="qwen2.5:0.5b",
+            prompt="same multiprocess request",
+            store=store,
+            custody=custody,
+        )
+        result_queue.put(
+            ("ok", observation.snapshot.manifest_identity)
+        )
+    except BaseException as exc:
+        result_queue.put(
+            ("error", f"{type(exc).__name__}: {exc}")
+        )
 
 
 class OllamaAdapterTests(unittest.TestCase):
@@ -474,6 +507,78 @@ class OllamaAdapterTests(unittest.TestCase):
                 failure_status=200,
             )
             self.assertEqual(store.artifact_count, 2)
+
+    def test_multiprocess_observations_reserve_fresh_pair_before_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+
+            # Pre-create the exact shared roots before either worker constructs
+            # its own store/custody instances, matching the executed review case.
+            LocalEvidenceStore(store_root)
+            LocalCustodyLedger(custody_root)
+
+            ctx = multiprocessing.get_context("spawn")
+            start_event = ctx.Event()
+            ready_queue = ctx.Queue()
+            result_queue = ctx.Queue()
+            base_url = f"http://127.0.0.1:{self.server.server_port}"
+
+            workers = [
+                ctx.Process(
+                    target=_multiprocess_observe_worker,
+                    args=(
+                        str(store_root),
+                        str(custody_root),
+                        base_url,
+                        start_event,
+                        ready_queue,
+                        result_queue,
+                    ),
+                )
+                for _ in range(2)
+            ]
+
+            for worker_process in workers:
+                worker_process.start()
+
+            self.assertEqual(ready_queue.get(timeout=10), "ready")
+            self.assertEqual(ready_queue.get(timeout=10), "ready")
+            start_event.set()
+
+            for worker_process in workers:
+                worker_process.join(timeout=15)
+                self.assertFalse(
+                    worker_process.is_alive(),
+                    "multiprocess observation worker did not exit",
+                )
+                self.assertEqual(worker_process.exitcode, 0)
+
+            results = [
+                result_queue.get(timeout=5),
+                result_queue.get(timeout=5),
+            ]
+
+            successes = [item for item in results if item[0] == "ok"]
+            errors = [item for item in results if item[0] == "error"]
+
+            self.assertEqual(_FakeOllamaHandler.request_count, 1)
+            self.assertEqual(len(successes), 1, results)
+            self.assertEqual(len(errors), 1, results)
+            self.assertIn(
+                "requires a fresh store and custody ledger",
+                errors[0][1],
+            )
+
+            reopened_store = LocalEvidenceStore(store_root)
+            reopened_custody = LocalCustodyLedger(custody_root)
+            self.assertEqual(
+                reopened_store.current_manifest_identity,
+                successes[0][1],
+            )
+            self.assertTrue(reopened_store.verify_current().integrity_verified)
+            self.assertTrue(reopened_custody.verify().integrity_verified)
 
     def test_concurrent_observations_atomically_reserve_fresh_pair(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
