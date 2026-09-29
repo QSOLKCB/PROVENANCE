@@ -9,6 +9,8 @@ import unittest
 
 from provenance_core import (
     ClockAssurance,
+    canonical_json_bytes,
+    parse_canonical_json_bytes,
     CustodyAction,
     EvidenceClass,
     EventCore,
@@ -17,8 +19,17 @@ from provenance_core import (
 from provenance_custody import ClockObservation, LocalCustodyLedger
 from provenance_export import create_forensic_package
 from provenance_store import LocalEvidenceStore
-from provenance_trust import git_anchor_payload
+from provenance_trust import (
+    external_anchor_identity,
+    git_anchor_payload,
+    signature_record_identity,
+)
+from provenance_trust.model import (
+    external_anchor_core,
+    sha256_content_identity,
+)
 from provenance_trust.records import (
+    TrustRecordError,
     create_git_anchor_record,
     create_signature_record,
     write_trust_record,
@@ -238,6 +249,45 @@ class TrustVerificationTests(unittest.TestCase):
             report = verify_signature_record(package, record_path)
             self.assertEqual(report.status, "FAILED")
 
+    def test_non_ascii_signature_armor_is_reported_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = _package_fixture(root)
+            key = root / "key"
+            subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-f",
+                    str(key),
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            record = create_signature_record(package, key)
+            record["core"]["signature"] = (
+                "-----BEGIN SSH SIGNATURE-----\n"
+                "é\n"
+                "-----END SSH SIGNATURE-----\n"
+            )
+            record["signature_identity"] = signature_record_identity(
+                record["core"]
+            )
+            record_path = root / "bad-signature.json"
+            record_path.write_bytes(canonical_json_bytes(record))
+
+            report = verify_signature_record(package, record_path)
+            self.assertEqual(report.status, "FAILED")
+            self.assertTrue(
+                any("ASCII" in error for error in report.errors),
+                report.errors,
+            )
+
     def test_git_commit_anchor_verifies_exact_committed_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -306,6 +356,90 @@ class TrustVerificationTests(unittest.TestCase):
                 git_repo=None,
             )
             self.assertEqual(no_repo.status, "NOT_ATTEMPTED")
+
+    def test_git_anchor_ignores_replace_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = _package_fixture(root)
+            repo = root / "repo"
+            repo.mkdir()
+            _run_git(repo, "init")
+            _run_git(repo, "config", "user.name", "Phase 12 Test")
+            _run_git(repo, "config", "user.email", "phase12@example.invalid")
+
+            import json
+            package_identity = json.loads(
+                (package / "package.json").read_text(encoding="utf-8")
+            )["package_identity"]
+            anchor_path = repo / "anchor.provenance"
+
+            anchor_path.write_bytes(b"not the provenance payload")
+            _run_git(repo, "add", "anchor.provenance")
+            first_commit = _run_git(repo, "commit", "-m", "Original commit")
+            self.assertEqual(first_commit.returncode, 0, first_commit.stderr)
+            original_oid = _run_git(repo, "rev-parse", "HEAD").stdout.strip()
+
+            anchor_path.write_bytes(git_anchor_payload(package_identity))
+            _run_git(repo, "add", "anchor.provenance")
+            second_commit = _run_git(repo, "commit", "-m", "Replacement commit")
+            self.assertEqual(second_commit.returncode, 0, second_commit.stderr)
+            replacement_oid = _run_git(repo, "rev-parse", "HEAD").stdout.strip()
+
+            replaced = _run_git(
+                repo,
+                "replace",
+                original_oid,
+                replacement_oid,
+            )
+            self.assertEqual(replaced.returncode, 0, replaced.stderr)
+
+            with self.assertRaisesRegex(
+                TrustRecordError,
+                "exact PROVENANCE anchor payload",
+            ):
+                create_git_anchor_record(
+                    package,
+                    repo,
+                    original_oid,
+                    "anchor.provenance",
+                )
+
+            object_format = _run_git(
+                repo,
+                "rev-parse",
+                "--show-object-format",
+            ).stdout.strip()
+            payload = git_anchor_payload(package_identity)
+            core = external_anchor_core(
+                subject_identity=package_identity,
+                commit_oid=original_oid,
+                git_object_format=object_format,
+                path="anchor.provenance",
+                payload_content_identity=sha256_content_identity(payload),
+                repository_hint=None,
+            )
+            forged_record = {
+                "core": core,
+                "anchor_identity": external_anchor_identity(core),
+                "self_hash_exclusion": "anchor_identity",
+            }
+            record_path = root / "anchor-record.json"
+            record_path.write_bytes(canonical_json_bytes(forged_record))
+
+            report = verify_git_anchor_record(
+                package,
+                record_path,
+                git_repo=repo,
+            )
+            self.assertEqual(report.status, "FAILED")
+            self.assertTrue(
+                any(
+                    "exact anchor payload" in error
+                    or "does not contain" in error
+                    for error in report.errors
+                ),
+                report.errors,
+            )
 
     def test_git_anchor_rejects_symlink_tree_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
