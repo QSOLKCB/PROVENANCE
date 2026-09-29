@@ -5,14 +5,22 @@ on:
     branches: [main]
     paths:
       - "provenance_mcp/**"
+      - "provenance_export/**"
+      - "provenance_verify/**"
       - "tests/test_mcp.py"
+      - "tests/test_package.py"
+      - "PACKAGE.md"
       - "MCP.md"
       - "ROADMAP.md"
       - ".github/workflows/mcp.yml"
   pull_request:
     paths:
       - "provenance_mcp/**"
+      - "provenance_export/**"
+      - "provenance_verify/**"
       - "tests/test_mcp.py"
+      - "tests/test_package.py"
+      - "PACKAGE.md"
       - "MCP.md"
       - "ROADMAP.md"
       - ".github/workflows/mcp.yml"
