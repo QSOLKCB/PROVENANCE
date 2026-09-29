@@ -398,6 +398,78 @@ class DistributedCustodyTests(unittest.TestCase):
             self.assertFalse((receiver / "package").exists())
             self.assertFalse((receiver / "receipt").exists())
 
+    def test_receiver_state_roots_must_be_disjoint_from_transfer_and_each_other(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sender = root / "sender"
+            receiver = root / "receiver"
+            sender.mkdir()
+            receiver.mkdir()
+            package = _sender_package(sender)
+            sender_key = sender / "sender-key"
+            receiver_key = receiver / "receiver-key"
+            _key(sender_key)
+            _key(receiver_key)
+
+            bundle = create_transfer_bundle(
+                package,
+                sender / "transfer",
+                source_system="sender",
+                destination_system="receiver",
+                sender_key=sender_key,
+            )
+
+            with self.assertRaisesRegex(
+                TransferError,
+                "receiver custody destination must be outside the transfer bundle",
+            ):
+                receive_transfer(
+                    bundle.path,
+                    receiver / "package",
+                    receiver / "receipt",
+                    bundle.path / "receiver-custody",
+                    receiver_system="receiver",
+                    receiver_key=receiver_key,
+                )
+
+            with self.assertRaisesRegex(
+                TransferError,
+                "receipt and receiver custody destinations must be disjoint",
+            ):
+                receive_transfer(
+                    bundle.path,
+                    receiver / "package",
+                    receiver / "state" / "receipt",
+                    receiver / "state",
+                    receiver_system="receiver",
+                    receiver_key=receiver_key,
+                )
+
+            self.assertFalse((bundle.path / "receiver-custody").exists())
+            self.assertFalse((receiver / "package").exists())
+
+    def test_transfer_destination_inside_source_package_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sender = root / "sender"
+            sender.mkdir()
+            package = _sender_package(sender)
+            sender_key = sender / "sender-key"
+            _key(sender_key)
+
+            with self.assertRaisesRegex(
+                TransferError,
+                "outside the source package",
+            ):
+                create_transfer_bundle(
+                    package,
+                    package / "nested-transfer",
+                    source_system="sender",
+                    destination_system="receiver",
+                    sender_key=sender_key,
+                )
+            self.assertFalse((package / "nested-transfer").exists())
+
     def test_offer_tamper_breaks_transfer_before_receiver_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
