@@ -21,9 +21,14 @@ from provenance_core import (
     EventCore,
     EventEnvelope,
     Relationship,
+    artifact_record_identity,
     canonical_json_bytes,
+    custody_identity,
+    event_identity,
+    manifest_identity,
     parse_canonical_json_bytes,
     require_sha256_identity,
+    sha256_identity,
 )
 from provenance_custody import LocalCustodyLedger, observe_clock
 from provenance_store import LocalEvidenceStore
@@ -218,6 +223,29 @@ def _canonical_object(data: bytes, *, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be a JSON object")
     return value
+
+
+def _require_envelope_identity(
+    value: dict[str, Any],
+    *,
+    expected_identity: str,
+    identity_field: str,
+    identity_function,
+    label: str,
+) -> None:
+    if value.get("self_hash_exclusion") != identity_field:
+        raise ValueError(f"{label} self_hash_exclusion changed")
+    if value.get(identity_field) != expected_identity:
+        raise ValueError(f"{label} claimed identity does not match resource URI")
+    core = value.get("core")
+    if not isinstance(core, dict):
+        raise ValueError(f"{label} core must be an object")
+    try:
+        computed = identity_function(core)
+    except Exception as exc:
+        raise ValueError(f"{label} identity cannot be recomputed: {exc}") from exc
+    if computed != expected_identity:
+        raise ValueError(f"{label} content does not match resource identity")
 
 
 def _tool_text(payload: object, *, is_error: bool = False) -> dict[str, Any]:
@@ -569,14 +597,19 @@ class ProvenanceMCPServer:
             label="manifest resource",
         )
         value = _canonical_object(data, label="manifest resource")
-        if value.get("manifest_identity") != identity:
-            raise ValueError("current manifest resource identity changed")
+        _require_envelope_identity(
+            value,
+            expected_identity=identity,
+            identity_field="manifest_identity",
+            identity_function=manifest_identity,
+            label="manifest resource",
+        )
         return value
 
-    def _artifact_record(
+    def _artifact_record_entry(
         self,
         content_identity: str,
-    ) -> dict[str, Any] | None:
+    ) -> tuple[str, dict[str, Any]] | None:
         _digest(content_identity, label="artifact identity")
         records = self.store.root / "objects" / "artifact_records" / "sha256"
         try:
@@ -585,6 +618,8 @@ class ProvenanceMCPServer:
             raise ValueError(
                 f"artifact record directory cannot be enumerated: {exc}"
             ) from exc
+
+        matches: list[tuple[str, dict[str, Any]]] = []
         for entry in entries:
             if (
                 entry.is_symlink()
@@ -606,9 +641,49 @@ class ProvenanceMCPServer:
                 label="artifact record",
             )
             value = _canonical_object(data, label="artifact record")
+            try:
+                computed_identity = artifact_record_identity(value)
+            except Exception as exc:
+                raise ValueError(
+                    f"artifact record identity cannot be recomputed: {exc}"
+                ) from exc
+            if entry.name != computed_identity.split(":", 1)[1] + ".json":
+                raise ValueError(
+                    "artifact record filename does not match record identity"
+                )
             if value.get("content_identity") == content_identity:
-                return value
-        return None
+                matches.append((computed_identity, value))
+
+        if not matches:
+            return None
+        if len(matches) > 1:
+            manifest = self._current_manifest_object()
+            if manifest is not None:
+                core = manifest.get("core")
+                if isinstance(core, dict):
+                    artifacts = core.get("artifacts")
+                    if isinstance(artifacts, list):
+                        for item in artifacts:
+                            if (
+                                isinstance(item, dict)
+                                and item.get("content_identity") == content_identity
+                            ):
+                                bound = item.get("record_identity")
+                                for record_identity_value, value in matches:
+                                    if record_identity_value == bound:
+                                        return record_identity_value, value
+            raise ValueError(
+                "artifact identity is bound by multiple record identities "
+                "without one current manifest binding"
+            )
+        return matches[0]
+
+    def _artifact_record(
+        self,
+        content_identity: str,
+    ) -> dict[str, Any] | None:
+        entry = self._artifact_record_entry(content_identity)
+        return entry[1] if entry is not None else None
 
     def _inspect(self, arguments: object) -> dict[str, Any]:
         args = _require_object(arguments, label="provenance.inspect arguments")
@@ -665,45 +740,16 @@ class ProvenanceMCPServer:
                 "resource_uri": f"provenance://custody/{identity}",
             }
 
-        record = self._artifact_record(identity)
-        if record is not None:
+        record_entry = self._artifact_record_entry(identity)
+        if record_entry is not None:
+            record_identity_value, record = record_entry
             return {
                 "kind": "artifact",
                 "identity": identity,
                 "retention": record.get("retention"),
                 "media_type": record.get("media_type"),
                 "byte_count": record.get("byte_count"),
-                "record_identity": (
-                    "sha256:"
-                    + next(
-                        entry.name[:-5]
-                        for entry in sorted(
-                            (
-                                self.store.root
-                                / "objects"
-                                / "artifact_records"
-                                / "sha256"
-                            ).iterdir(),
-                            key=lambda item: item.name,
-                        )
-                        if entry.is_file()
-                        and not entry.is_symlink()
-                        and _SHA256_RE.fullmatch(entry.name[:-5])
-                        and _canonical_object(
-                            _read_regular(
-                                self.store.root,
-                                (
-                                    "objects",
-                                    "artifact_records",
-                                    "sha256",
-                                    entry.name,
-                                ),
-                                label="artifact record",
-                            ),
-                            label="artifact record",
-                        ).get("content_identity") == identity
-                    )
-                ),
+                "record_identity": record_identity_value,
                 "resource_uri": f"provenance://artifact/{identity}",
             }
 
@@ -900,7 +946,14 @@ class ProvenanceMCPServer:
                 ),
                 label="event resource",
             )
-            _canonical_object(data, label="event resource")
+            value = _canonical_object(data, label="event resource")
+            _require_envelope_identity(
+                value,
+                expected_identity=identity,
+                identity_field="event_identity",
+                identity_function=event_identity,
+                label="event resource",
+            )
             return {
                 "contents": [
                     {
@@ -921,7 +974,14 @@ class ProvenanceMCPServer:
                 ),
                 label="custody resource",
             )
-            _canonical_object(data, label="custody resource")
+            value = _canonical_object(data, label="custody resource")
+            _require_envelope_identity(
+                value,
+                expected_identity=identity,
+                identity_field="custody_identity",
+                identity_function=custody_identity,
+                label="custody resource",
+            )
             return {
                 "contents": [
                     {
@@ -944,11 +1004,13 @@ class ProvenanceMCPServer:
                 label="manifest resource",
             )
             value = _canonical_object(data, label="manifest resource")
-            if value.get("manifest_identity") != identity:
-                raise MCPProtocolError(
-                    -32602,
-                    "manifest resource identity does not match uri",
-                )
+            _require_envelope_identity(
+                value,
+                expected_identity=identity,
+                identity_field="manifest_identity",
+                identity_function=manifest_identity,
+                label="manifest resource",
+            )
             return {
                 "contents": [
                     {
@@ -993,9 +1055,10 @@ class ProvenanceMCPServer:
                 label="artifact resource",
             )
             if len(data) != record.get("byte_count"):
-                raise MCPProtocolError(
-                    -32602,
-                    "artifact byte count changed",
+                raise ValueError("artifact byte count changed")
+            if sha256_identity(data) != identity:
+                raise ValueError(
+                    "artifact content does not match resource identity"
                 )
             return {
                 "contents": [
