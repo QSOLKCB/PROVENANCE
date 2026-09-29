@@ -1202,6 +1202,14 @@ def _parser() -> argparse.ArgumentParser:
     transfer_receive.add_argument("--custody", required=True)
     transfer_receive.add_argument("--receiver-system", required=True)
     transfer_receive.add_argument("--receiver-key", required=True)
+    transfer_receive.add_argument(
+        "--expected-sender-fingerprint",
+        required=True,
+        help=(
+            "trusted sender Ed25519 fingerprint obtained independently "
+            "of the transfer bundle"
+        ),
+    )
 
     verify_transfer_parser = subparsers.add_parser("verify-transfer")
     verify_transfer_parser.add_argument("--transfer", required=True)
@@ -1287,11 +1295,17 @@ def main(argv: list[str] | None = None) -> int:
                 args.custody,
                 receiver_system=args.receiver_system,
                 receiver_key=args.receiver_key,
+                expected_sender_fingerprint=(
+                    args.expected_sender_fingerprint
+                ),
             )
             verification = verify_transfer_receipt(
                 receipt.path,
                 transfer_bundle=args.transfer,
                 received_package=args.package_destination,
+                expected_sender_fingerprint=(
+                    args.expected_sender_fingerprint
+                ),
             )
             if not verification.integrity_verified:
                 raise CliError(
