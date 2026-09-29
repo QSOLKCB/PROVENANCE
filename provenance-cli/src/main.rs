@@ -14,6 +14,8 @@ const BACKEND_COMMANDS: &[&str] = &[
     "anchor-payload",
     "anchor-git",
     "verify-assurance",
+    "redact-disclosure",
+    "verify-disclosure",
 ];
 
 const TUI_COMMANDS: &[&str] = &["record", "inspect", "verify", "finalize", "export", "package"];
@@ -37,6 +39,8 @@ fn print_help() {
     println!("  anchor-payload   Write canonical bytes to commit as a Git anchor");
     println!("  anchor-git       Bind a package identity to an existing Git commit");
     println!("  verify-assurance Verify integrity/signature/anchor dimensions");
+    println!("  redact-disclosure Create a redacted DERIVED disclosure");
+    println!("  verify-disclosure Verify disclosure lineage and optional source");
     println!("  tui              Keyboard-first store/custody command palette");
     println!();
     println!("Type 'provenance <command> --help' for backend command options.");
@@ -300,6 +304,8 @@ mod tests {
                 "anchor-payload",
                 "anchor-git",
                 "verify-assurance",
+                "redact-disclosure",
+                "verify-disclosure",
             ]
         );
     }
