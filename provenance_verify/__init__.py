@@ -20,4 +20,23 @@ __all__ = [
     "VerificationReport",
     "verify_bundle",
     "verify_custody_records",
+    "FORENSIC_PACKAGE_REPORT_SCHEMA",
+    "FORENSIC_PACKAGE_SCHEMA",
+    "ForensicPackageVerificationReport",
+    "derive_declared_gaps",
+    "expected_schema_metadata",
+    "expected_verification_metadata",
+    "forensic_package_identity",
+    "verify_forensic_package",
 ]
+
+from .package import (
+    FORENSIC_PACKAGE_REPORT_SCHEMA,
+    FORENSIC_PACKAGE_SCHEMA,
+    ForensicPackageVerificationReport,
+    derive_declared_gaps,
+    expected_schema_metadata,
+    expected_verification_metadata,
+    forensic_package_identity,
+    verify_forensic_package,
+)
