@@ -81,6 +81,22 @@ See `MCP.md` for the transport, resource, compatibility, and evidence-boundary c
 
 ---
 
+## Read-only localhost viewer
+
+Phase 9 adds a dependency-free inspection surface over finalized evidence:
+
+```bash
+python3 -m provenance_ui \\
+  --store /path/to/store \\
+  --custody /path/to/custody
+```
+
+The viewer binds to `127.0.0.1:8765` by default, accepts only GET/HEAD, runs the existing independent bundle and custody verifiers, and has no evidentiary authority. LAN/public binding requires explicit `--allow-non-loopback` operator action.
+
+See `UI.md` for the read-only, gap-visibility, timeline, graph, and verification-dimension contract.
+
+---
+
 ## Why PROVENANCE Exists
 
 Modern AI systems rarely perform a single isolated operation.
@@ -731,6 +747,8 @@ See [MCP.md](MCP.md) for the Phase 7 stdio MCP interface contract.
 
 See [CLI.md](CLI.md) for the Phase 8 Rust terminal CLI/TUI contract.
 
+See [UI.md](UI.md) for the Phase 9 read-only localhost HTTP viewer contract.
+
 ---
 
 # Implementation Roadmap
@@ -758,7 +776,7 @@ Phase 7  MCP
    ↓
 Phase 8  Rust terminal CLI/TUI
    ↓
-Phase 9  read-only local viewer
+Phase 9  read-only localhost HTTP viewer
    ↓
 additional adapters
 ```
