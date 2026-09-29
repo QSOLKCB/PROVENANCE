@@ -6,8 +6,10 @@ on:
       - "provenance_core/**"
       - "provenance_verify/**"
       - "provenance_trust/**"
+      - "provenance_privacy/**"
       - "docs/BUNDLE.md"
       - "docs/TRUST.md"
+      - "docs/PRIVACY.md"
       - "tests/test_verify.py"
       - ".github/workflows/verify.yml"
   push:
@@ -16,8 +18,10 @@ on:
       - "provenance_core/**"
       - "provenance_verify/**"
       - "provenance_trust/**"
+      - "provenance_privacy/**"
       - "docs/BUNDLE.md"
       - "docs/TRUST.md"
+      - "docs/PRIVACY.md"
       - "tests/test_verify.py"
       - ".github/workflows/verify.yml"
   workflow_dispatch:
