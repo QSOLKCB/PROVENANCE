@@ -480,6 +480,44 @@ class LocalCustodyLedger:
             finally:
                 os.close(records_fd)
 
+    def record_bytes_for_subject(
+        self,
+        subject_identity: str,
+    ) -> tuple[bytes, ...]:
+        """Return one independently verified subject chain without mutation."""
+
+        require_sha256_identity(
+            subject_identity,
+            label="custody subject identity",
+        )
+        records = self._record_bytes()
+        full_report = verify_custody_records(records)
+        if not full_report.integrity_verified:
+            raise CustodyLedgerError(
+                "cannot read subject chain from invalid custody ledger: "
+                + "; ".join(full_report.errors)
+            )
+
+        selected: list[bytes] = []
+        for raw in records:
+            value = parse_canonical_json_bytes(raw)
+            if (
+                isinstance(value, dict)
+                and isinstance(value.get("core"), dict)
+                and value["core"].get("subject_identity")
+                == subject_identity
+            ):
+                selected.append(raw)
+
+        if selected:
+            report = verify_custody_records(selected)
+            if not report.integrity_verified:
+                raise CustodyLedgerError(
+                    "selected subject custody chain failed verification: "
+                    + "; ".join(report.errors)
+                )
+        return tuple(selected)
+
     def verify(self) -> CustodyVerificationReport:
         try:
             records = self._record_bytes()
