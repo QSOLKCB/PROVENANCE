@@ -141,21 +141,35 @@ def _copy_package_directory(
     source_package: Path,
     destination: Path,
     *,
+    expected_package_identity: str,
     source_package_fd: int | None = None,
-) -> tuple[Path, tuple[int, int]]:
+) -> tuple[Path, tuple[int, int], int]:
     if destination.exists() or destination.is_symlink():
-        report = verify_forensic_package(destination)
-        if not report.integrity_verified:
-            raise TransferError(
-                "existing received package is invalid: "
-                + "; ".join(report.errors)
+        existing_fd = os.open(destination, _directory_flags())
+        try:
+            report = verify_forensic_package_fd(existing_fd)
+            if (
+                not report.integrity_verified
+                or report.package_identity != expected_package_identity
+            ):
+                raise TransferError(
+                    "existing received package conflicts with transfer"
+                )
+            return (
+                destination,
+                _directory_identity(existing_fd),
+                existing_fd,
             )
-        return destination, _path_identity(destination)
+        except Exception:
+            os.close(existing_fd)
+            raise
 
     parent = destination.parent.resolve(strict=True)
     parent_fd = os.open(parent, _directory_flags())
     staging_name = f".{destination.name}.{uuid.uuid4().hex}.tmp"
     created = False
+    staging_fd: int | None = None
+    returned_fd = False
     try:
         os.mkdir(staging_name, mode=0o700, dir_fd=parent_fd)
         created = True
@@ -180,14 +194,20 @@ def _copy_package_directory(
             os.fsync(staging_fd)
         finally:
             os.close(source_fd)
-            os.close(staging_fd)
 
-        staging_path = parent / staging_name
-        staged = verify_forensic_package(staging_path)
-        if not staged.integrity_verified:
+        staged = verify_forensic_package_fd(staging_fd)
+        if (
+            not staged.integrity_verified
+            or staged.package_identity != expected_package_identity
+        ):
+            detail = (
+                "; ".join(staged.errors)
+                if not staged.integrity_verified
+                else "package identity differs from transfer subject"
+            )
             raise TransferError(
-                "staged received package failed verification: "
-                + "; ".join(staged.errors)
+                "staged received package failed transfer binding: "
+                + detail
             )
 
         try:
@@ -204,21 +224,42 @@ def _copy_package_directory(
                 str(exc) == "package destination must not already exist"
                 and (destination.exists() or destination.is_symlink())
             ):
-                existing = verify_forensic_package(destination)
-                if existing.integrity_verified:
-                    _remove_tree_at(parent_fd, staging_name)
-                    os.fsync(parent_fd)
-                    created = False
-                    return destination, _path_identity(destination)
+                existing_fd = os.open(destination, _directory_flags())
+                try:
+                    existing = verify_forensic_package_fd(existing_fd)
+                    if (
+                        existing.integrity_verified
+                        and existing.package_identity
+                        == expected_package_identity
+                    ):
+                        _remove_tree_at(parent_fd, staging_name)
+                        os.fsync(parent_fd)
+                        created = False
+                        os.close(staging_fd)
+                        staging_fd = None
+                        returned_fd = True
+                        return (
+                            destination,
+                            _directory_identity(existing_fd),
+                            existing_fd,
+                        )
+                except Exception:
+                    os.close(existing_fd)
+                    raise
+                os.close(existing_fd)
             raise
+
         created = False
-        final_report = verify_forensic_package(final)
-        if not final_report.integrity_verified:
+        final_report = verify_forensic_package_fd(staging_fd)
+        if (
+            not final_report.integrity_verified
+            or final_report.package_identity != expected_package_identity
+        ):
             raise TransferError(
-                "published received package failed verification: "
-                + "; ".join(final_report.errors)
+                "published received package no longer matches transfer subject"
             )
-        return final, staging_identity
+        returned_fd = True
+        return final, staging_identity, staging_fd
     except Exception:
         if created:
             try:
@@ -228,8 +269,9 @@ def _copy_package_directory(
                 pass
         raise
     finally:
+        if staging_fd is not None and not returned_fd:
+            os.close(staging_fd)
         os.close(parent_fd)
-
 
 def create_transfer_bundle(
     package_dir: Path | str,
