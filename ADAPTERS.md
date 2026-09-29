@@ -43,20 +43,19 @@ Adapters are not permitted to add provider-specific fields to the universal even
 
 ## Evidence classification
 
-Exact bytes directly visible at the adapter boundary are emitted through `OBSERVED` events.
+Exact payload bytes directly visible at the adapter boundary are emitted through `OBSERVED` events. Synthetic invocation/request descriptors are retained conservatively as `DECLARED` evidence, while operation-level completion summaries are `DERIVED`.
 
 Examples:
 
 ~~~text
 HTTP request body
 HTTP response body
-process argv descriptor
 process stdin
 process stdout
 process stderr
 ~~~
 
-Adapter/provider metadata is stored as a retained JSON artifact and referenced by a `DECLARED` metadata event.
+Request/invocation descriptors and adapter/provider metadata are stored as retained artifacts referenced by `DECLARED` events.
 
 This is intentionally conservative. A provider field does not become independently observed truth merely because an adapter can parse it.
 
@@ -68,6 +67,8 @@ provenance.adapter.process
 ~~~
 
 Extensions remain artifact content. They do not modify core schema semantics.
+
+The reference adapters use one role-neutral `application/octet-stream` artifact media type for retained adapter bytes. Request/response/stdin/stdout roles live in events, which prevents identical bytes from being rebound to conflicting artifact metadata merely because their transport role differs.
 
 ## Generic HTTP adapter
 
