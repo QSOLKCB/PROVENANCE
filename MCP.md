@@ -44,6 +44,8 @@ Both roots are explicit. Phase 7 does not start a network listener and does not 
 
 An MCP server is permanently bound to the filesystem identity of the store root it opened at construction. Current-state refreshes happen in-place through that bound store object. If the configured store pathname is renamed/replaced so it resolves to a different directory inode, the server rejects the operation rather than silently switching to the replacement store.
 
+Refresh holds the originally bound root directory descriptor across authoritative HEAD reconstruction. HEAD is read descriptor-relatively from that bound root; reconstructed state is not accepted until the configured pathname is checked again against the same bound filesystem identity. A rename/replacement during refresh therefore fails instead of being accepted as refreshed state.
+
 ---
 
 # Tools
@@ -80,6 +82,8 @@ SAME OCCURRENCE
 A successful record call is also durably represented in the MCP operational working-state journal before the tool returns. The journal contains identities and working membership, not a second evidence schema, and is excluded from finalized evidence identity.
 
 The working-state journal is multi-writer safe. All MCP server processes sharing a store serialize working-state recovery, record publication, journal replacement, and finalization through one POSIX advisory lock in the store root. After acquiring that lock, a server reloads the current store HEAD and replays the complete durable journal before performing its mutation. A writer therefore extends the merged working set instead of replacing it from stale process-local state.
+
+Journal read, replacement, and removal use the same already-validated store-root descriptor held by that lock; they do not reopen the mutable configured pathname. Before a tool is allowed to return successfully, the pathname is checked again against the server's original store-root identity. If the pathname is swapped while a record is being published, the request fails and any operational journal remains with the original bound store rather than being split onto the replacement root.
 
 This rule covers both concurrent writes and stale long-lived server instances:
 
