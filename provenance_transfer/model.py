@@ -196,3 +196,53 @@ def transfer_signature_core(
         "key_fingerprint": ed25519_key_fingerprint(normalized),
         "signature": signature,
     }
+
+
+def transfer_bundle_core(
+    *,
+    package_identity: str,
+    evidence_manifest_identity: str,
+    offer_identity_value: str,
+    offer_signature_identity: str,
+    source_system: str,
+    destination_system: str,
+    sender_transfer_custody_identity: str,
+    sender_custody_record_count: int,
+    members: list[dict[str, object]],
+) -> dict[str, Any]:
+    for label, value in (
+        ("package identity", package_identity),
+        ("evidence manifest identity", evidence_manifest_identity),
+        ("offer identity", offer_identity_value),
+        ("offer signature identity", offer_signature_identity),
+        ("sender transfer custody identity", sender_transfer_custody_identity),
+    ):
+        require_sha256_identity(value, label=label)
+    source = _system(source_system, label="source_system")
+    destination = _system(destination_system, label="destination_system")
+    if (
+        type(sender_custody_record_count) is not int
+        or sender_custody_record_count < 1
+    ):
+        raise ValueError("sender custody record count must be positive")
+    if not isinstance(members, list):
+        raise TypeError("transfer bundle members must be a list")
+    return {
+        "schema": TRANSFER_BUNDLE_SCHEMA,
+        "canonicalization": CANONICALIZATION_ID,
+        "protocol": TRANSFER_PROTOCOL,
+        "transfer_state": "FINALIZED",
+        "subject_kind": "forensic_package",
+        "subject_identity": package_identity,
+        "evidence_manifest_identity": evidence_manifest_identity,
+        "offer_identity": offer_identity_value,
+        "offer_signature_identity": offer_signature_identity,
+        "source_system": source,
+        "destination_system": destination,
+        "sender_transfer_custody_identity": (
+            sender_transfer_custody_identity
+        ),
+        "sender_custody_record_count": sender_custody_record_count,
+        "members": members,
+        "ordering": "PARTIAL",
+    }
