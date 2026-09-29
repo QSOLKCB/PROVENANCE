@@ -307,6 +307,38 @@ class TrustVerificationTests(unittest.TestCase):
             )
             self.assertEqual(no_repo.status, "NOT_ATTEMPTED")
 
+    def test_git_anchor_rejects_symlink_tree_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = _package_fixture(root)
+            repo = root / "repo"
+            repo.mkdir()
+            _run_git(repo, "init")
+            _run_git(repo, "config", "user.name", "Phase 12 Test")
+            _run_git(repo, "config", "user.email", "phase12@example.invalid")
+
+            import json
+            identity = json.loads(
+                (package / "package.json").read_text(encoding="utf-8")
+            )["package_identity"]
+            payload = git_anchor_payload(identity)
+            link = repo / "anchor.provenance"
+            link.symlink_to(payload.decode("utf-8"))
+            self.assertEqual(_run_git(repo, "add", "anchor.provenance").returncode, 0)
+            commit = _run_git(repo, "commit", "-m", "Symlink anchor")
+            self.assertEqual(commit.returncode, 0, commit.stderr)
+
+            with self.assertRaisesRegex(
+                Exception,
+                "regular committed blob",
+            ):
+                create_git_anchor_record(
+                    package,
+                    repo,
+                    "HEAD",
+                    "anchor.provenance",
+                )
+
     def test_anchor_and_integrity_are_independent_dimensions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
