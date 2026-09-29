@@ -31,19 +31,15 @@ They must not become inseparable.
 
 Normative engineering law remains in:
 
-```text
-AGENTS.md
-INVARIANTS.md
-```
+- [`../AGENTS.md`](../AGENTS.md) — repository and coding-agent rules.
+- [`INVARIANTS.md`](INVARIANTS.md) — formal evidence and verification invariants.
 
 Project context and engineering ancestry remain in:
 
-```text
-README.md
-README4AIs.md
-DONORS.md
-LINEAGE.md
-```
+- [`../README.md`](../README.md) — the project landing page.
+- [`../README4AIs.md`](../README4AIs.md) — machine-oriented project guidance.
+- [`DONORS.md`](DONORS.md) — donor and provenance acknowledgements.
+- [`LINEAGE.md`](LINEAGE.md) — architectural lineage and influences.
 
 ---
 
