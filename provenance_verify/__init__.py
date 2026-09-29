@@ -11,6 +11,8 @@ from .verifier import (
     VerificationReport,
     verify_bundle,
     verify_bundle_fd,
+    verify_bundle_fd_reference,
+    verify_bundle_reference,
 )
 
 __all__ = [
@@ -21,6 +23,8 @@ __all__ = [
     "VerificationReport",
     "verify_bundle",
     "verify_bundle_fd",
+    "verify_bundle_fd_reference",
+    "verify_bundle_reference",
     "verify_custody_records",
     "FORENSIC_PACKAGE_REPORT_SCHEMA",
     "FORENSIC_PACKAGE_SCHEMA",
@@ -31,6 +35,7 @@ __all__ = [
     "expected_verification_metadata",
     "forensic_package_identity",
     "verify_forensic_package",
+    "verify_forensic_package_reference",
     "ANCHOR_VERIFICATION_REPORT_SCHEMA",
     "ASSURANCE_VERIFICATION_REPORT_SCHEMA",
     "SIGNATURE_VERIFICATION_REPORT_SCHEMA",
@@ -52,6 +57,7 @@ from .package import (
     expected_verification_metadata,
     forensic_package_identity,
     verify_forensic_package,
+    verify_forensic_package_reference,
 )
 
 from .trust import (
