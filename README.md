@@ -4,12 +4,12 @@
 
 PROVENANCE records **who did what, when, where, why, and how — backed by evidence**. It captures actions, binds artifacts and events to cryptographic identities, preserves append-only custody, supports signed offline handoff between systems, and independently verifies the resulting record.
 
-PROVENANCE has completed the frozen implementation and formal-verification work through **Phase 18**, with final archival publication now pending on Zenodo. **`v1.0.0`** (`0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742`) remains the immutable implementation target of the Lean model, while **`v1.1.1`** (`c24a7c14f162b19df9ad0b674f5d28ae0cf4029f`) is the final formal/archive release.
+PROVENANCE has completed **Phase 18**, including formal verification and archival publication. **`v1.0.0`** (`0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742`) remains the immutable implementation target of the Lean model, while **`v1.1.1`** (`c24a7c14f162b19df9ad0b674f5d28ae0cf4029f`) is the final formal/archive release. The archival record is published on Zenodo as **[10.5281/zenodo.23043860](https://doi.org/10.5281/zenodo.23043860)**.
 
 **Start here:** [Getting Started](docs/GETTING_STARTED.md) · [Usage Instructions](docs/INSTRUCTIONS.md) · [Release Trust Lane](docs/RELEASE.md) · [Documentation](docs/README.md) · [Roadmap](docs/ROADMAP.md)
 
 [![Version](https://img.shields.io/badge/version-v1.1.1-4c1.svg)](https://github.com/QSOLKCB/PROVENANCE/releases/tag/v1.1.1)
-[![Phase](https://img.shields.io/badge/roadmap-Phase%2018%20in%20progress-f59e0b.svg)](docs/ROADMAP.md)
+[![Phase](https://img.shields.io/badge/roadmap-Phase%2018%20complete-2ea44f.svg)](docs/ROADMAP.md)
 [![Core CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml)
 [![Verify CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml)
 [![Package CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml)
@@ -106,7 +106,7 @@ The core remains provider- and interface-neutral. Verification consumes finalize
 
 ## Status
 
-Implementation is frozen at **v1.0.0**, and the formal/archive release is finalized at **v1.1.1**. Phase 18 remains open only for Zenodo publication:
+Implementation is frozen at **v1.0.0**, the formal/archive release is finalized at **v1.1.1**, and **Phase 18 is complete**:
 
 ```text
 canonical evidence core
@@ -143,7 +143,7 @@ Any future implementation, schema-semantic, verifier-semantic, or evidence-contr
 
 Phase 17 is complete.
 
-Phase 18 is now **in progress**. The initial Lean proof set formalizes four narrow claims against the frozen baseline:
+Phase 18 is **complete**. The final Lean proof set formalizes four narrow claims against the frozen baseline:
 
 ```text
 FV-01 self-hash exclusion
@@ -152,7 +152,7 @@ FV-03 classification non-promotion
 FV-04 presentation non-interference
 ```
 
-The proof toolchain is pinned to **Lean 4.34.1**, and the archival DOI is **10.5281/zenodo.23043860**.
+The proof toolchain is pinned to **Lean 4.34.1**. The authoritative `v1.1.1` tag-triggered formal verification run is **36620535919** and completed successfully. The published archival DOI is **[10.5281/zenodo.23043860](https://doi.org/10.5281/zenodo.23043860)**.
 
 The proof does not claim whole-program verification. See [Formal Verification](docs/FORMAL_VERIFICATION.md), [Archival Release](docs/ARCHIVAL_RELEASE.md), [Release Trust Lane](docs/RELEASE.md), and [Roadmap](docs/ROADMAP.md).
 

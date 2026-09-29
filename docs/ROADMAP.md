@@ -1713,10 +1713,10 @@ An immutable penultimate tag exists whose exact commit SHA is the declared targe
 ## Status
 
 ```text
-IN PROGRESS
+COMPLETE
 FORMAL PROOF SET COMPLETE
-ARCHIVAL RELEASE v1.1.1 BEING FINALIZED
-ZENODO PUBLICATION PENDING
+ARCHIVAL RELEASE v1.1.1 PUBLISHED
+ZENODO RECORD PUBLISHED
 ```
 
 Current archival identifier:
@@ -1734,12 +1734,22 @@ FROZEN IMPLEMENTATION TARGET
 
 FORMAL / ARCHIVAL RELEASE
   tag:    v1.1.1
-  status: being finalized; Zenodo publication pending
+  status: published; Phase 18 complete
 ```
 
 The `v1.0.0` tag remains the immutable implementation target of the Lean model.
 The `v1.1.1` tag identifies the formal/archive release layer and does not redefine
 the frozen implementation target.
+
+Completion record:
+
+```text
+final archival tag:          v1.1.1
+final archival commit:       c24a7c14f162b19df9ad0b674f5d28ae0cf4029f
+tag-triggered formal run:    36620535919
+formal workflow result:      PASSED
+published Zenodo DOI:        10.5281/zenodo.23043860
+```
 
 Reference formal toolchain:
 
@@ -1885,7 +1895,7 @@ a final immutable release tag
 a Zenodo archival record binding the release and proof evidence
 ```
 
-The formal proof set is complete against the immutable `v1.0.0` target. The final formal/archive release is being finalized as `v1.1.1`; Zenodo publication of DOI `10.5281/zenodo.23043860` remains pending.
+All Phase 18 exit-gate conditions are satisfied. The formal proof set is complete against the immutable `v1.0.0` target, the final formal/archive release is `v1.1.1`, the authoritative tag-triggered formal workflow run `36620535919` passed, and DOI `10.5281/zenodo.23043860` is published on Zenodo.
 
 The final release claim must remain narrower than the exact invariants actually formalized and executed.
 

@@ -1,18 +1,28 @@
 # Phase 18 Archival Release Protocol
 
-## Reserved / minted DOI
+## Published DOI
 
 ```text
 10.5281/zenodo.23043860
 ```
 
-This DOI is the archival identifier reserved for the Phase 18 PROVENANCE record.
+This DOI is the published archival identifier for the completed Phase 18 PROVENANCE record.
 
 The implementation authority remains separate and immutable:
 
 ```text
 v1.0.0
 0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
+```
+
+Published archival record:
+
+```text
+final tag:          v1.1.1
+final commit:       c24a7c14f162b19df9ad0b674f5d28ae0cf4029f
+formal run:         36620535919
+formal result:      PASSED
+Zenodo DOI:         10.5281/zenodo.23043860
 ```
 
 The final archival record must identify both the DOI and the frozen implementation target.
@@ -106,7 +116,7 @@ Recommended interpretation:
 
 ## Final publication sequence
 
-After this Phase 18 implementation PR is merged:
+This sequence is complete for `v1.1.1`:
 
 1. require the `formal` workflow to be green on the exact proof/archive commit;
 2. retain the workflow run ID and generated Phase 18 artifact;
@@ -159,4 +169,4 @@ published Zenodo record
 DOI bound to frozen target and proof/archive material
 ```
 
-Until the final tag and Zenodo publication are complete, the roadmap status remains in progress.
+All Phase 18 exit-gate conditions are satisfied. The final archival tag is `v1.1.1`, authoritative tag-triggered formal run `36620535919` passed, and DOI `10.5281/zenodo.23043860` is published.

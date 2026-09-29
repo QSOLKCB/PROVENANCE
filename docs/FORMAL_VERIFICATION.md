@@ -3,8 +3,9 @@
 ## Status
 
 ```text
-FORMAL PROOF SET IMPLEMENTED
-FINAL ARCHIVAL TAG / ZENODO PUBLICATION PENDING
+FORMAL PROOF SET COMPLETE
+FINAL ARCHIVAL TAG: v1.1.1
+ZENODO PUBLICATION: PUBLISHED
 ```
 
 This document defines the formal-verification boundary for PROVENANCE Phase 18.
@@ -16,6 +17,16 @@ tag:        v1.0.0
 commit:     0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
 Lean:       leanprover/lean4:v4.34.1
 DOI:        10.5281/zenodo.23043860
+```
+
+Final archival identity:
+
+```text
+release tag:     v1.1.1
+release commit:  c24a7c14f162b19df9ad0b674f5d28ae0cf4029f
+formal run:      36620535919
+formal result:   PASSED
+Zenodo DOI:      10.5281/zenodo.23043860
 ```
 
 The Lean sources prove properties of an explicit model of selected stable invariants. They do **not** constitute whole-program verification of the Python/Rust runtime.
