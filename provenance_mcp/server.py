@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import stat
 import sys
 from typing import Any, BinaryIO, Iterator, TextIO
@@ -20,7 +19,9 @@ from provenance_core import (
     EvidenceClass,
     EventCore,
     EventEnvelope,
+    ManifestArtifact,
     Relationship,
+    RetentionState,
     artifact_record_identity,
     canonical_json_bytes,
     custody_identity,
@@ -52,6 +53,9 @@ _CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
 _CLIENT_CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapabilities"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _HEX_DIGEST_LENGTH = 64
+
+_MCP_WORKING_STATE = ".provenance-mcp-working.json"
+_MCP_WORKING_SCHEMA = "provenance.mcp-working-state.v1"
 
 _CAPABILITIES = {
     "tools": {"listChanged": False},
@@ -172,6 +176,128 @@ def _file_flags() -> int:
         | os.O_CLOEXEC
         | getattr(os, "O_NONBLOCK", 0)
     )
+
+
+def _file_create_flags() -> int:
+    return (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | os.O_NOFOLLOW
+        | os.O_CLOEXEC
+    )
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    offset = 0
+    while offset < len(data):
+        written = os.write(fd, data[offset:])
+        if written <= 0:
+            raise OSError("short write")
+        offset += written
+
+
+def _directory_identity(fd: int) -> tuple[int, int]:
+    value = os.fstat(fd)
+    if not stat.S_ISDIR(value.st_mode):
+        raise ValueError("expected directory descriptor")
+    return value.st_dev, value.st_ino
+
+
+def _fd_is_within(
+    directory_fd: int,
+    protected: set[tuple[int, int]],
+) -> bool:
+    current_fd = os.dup(directory_fd)
+    try:
+        while True:
+            current_identity = _directory_identity(current_fd)
+            if current_identity in protected:
+                return True
+            parent_fd = os.open("..", _directory_flags(), dir_fd=current_fd)
+            parent_identity = _directory_identity(parent_fd)
+            if parent_identity == current_identity:
+                os.close(parent_fd)
+                return False
+            os.close(current_fd)
+            current_fd = parent_fd
+    finally:
+        os.close(current_fd)
+
+
+def _copy_directory_contents(source_fd: int, destination_fd: int) -> None:
+    for name in sorted(os.listdir(source_fd)):
+        if name in {".", ".."} or "/" in name:
+            raise ValueError("unsafe snapshot member name")
+        info = os.stat(name, dir_fd=source_fd, follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode):
+            os.mkdir(name, mode=0o700, dir_fd=destination_fd)
+            source_child = os.open(name, _directory_flags(), dir_fd=source_fd)
+            destination_child = os.open(
+                name,
+                _directory_flags(),
+                dir_fd=destination_fd,
+            )
+            try:
+                _copy_directory_contents(source_child, destination_child)
+                os.fsync(destination_child)
+            finally:
+                os.close(source_child)
+                os.close(destination_child)
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(
+                f"snapshot contains unsupported filesystem object {name!r}"
+            )
+
+        source_file = os.open(name, _file_flags(), dir_fd=source_fd)
+        destination_file = os.open(
+            name,
+            _file_create_flags(),
+            0o600,
+            dir_fd=destination_fd,
+        )
+        try:
+            while True:
+                chunk = os.read(source_file, 1024 * 1024)
+                if not chunk:
+                    break
+                _write_all(destination_file, chunk)
+            os.fsync(destination_file)
+        finally:
+            os.close(source_file)
+            os.close(destination_file)
+
+
+def _remove_tree_at(parent_fd: int, name: str) -> None:
+    try:
+        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(info.st_mode):
+        child_fd = os.open(name, _directory_flags(), dir_fd=parent_fd)
+        try:
+            for child in os.listdir(child_fd):
+                _remove_tree_at(child_fd, child)
+        finally:
+            os.close(child_fd)
+        os.rmdir(name, dir_fd=parent_fd)
+        return
+    os.unlink(name, dir_fd=parent_fd)
+
+
+def _parent_path_still_matches(
+    parent: Path,
+    expected_identity: tuple[int, int],
+) -> bool:
+    try:
+        fd = os.open(parent, _directory_flags())
+    except OSError:
+        return False
+    try:
+        return _directory_identity(fd) == expected_identity
+    finally:
+        os.close(fd)
 
 
 def _read_regular(root: Path, parts: tuple[str, ...], *, label: str) -> bytes:
@@ -410,6 +536,266 @@ class ProvenanceMCPServer:
         self._era: str | None = None
         self._legacy_initialized = False
         self._pending_artifacts: set[str] = set()
+        self._pending_events: set[str] = set()
+        self._working_base_manifest_identity = (
+            self.store.current_manifest_identity
+        )
+        self._recover_working_state()
+
+    def _working_state_path(self) -> Path:
+        return self.store.root / _MCP_WORKING_STATE
+
+    def _read_working_state(self) -> dict[str, Any] | None:
+        try:
+            data = _read_regular(
+                self.store.root,
+                (_MCP_WORKING_STATE,),
+                label="MCP working state",
+            )
+        except ResourceNotFoundError:
+            return None
+        value = _canonical_object(data, label="MCP working state")
+        expected = {
+            "schema",
+            "phase",
+            "base_manifest_identity",
+            "finalized_manifest_identity",
+            "artifacts",
+            "events",
+            "pending_verified_artifacts",
+        }
+        if set(value) != expected:
+            raise RuntimeError("MCP working state keys changed")
+        if value.get("schema") != _MCP_WORKING_SCHEMA:
+            raise RuntimeError("MCP working state schema changed")
+        if value.get("phase") not in {"recording", "finalized"}:
+            raise RuntimeError("MCP working state phase is invalid")
+        return value
+
+    def _write_working_state(
+        self,
+        *,
+        phase: str,
+        finalized_manifest_identity: str | None = None,
+    ) -> None:
+        artifacts: list[dict[str, object]] = []
+        for identity in sorted(self._pending_artifacts):
+            entry = self.store.current_artifact_entry(identity)
+            if entry is None:
+                raise RuntimeError(
+                    f"pending MCP artifact is missing from working store: {identity}"
+                )
+            artifacts.append(entry.to_dict())
+
+        value = {
+            "schema": _MCP_WORKING_SCHEMA,
+            "phase": phase,
+            "base_manifest_identity": self._working_base_manifest_identity,
+            "finalized_manifest_identity": finalized_manifest_identity,
+            "artifacts": artifacts,
+            "events": sorted(self._pending_events),
+            "pending_verified_artifacts": sorted(self._pending_artifacts),
+        }
+        data = canonical_json_bytes(value)
+
+        root_fd = os.open(self.store.root, _directory_flags())
+        temp_name = f".{_MCP_WORKING_STATE}.{uuid.uuid4().hex}.tmp"
+        fd: int | None = None
+        try:
+            fd = os.open(
+                temp_name,
+                _file_create_flags(),
+                0o600,
+                dir_fd=root_fd,
+            )
+            _write_all(fd, data)
+            os.fsync(fd)
+            os.close(fd)
+            fd = None
+            os.rename(
+                temp_name,
+                _MCP_WORKING_STATE,
+                src_dir_fd=root_fd,
+                dst_dir_fd=root_fd,
+            )
+            os.fsync(root_fd)
+        finally:
+            if fd is not None:
+                os.close(fd)
+            try:
+                os.unlink(temp_name, dir_fd=root_fd)
+            except FileNotFoundError:
+                pass
+            os.close(root_fd)
+
+    def _clear_working_state(self) -> None:
+        root_fd = os.open(self.store.root, _directory_flags())
+        try:
+            try:
+                os.unlink(_MCP_WORKING_STATE, dir_fd=root_fd)
+            except FileNotFoundError:
+                return
+            os.fsync(root_fd)
+        finally:
+            os.close(root_fd)
+
+    def _decode_working_artifacts(
+        self,
+        value: object,
+    ) -> tuple[ManifestArtifact, ...]:
+        if not isinstance(value, list):
+            raise RuntimeError("MCP working artifacts must be a list")
+        result: list[ManifestArtifact] = []
+        for raw in value:
+            if not isinstance(raw, dict) or set(raw) != {
+                "content_identity",
+                "record_identity",
+                "retention",
+            }:
+                raise RuntimeError("MCP working artifact entry is malformed")
+            try:
+                result.append(
+                    ManifestArtifact(
+                        content_identity=raw.get("content_identity"),
+                        record_identity=raw.get("record_identity"),
+                        retention=RetentionState(raw.get("retention")),
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    f"MCP working artifact cannot be reconstructed: {exc}"
+                ) from exc
+        return tuple(result)
+
+    def _journal_members_in_current_manifest(
+        self,
+        artifacts: tuple[ManifestArtifact, ...],
+        events: tuple[str, ...],
+    ) -> bool:
+        manifest = self._current_manifest_object()
+        if manifest is None:
+            return False
+        core = manifest.get("core")
+        if not isinstance(core, dict):
+            return False
+        manifest_artifacts_raw = core.get("artifacts")
+        manifest_events_raw = core.get("events")
+        if (
+            not isinstance(manifest_artifacts_raw, list)
+            or not isinstance(manifest_events_raw, list)
+        ):
+            return False
+        manifest_artifacts = {
+            item.get("content_identity"): item
+            for item in manifest_artifacts_raw
+            if isinstance(item, dict)
+        }
+        for entry in artifacts:
+            if manifest_artifacts.get(entry.content_identity) != entry.to_dict():
+                return False
+        return set(events).issubset(
+            {item for item in manifest_events_raw if isinstance(item, str)}
+        )
+
+    def _complete_recovered_finalization(
+        self,
+        manifest_identity_value: str,
+    ) -> None:
+        report = self.store.verify_current()
+        if (
+            not report.integrity_verified
+            or report.manifest_identity != manifest_identity_value
+        ):
+            raise RuntimeError(
+                "recovered MCP finalization does not match verified HEAD"
+            )
+        for identity in sorted(self._pending_artifacts):
+            self._append_custody(
+                identity,
+                CustodyAction.VERIFIED,
+                actor="provenance-verify",
+                source=MCP_INTERFACE_ID,
+                related_identity=manifest_identity_value,
+            )
+        self._append_custody(
+            manifest_identity_value,
+            CustodyAction.VERIFIED,
+            actor="provenance-verify",
+            source=MCP_INTERFACE_ID,
+        )
+        custody_report = self.custody.verify()
+        if not custody_report.integrity_verified:
+            raise RuntimeError(
+                "recovered MCP custody verification failed: "
+                + "; ".join(custody_report.errors)
+            )
+        self._clear_working_state()
+        self._pending_artifacts.clear()
+        self._pending_events.clear()
+        self._working_base_manifest_identity = manifest_identity_value
+
+    def _recover_working_state(self) -> None:
+        state = self._read_working_state()
+        if state is None:
+            return
+
+        artifacts = self._decode_working_artifacts(state.get("artifacts"))
+        events_raw = state.get("events")
+        pending_raw = state.get("pending_verified_artifacts")
+        if not isinstance(events_raw, list) or not all(
+            isinstance(item, str) for item in events_raw
+        ):
+            raise RuntimeError("MCP working events are malformed")
+        if not isinstance(pending_raw, list) or not all(
+            isinstance(item, str) for item in pending_raw
+        ):
+            raise RuntimeError("MCP pending verification set is malformed")
+        events = tuple(events_raw)
+        self._pending_artifacts = set(pending_raw)
+        self._pending_events = set(events)
+
+        base = state.get("base_manifest_identity")
+        finalized = state.get("finalized_manifest_identity")
+        for label, identity in (
+            ("base", base),
+            ("finalized", finalized),
+        ):
+            if identity is not None:
+                try:
+                    require_sha256_identity(identity, label=f"MCP {label} manifest")
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError(str(exc)) from exc
+
+        current = self.store.current_manifest_identity
+        phase = state.get("phase")
+        if phase == "recording" and current == base:
+            self.store.restore_unfinalized_membership(
+                artifacts=artifacts,
+                events=events,
+                expected_head=base,
+            )
+            self._working_base_manifest_identity = base
+            return
+
+        recovered_manifest = (
+            finalized
+            if phase == "finalized"
+            else current
+        )
+        if (
+            isinstance(recovered_manifest, str)
+            and current == recovered_manifest
+            and self._journal_members_in_current_manifest(
+                artifacts,
+                events,
+            )
+        ):
+            self._complete_recovered_finalization(recovered_manifest)
+            return
+
+        raise RuntimeError(
+            "MCP working state does not match the current verified store HEAD"
+        )
 
     def _append_custody(
         self,
@@ -531,6 +917,13 @@ class ProvenanceMCPServer:
                 receipt.content_identity,
             )
         )
+        self._pending_events.update(
+            (
+                declaration_event.event_identity,
+                receipt_event.event_identity,
+            )
+        )
+        self._write_working_state(phase="recording")
 
         return {
             "classification": "DECLARED",
@@ -554,6 +947,10 @@ class ProvenanceMCPServer:
             raise ValueError("scope must be 'open' or 'closed'")
 
         snapshot = self.store.finalize(scope=scope)
+        self._write_working_state(
+            phase="finalized",
+            finalized_manifest_identity=snapshot.manifest_identity,
+        )
         for identity in sorted(self._pending_artifacts):
             self._append_custody(
                 identity,
@@ -574,7 +971,10 @@ class ProvenanceMCPServer:
                 "custody verification failed after finalization: "
                 + "; ".join(custody_report.errors)
             )
+        self._clear_working_state()
         self._pending_artifacts.clear()
+        self._pending_events.clear()
+        self._working_base_manifest_identity = snapshot.manifest_identity
 
         return {
             "manifest_identity": snapshot.manifest_identity,
@@ -626,72 +1026,40 @@ class ProvenanceMCPServer:
         content_identity: str,
     ) -> tuple[str, dict[str, Any]] | None:
         _digest(content_identity, label="artifact identity")
-        records = self.store.root / "objects" / "artifact_records" / "sha256"
-        try:
-            entries = sorted(records.iterdir(), key=lambda item: item.name)
-        except OSError as exc:
-            raise ValueError(
-                f"artifact record directory cannot be enumerated: {exc}"
-            ) from exc
-
-        matches: list[tuple[str, dict[str, Any]]] = []
-        for entry in entries:
-            if (
-                entry.is_symlink()
-                or not entry.is_file()
-                or not entry.name.endswith(".json")
-                or not _SHA256_RE.fullmatch(entry.name[:-5])
-            ):
-                raise ValueError(
-                    f"unsafe or unexpected artifact record entry: {entry.name}"
-                )
-            data = _read_regular(
-                self.store.root,
-                (
-                    "objects",
-                    "artifact_records",
-                    "sha256",
-                    entry.name,
-                ),
-                label="artifact record",
-            )
-            value = _canonical_object(data, label="artifact record")
-            try:
-                computed_identity = artifact_record_identity(value)
-            except Exception as exc:
-                raise ValueError(
-                    f"artifact record identity cannot be recomputed: {exc}"
-                ) from exc
-            if entry.name != computed_identity.split(":", 1)[1] + ".json":
-                raise ValueError(
-                    "artifact record filename does not match record identity"
-                )
-            if value.get("content_identity") == content_identity:
-                matches.append((computed_identity, value))
-
-        if not matches:
+        current = self.store.current_artifact_entry(content_identity)
+        if current is None or current.record_identity is None:
             return None
-        if len(matches) > 1:
-            manifest = self._current_manifest_object()
-            if manifest is not None:
-                core = manifest.get("core")
-                if isinstance(core, dict):
-                    artifacts = core.get("artifacts")
-                    if isinstance(artifacts, list):
-                        for item in artifacts:
-                            if (
-                                isinstance(item, dict)
-                                and item.get("content_identity") == content_identity
-                            ):
-                                bound = item.get("record_identity")
-                                for record_identity_value, value in matches:
-                                    if record_identity_value == bound:
-                                        return record_identity_value, value
+
+        record_digest = _digest(
+            current.record_identity,
+            label="artifact record identity",
+        )
+        data = _read_regular(
+            self.store.root,
+            (
+                "objects",
+                "artifact_records",
+                "sha256",
+                record_digest + ".json",
+            ),
+            label="artifact record",
+        )
+        value = _canonical_object(data, label="artifact record")
+        try:
+            computed_identity = artifact_record_identity(value)
+        except Exception as exc:
             raise ValueError(
-                "artifact identity is bound by multiple record identities "
-                "without one current manifest binding"
+                f"artifact record identity cannot be recomputed: {exc}"
+            ) from exc
+        if computed_identity != current.record_identity:
+            raise ValueError(
+                "artifact record content does not match working record identity"
             )
-        return matches[0]
+        if value.get("content_identity") != content_identity:
+            raise ValueError(
+                "artifact record content identity does not match resource"
+            )
+        return current.record_identity, value
 
     def _artifact_record(
         self,
@@ -790,43 +1158,98 @@ class ProvenanceMCPServer:
             raise ToolFailure("current snapshot failed verification before export")
 
         supplied = Path(destination_text).expanduser()
+        if supplied.name in {"", ".", ".."}:
+            raise ValueError("export destination name is invalid")
         if supplied.is_symlink() or supplied.exists():
             raise ValueError("export destination must not already exist")
-        destination = supplied.resolve(strict=False)
-        parent = destination.parent
-        if not parent.is_dir() or parent.is_symlink():
-            raise ValueError(
-                "export destination parent must be an existing non-symlink directory"
-            )
 
-        protected_roots = (
+        supplied_parent = supplied.parent
+        if supplied_parent.is_symlink():
+            raise ValueError("export destination parent must not be a symlink")
+        try:
+            parent = supplied_parent.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(
+                f"export destination parent cannot be resolved: {exc}"
+            ) from exc
+        destination = parent / supplied.name
+
+        protected_paths = (
             Path(self.store.root).resolve(strict=True),
             Path(self.custody.root).resolve(strict=True),
             snapshot.resolve(strict=True),
         )
-        for protected_root in protected_roots:
-            try:
-                destination.relative_to(protected_root)
-            except ValueError:
-                continue
-            raise ValueError(
-                "export destination must be outside the live store, "
-                "custody ledger, and source snapshot"
-            )
-
+        protected_identities: set[tuple[int, int]] = set()
+        protected_fds: list[int] = []
         try:
-            shutil.copytree(snapshot, destination, symlinks=True)
-            exported_report = verify_bundle(destination)
-            if (
-                not exported_report.integrity_verified
-                or exported_report.manifest_identity != manifest_identity
-            ):
-                raise ToolFailure(
-                    "exported snapshot failed independent verification"
+            for path in protected_paths:
+                protected_fd = os.open(path, _directory_flags())
+                protected_fds.append(protected_fd)
+                protected_identities.add(_directory_identity(protected_fd))
+
+            parent_fd = os.open(parent, _directory_flags())
+            parent_identity = _directory_identity(parent_fd)
+            created = False
+            try:
+                if _fd_is_within(parent_fd, protected_identities):
+                    raise ValueError(
+                        "export destination must be outside the live store, "
+                        "custody ledger, and source snapshot"
+                    )
+
+                os.mkdir(supplied.name, mode=0o700, dir_fd=parent_fd)
+                created = True
+                destination_fd = os.open(
+                    supplied.name,
+                    _directory_flags(),
+                    dir_fd=parent_fd,
                 )
-        except Exception:
-            shutil.rmtree(destination, ignore_errors=True)
-            raise
+                source_fd = os.open(snapshot, _directory_flags())
+                try:
+                    _copy_directory_contents(source_fd, destination_fd)
+                    os.fsync(destination_fd)
+                finally:
+                    os.close(source_fd)
+                    os.close(destination_fd)
+                os.fsync(parent_fd)
+
+                if (
+                    not _parent_path_still_matches(parent, parent_identity)
+                    or _fd_is_within(parent_fd, protected_identities)
+                ):
+                    raise ValueError(
+                        "export destination parent changed during publication"
+                    )
+
+                exported_report = verify_bundle(destination)
+                if (
+                    not exported_report.integrity_verified
+                    or exported_report.manifest_identity != manifest_identity
+                ):
+                    raise ToolFailure(
+                        "exported snapshot failed independent verification"
+                    )
+
+                if (
+                    not _parent_path_still_matches(parent, parent_identity)
+                    or _fd_is_within(parent_fd, protected_identities)
+                ):
+                    raise ValueError(
+                        "export destination parent changed during verification"
+                    )
+            except Exception:
+                if created:
+                    try:
+                        _remove_tree_at(parent_fd, supplied.name)
+                        os.fsync(parent_fd)
+                    except OSError:
+                        pass
+                raise
+            finally:
+                os.close(parent_fd)
+        finally:
+            for protected_fd in protected_fds:
+                os.close(protected_fd)
 
         custody_identity = self._append_custody(
             manifest_identity,
