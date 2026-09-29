@@ -324,8 +324,11 @@ provenance transfer-receive \
   --receipt /receiver/evidence/receipt \
   --custody /receiver/custody \
   --receiver-system org-b/system-9 \
-  --receiver-key /path/to/receiver-ed25519-key
+  --receiver-key /path/to/receiver-ed25519-key \
+  --expected-sender-fingerprint 'SHA256:<trusted-sender-fingerprint>'
 ~~~
+
+The sender fingerprint must come from an independent trust channel, not from the transfer bundle being accepted. Acceptance fails closed when the supplied fingerprint does not match the signing key.
 
 The package, transfer bundle, and receipt are distinct immutable identities.
 
