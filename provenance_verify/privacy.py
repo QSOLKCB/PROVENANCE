@@ -708,6 +708,53 @@ def _verify_disclosure_root_fd(
     )
 
 
+def verify_selective_disclosure_fd(
+    disclosure_fd: int,
+    *,
+    source_package_fd: int | None = None,
+) -> DisclosureVerificationReport:
+    """Verify already-open disclosure/source-package directory descriptors."""
+
+    try:
+        root_fd = os.dup(disclosure_fd)
+        if not stat.S_ISDIR(os.fstat(root_fd).st_mode):
+            os.close(root_fd)
+            raise ValueError(
+                "disclosure descriptor must reference a directory"
+            )
+    except (OSError, TypeError, ValueError) as exc:
+        return DisclosureVerificationReport(
+            False,
+            None,
+            None,
+            None,
+            "FAILED",
+            "NOT_ATTEMPTED_SOURCE_WITHHELD",
+            "NOT_ATTEMPTED",
+            False,
+            (),
+            (str(exc),),
+        )
+    source_fd: int | None = None
+    try:
+        if source_package_fd is not None:
+            source_fd = os.dup(source_package_fd)
+            if not stat.S_ISDIR(os.fstat(source_fd).st_mode):
+                os.close(source_fd)
+                source_fd = None
+                raise ValueError(
+                    "source package descriptor must reference a directory"
+                )
+        return _verify_disclosure_root_fd(
+            root_fd,
+            source_package_fd=source_fd,
+        )
+    finally:
+        if source_fd is not None:
+            os.close(source_fd)
+        os.close(root_fd)
+
+
 def verify_selective_disclosure(
     disclosure_dir: Path | str,
     *,
