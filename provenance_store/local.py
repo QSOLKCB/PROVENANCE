@@ -169,6 +169,18 @@ class LocalEvidenceStore:
         _digest(content_identity, label="artifact content identity")
         return self._artifacts.get(content_identity)
 
+    def refresh_from_disk(self) -> None:
+        # Reuse the original store binding. _root_fd() rejects a pathname
+        # replacement before any state is reconstructed from disk.
+        with self._root_fd():
+            pass
+
+        self._artifacts = {}
+        self._events = set()
+        self._current_manifest_identity = None
+        self._session_changed_artifacts.clear()
+        self._load_head()
+
     def _initialize(self) -> None:
         self._ensure_root_directory_durable()
         try:
