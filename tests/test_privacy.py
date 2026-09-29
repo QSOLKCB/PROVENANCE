@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from provenance_core import (
     EvidenceClass,
@@ -15,6 +17,7 @@ from provenance_core import (
 )
 from provenance_custody import LocalCustodyLedger
 from provenance_export import create_forensic_package
+import provenance_privacy.disclosure as disclosure_module
 from provenance_privacy.disclosure import (
     PrivacyError,
     create_redacted_disclosure,
@@ -110,6 +113,60 @@ class Phase14PrivacyTests(unittest.TestCase):
             derivative = (disclosure.path / "derivative.bin").read_bytes()
             self.assertIn(b"************", derivative)
             self.assertNotIn(SECRET, derivative)
+
+    def test_destination_race_does_not_replace_existing_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package, source_identity = _package_fixture(root)
+            destination = root / "raced-disclosure"
+            original_rename = disclosure_module._rename_noreplace_at
+            raced_inode: int | None = None
+
+            def create_raced_destination(
+                source_dir_fd: int,
+                source_name: str,
+                destination_dir_fd: int,
+                destination_name: str,
+            ) -> None:
+                nonlocal raced_inode
+                os.mkdir(destination_name, dir_fd=destination_dir_fd)
+                raced_inode = os.stat(
+                    destination_name,
+                    dir_fd=destination_dir_fd,
+                    follow_symlinks=False,
+                ).st_ino
+                original_rename(
+                    source_dir_fd,
+                    source_name,
+                    destination_dir_fd,
+                    destination_name,
+                )
+
+            with mock.patch.object(
+                disclosure_module,
+                "_rename_noreplace_at",
+                side_effect=create_raced_destination,
+            ):
+                with self.assertRaisesRegex(
+                    PrivacyError,
+                    "destination must not already exist",
+                ):
+                    create_redacted_disclosure(
+                        package,
+                        source_identity,
+                        [_secret_range()],
+                        destination,
+                    )
+
+            self.assertTrue(destination.is_dir())
+            self.assertEqual(destination.stat().st_ino, raced_inode)
+            self.assertEqual(list(destination.iterdir()), [])
+            self.assertFalse(
+                any(
+                    path.name.startswith(".raced-disclosure.")
+                    for path in root.iterdir()
+                )
+            )
 
     def test_source_package_allows_exact_transform_recomputation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
