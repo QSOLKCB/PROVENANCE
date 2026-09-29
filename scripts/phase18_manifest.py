@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -139,15 +140,29 @@ def _validate_toolchain(proof_commit: str) -> None:
         )
 
 
+_PLACEHOLDER_PATTERN = re.compile(r"\b(sorry|admit|axiom)\b")
+
+
+def _lean_sources(proof_commit: str) -> list[str]:
+    listing = _git_text(
+        "ls-tree", "-r", "--name-only", proof_commit, "formal"
+    )
+    paths = [line for line in listing.splitlines() if line.endswith(".lean")]
+    if "formal/ProvenanceFormal.lean" not in paths:
+        raise SystemExit(
+            "formal/ProvenanceFormal.lean is missing from the proof commit"
+        )
+    return paths
+
+
 def _reject_placeholders(proof_commit: str) -> None:
-    proof = _blob_bytes(
-        proof_commit,
-        "formal/ProvenanceFormal.lean",
-    ).decode("utf-8")
-    for token in ("sorry", "admit", "axiom "):
-        if token in proof:
+    for relative in _lean_sources(proof_commit):
+        proof = _blob_bytes(proof_commit, relative).decode("utf-8")
+        match = _PLACEHOLDER_PATTERN.search(proof)
+        if match:
             raise SystemExit(
-                f"formal proof source contains forbidden placeholder/token: {token!r}"
+                f"{relative} contains forbidden placeholder/token: "
+                f"{match.group(0)!r}"
             )
 
 

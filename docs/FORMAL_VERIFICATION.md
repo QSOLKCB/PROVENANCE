@@ -174,7 +174,7 @@ lake env leanchecker ProvenanceFormal
 formal-source placeholder scan
 ```
 
-The placeholder scan rejects `sorry`, `admit`, and explicit `axiom` declarations in the proof source.
+The placeholder scan matches the whole tokens `sorry`, `admit`, and `axiom` in every `.lean` source under `formal/` as read from the recorded proof commit, and rejects the proof set if any match is found.
 
 The successful workflow retains the executed verification evidence itself:
 
