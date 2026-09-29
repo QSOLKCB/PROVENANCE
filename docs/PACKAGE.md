@@ -115,6 +115,8 @@ verify source snapshot
 
 A failed build removes its staging/output directory rather than leaving a partially published package.
 
+Publication uses kernel-enforced `renameat2(RENAME_NOREPLACE)` semantics. A destination created by another process after the initial absence check is never replaced. After publication the producer verifies the final directory by descriptor and requires its filesystem identity to match the staged package. Platforms without the no-replace primitive fail closed rather than falling back to overwrite-capable rename behavior.
+
 ## Verification
 
 Python:
