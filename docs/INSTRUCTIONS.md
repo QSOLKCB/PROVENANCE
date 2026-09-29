@@ -466,6 +466,12 @@ See [TRANSFER.md](TRANSFER.md).
 
 Fast development validation remains modular.
 
+Build the Rust CLI before running `tests.test_cli` or the complete Python discovery, because the terminal integration tests execute the compiled development binary:
+
+```bash
+cargo build --manifest-path provenance-cli/Cargo.toml --locked
+```
+
 Python suites:
 
 ```bash
@@ -488,7 +494,6 @@ python3 -m unittest tests.test_transfer -v
 Rust CLI:
 
 ```bash
-cargo build --manifest-path provenance-cli/Cargo.toml --locked
 cargo test --manifest-path provenance-cli/Cargo.toml --locked
 ```
 
