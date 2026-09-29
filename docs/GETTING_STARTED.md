@@ -115,6 +115,22 @@ For a retained artifact identity in a package:
 ```
 
 The original package is unchanged. See [PRIVACY.md](PRIVACY.md).
+## Optional: hand the package to another system
+
+For independently operated sender/receiver environments:
+
+```bash
+./provenance-cli/target/debug/provenance transfer-create \
+  --package .demo/forensic-package \
+  --source-system sender/demo \
+  --destination-system receiver/demo \
+  --sender-key /path/to/sender-key \
+  --output .demo/transfer
+```
+
+The resulting transfer directory can be moved offline and accepted later with `transfer-receive`.
+
+See [TRANSFER.md](TRANSFER.md) before using distributed custody in a real deployment; system labels and signing keys do not automatically prove legal/organizational identity.
 ## Next
 
 - [Full usage instructions](INSTRUCTIONS.md)
