@@ -432,6 +432,7 @@ class DistributedCustodyTests(unittest.TestCase):
                     receiver_key=receiver_key,
                 )
 
+            (receiver / "state").mkdir()
             with self.assertRaisesRegex(
                 TransferError,
                 "receipt and receiver custody destinations must be disjoint",
