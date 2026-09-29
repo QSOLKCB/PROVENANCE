@@ -216,6 +216,7 @@ class ForensicPackageTests(unittest.TestCase):
             self.assertIn("OPEN_COLLECTION", gaps)
             self.assertIn("MISSING_ARTIFACT", gaps)
             self.assertIn("EVENT_COLLECTION_STATUS", gaps)
+            self.assertIn("PARTIAL_CUSTODY_COVERAGE", gaps)
             self.assertIn(missing, gaps)
             self.assertIn(manifest, gaps)
 
@@ -233,6 +234,42 @@ class ForensicPackageTests(unittest.TestCase):
             self.assertTrue(
                 verify_forensic_package(package.path).integrity_verified
             )
+
+    def test_zero_custody_records_are_valid_but_explicitly_declared(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+            store = LocalEvidenceStore(store_root)
+            LocalCustodyLedger(custody_root)
+
+            artifact = store.put_artifact(
+                b"evidence without custody\n",
+                media_type="text/plain",
+                retain_content=True,
+            )
+            event = EventEnvelope.seal(
+                EventCore(
+                    evidence_class=EvidenceClass.OBSERVED,
+                    actor="adapter:phase11-test",
+                    operation="package.no-custody",
+                    outputs=(artifact.content_identity,),
+                )
+            )
+            store.put_event(event)
+            store.finalize(scope="closed")
+
+            package = create_forensic_package(
+                store_root,
+                custody_root,
+                root / "package",
+            )
+            report = verify_forensic_package(package.path)
+            self.assertTrue(report.integrity_verified, report.errors)
+            self.assertEqual(report.custody_record_count, 0)
+            gaps = (package.path / "gaps.json").read_text(encoding="utf-8")
+            self.assertIn("CUSTODY_NOT_PRESENT", gaps)
+            self.assertTrue((package.path / "custody" / "sha256").is_dir())
 
     def test_tampered_member_and_extra_member_fail_verification(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
