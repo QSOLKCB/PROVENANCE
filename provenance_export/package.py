@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ctypes
+import errno
 import hashlib
 import os
 from pathlib import Path
@@ -24,11 +26,27 @@ from provenance_verify import (
     verify_bundle_fd,
     verify_custody_records,
     verify_forensic_package,
+    verify_forensic_package_fd,
 )
 
 
 _CHUNK_SIZE = 1024 * 1024
 _CUSTODY_ATTEMPTS = 4
+_RENAME_NOREPLACE = 1
+
+try:
+    _LIBC = ctypes.CDLL(None, use_errno=True)
+    _RENAMEAT2 = _LIBC.renameat2
+    _RENAMEAT2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    _RENAMEAT2.restype = ctypes.c_int
+except AttributeError:
+    _RENAMEAT2 = None
 
 
 class ForensicPackageError(RuntimeError):
@@ -52,7 +70,6 @@ def _directory_flags() -> int:
     ]
     for operation, name in (
         (os.open, "dir_fd support for os.open"),
-        (os.rename, "dir_fd support for os.rename"),
         (os.unlink, "dir_fd support for os.unlink"),
     ):
         if operation not in os.supports_dir_fd:
@@ -63,6 +80,37 @@ def _directory_flags() -> int:
             "filesystem support: " + ", ".join(missing)
         )
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _rename_noreplace_at(
+    source_dir_fd: int,
+    source_name: str,
+    destination_dir_fd: int,
+    destination_name: str,
+) -> None:
+    if _RENAMEAT2 is None:
+        raise ForensicPackageError(
+            "safe no-replace publication requires renameat2(RENAME_NOREPLACE)"
+        )
+    ctypes.set_errno(0)
+    result = _RENAMEAT2(
+        source_dir_fd,
+        os.fsencode(source_name),
+        destination_dir_fd,
+        os.fsencode(destination_name),
+        _RENAME_NOREPLACE,
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise ForensicPackageError(
+            "package destination must not already exist"
+        )
+    raise ForensicPackageError(
+        "no-replace package publication failed: "
+        + os.strerror(error)
+    )
 
 
 def _file_read_flags() -> int:
@@ -554,6 +602,7 @@ def create_forensic_package(
             _directory_flags(),
             dir_fd=parent_fd,
         )
+        staging_identity = _directory_identity(staging_fd)
         members: list[dict[str, object]] = []
         try:
             os.mkdir("evidence", mode=0o700, dir_fd=staging_fd)
@@ -710,8 +759,19 @@ def create_forensic_package(
                 "package destination parent changed before verification"
             )
 
-        staging_path = parent / staging_name
-        staged_report = verify_forensic_package(staging_path)
+        staged_fd = os.open(
+            staging_name,
+            _directory_flags(),
+            dir_fd=parent_fd,
+        )
+        try:
+            if _directory_identity(staged_fd) != staging_identity:
+                raise ForensicPackageError(
+                    "staged package filesystem identity changed"
+                )
+            staged_report = verify_forensic_package_fd(staged_fd)
+        finally:
+            os.close(staged_fd)
         if (
             not staged_report.integrity_verified
             or staged_report.package_identity != package_identity
@@ -730,13 +790,15 @@ def create_forensic_package(
                 "package destination parent changed before publication"
             )
 
-        os.rename(
+        _rename_noreplace_at(
+            parent_fd,
             staging_name,
+            parent_fd,
             supplied.name,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
         )
-        created_name = supplied.name
+        # Do not recursively delete the final name on any later failure: an
+        # attacker could replace that directory after publication.
+        created_name = None
         os.fsync(parent_fd)
 
         if not _path_matches(parent, parent_identity):
@@ -745,7 +807,19 @@ def create_forensic_package(
             )
 
         final_path = parent / supplied.name
-        final_report = verify_forensic_package(final_path)
+        final_fd = os.open(
+            supplied.name,
+            _directory_flags(),
+            dir_fd=parent_fd,
+        )
+        try:
+            if _directory_identity(final_fd) != staging_identity:
+                raise ForensicPackageError(
+                    "published package filesystem identity changed"
+                )
+            final_report = verify_forensic_package_fd(final_fd)
+        finally:
+            os.close(final_fd)
         if (
             not final_report.integrity_verified
             or final_report.package_identity != package_identity
