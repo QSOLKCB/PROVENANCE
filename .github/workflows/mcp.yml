@@ -9,9 +9,9 @@ on:
       - "provenance_verify/**"
       - "tests/test_mcp.py"
       - "tests/test_package.py"
-      - "PACKAGE.md"
-      - "MCP.md"
-      - "ROADMAP.md"
+      - "docs/PACKAGE.md"
+      - "docs/MCP.md"
+      - "docs/ROADMAP.md"
       - ".github/workflows/mcp.yml"
   pull_request:
     paths:
@@ -20,9 +20,9 @@ on:
       - "provenance_verify/**"
       - "tests/test_mcp.py"
       - "tests/test_package.py"
-      - "PACKAGE.md"
-      - "MCP.md"
-      - "ROADMAP.md"
+      - "docs/PACKAGE.md"
+      - "docs/MCP.md"
+      - "docs/ROADMAP.md"
       - ".github/workflows/mcp.yml"
 
 permissions:
