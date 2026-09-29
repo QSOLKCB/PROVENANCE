@@ -52,9 +52,21 @@ Phase 5 deliberately supports exactly one Ollama exchange per fresh LocalEvidenc
 
 A second observation against a non-empty pair is rejected before transport.
 
-The freshness check is protected by a shared in-process observation reservation keyed by the filesystem identities of the store root and custody root. The reservation is held from freshness validation through complete success or failure finalization.
+Freshness is protected by two reservation layers on each unique evidence root:
 
-Two threads or adapter instances sharing the same evidence pair therefore cannot both observe it as fresh and enter transport.
+~~~text
+same-process mutex keyed by root filesystem identity
++
+POSIX fcntl advisory record lock on .ollama-observation.lock
+~~~
+
+Store and custody roots are locked in stable filesystem-identity order. The reservation is held from freshness validation through complete success or failure finalization.
+
+After acquiring the cross-process reservation, the adapter reopens the store and custody roots and evaluates their current on-disk state rather than trusting instances that may have been constructed before another process committed.
+
+Two threads, adapter instances, or cooperating processes sharing the same store or custody root therefore cannot both observe it as fresh and enter transport.
+
+The operational .ollama-observation.lock files are synchronization state only. They are not evidence artifacts and do not enter evidence identity.
 
 This prevents repeated byte-identical exchanges from collapsing into the same deterministic event identities before the core has a justified occurrence discriminator.
 
