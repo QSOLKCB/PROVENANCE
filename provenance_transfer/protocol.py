@@ -232,6 +232,20 @@ def _copy_package_directory(
                         and existing.package_identity
                         == expected_package_identity
                     ):
+                        existing_identity = _directory_identity(existing_fd)
+                        current_fd = os.open(
+                            destination.name,
+                            _directory_flags(),
+                            dir_fd=parent_fd,
+                        )
+                        try:
+                            if _directory_identity(current_fd) != existing_identity:
+                                raise TransferError(
+                                    "received package filesystem identity changed "
+                                    "during concurrent publication"
+                                )
+                        finally:
+                            os.close(current_fd)
                         _remove_tree_at(parent_fd, staging_name)
                         os.fsync(parent_fd)
                         created = False
@@ -240,7 +254,7 @@ def _copy_package_directory(
                         returned_fd = True
                         return (
                             destination,
-                            _directory_identity(existing_fd),
+                            existing_identity,
                             existing_fd,
                         )
                 except Exception:
@@ -774,6 +788,15 @@ def receive_transfer(
                     raise TransferError(
                         "existing received package destination conflicts with transfer"
                     )
+                pinned_identity = _directory_identity(package_fd)
+                current_fd = os.open(package_dest, _directory_flags())
+                try:
+                    if _directory_identity(current_fd) != pinned_identity:
+                        raise TransferError(
+                            "received package filesystem identity changed after verification"
+                        )
+                finally:
+                    os.close(current_fd)
                 return package_fd
             except Exception:
                 os.close(package_fd)
