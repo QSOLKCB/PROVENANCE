@@ -292,9 +292,14 @@ def verify_signature_record(
         algorithm = "ssh-ed25519"
         if core.get("namespace") != SIGNATURE_NAMESPACE:
             raise ValueError("signature namespace changed")
+        public_key_value = core.get("public_key")
         public_key = normalize_ed25519_public_key(
-            str(core.get("public_key"))
+            str(public_key_value)
         )
+        if public_key_value != public_key:
+            raise ValueError(
+                "signature public key is not in normalized form"
+            )
         fingerprint = ed25519_key_fingerprint(public_key)
         if core.get("key_fingerprint") != fingerprint:
             raise ValueError("signature key fingerprint mismatch")
@@ -562,6 +567,32 @@ def verify_git_anchor_record(
             raise ValueError(
                 exists.stderr.strip()
                 or "anchored Git commit is unavailable"
+            )
+        tree_entry = _git(
+            git,
+            repo,
+            ["ls-tree", commit_oid, "--", anchor_path],
+        )
+        if tree_entry.returncode != 0:
+            raise ValueError(
+                tree_entry.stderr.strip()
+                or "cannot inspect anchored Git tree entry"
+            )
+        entry = tree_entry.stdout.rstrip("\n")
+        if "\n" in entry or "\t" not in entry:
+            raise ValueError(
+                "anchored path does not resolve to exactly one tree entry"
+            )
+        metadata, observed_path = entry.split("\t", 1)
+        fields = metadata.split()
+        if (
+            observed_path != anchor_path
+            or len(fields) != 3
+            or fields[0] not in {"100644", "100755"}
+            or fields[1] != "blob"
+        ):
+            raise ValueError(
+                "anchored Git path is not a regular committed blob"
             )
         show = _git(
             git,
