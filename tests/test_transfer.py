@@ -522,6 +522,7 @@ class DistributedCustodyTests(unittest.TestCase):
                 destination_system="receiver",
                 sender_key=sender_key,
             )
+            sender_fingerprint = _sender_fingerprint(bundle.path)
             offer = bundle.path / "offer.json"
             offer.write_bytes(offer.read_bytes() + b" ")
 
@@ -538,7 +539,7 @@ class DistributedCustodyTests(unittest.TestCase):
                     receiver / "custody",
                     receiver_system="receiver",
                     receiver_key=receiver_key,
-                    expected_sender_fingerprint=_sender_fingerprint(bundle.path),
+                    expected_sender_fingerprint=sender_fingerprint,
                 )
             self.assertFalse((receiver / "custody").exists())
 
