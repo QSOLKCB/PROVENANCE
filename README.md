@@ -2,11 +2,13 @@
 
 > **Cryptographic chain of custody for LLMs, software, agents, tools, and automated systems.**
 
-PROVENANCE records **who did what, when, where, why, and how — backed by evidence**. It captures actions, binds artifacts and events to cryptographic identities, preserves append-only custody, and independently verifies the resulting record.
+PROVENANCE records **who did what, when, where, why, and how — backed by evidence**. It captures actions, binds artifacts and events to cryptographic identities, preserves append-only custody, supports signed offline handoff between systems, and independently verifies the resulting record.
 
-**Start here:** [Getting Started](docs/GETTING_STARTED.md) · [Usage Instructions](docs/INSTRUCTIONS.md) · [Documentation](docs/README.md) · [Roadmap](docs/ROADMAP.md)
+The project is implemented through **Phase 16**. The immutable implementation baseline is now **`v1.0.0`**, which points exactly to **`0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742`**. That tag is the fixed implementation target for subsequent formal-verification and archival work.
 
-[![Version](https://img.shields.io/badge/version-v0.1--dev-4c1.svg)](docs/ROADMAP.md)
+**Start here:** [Getting Started](docs/GETTING_STARTED.md) · [Usage Instructions](docs/INSTRUCTIONS.md) · [Release Trust Lane](docs/RELEASE.md) · [Documentation](docs/README.md) · [Roadmap](docs/ROADMAP.md)
+
+[![Version](https://img.shields.io/badge/version-v1.0.0-4c1.svg)](https://github.com/QSOLKCB/PROVENANCE/releases/tag/v1.0.0)
 [![Phase](https://img.shields.io/badge/roadmap-Phase%2016%20implemented-2ea44f.svg)](docs/ROADMAP.md)
 [![Core CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml)
 [![Verify CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml)
@@ -53,6 +55,8 @@ FINALIZED SNAPSHOT
 INDEPENDENT VERIFY
       ↓
 INSPECT / EXPORT / PACKAGE
+      ↓
+OPTIONAL SIGN / REDACT / TRANSFER
 ```
 
 Quick CLI example:
@@ -99,9 +103,42 @@ The core remains provider- and interface-neutral. Verification consumes finalize
 
 ## Status
 
-Implemented through **Phase 16**: canonical core, verifier, local store, custody, Ollama + real-model CI, MCP, Rust CLI/TUI, read-only UI, generic adapters, portable forensic packages, detached signatures/Git anchors, exact bounded-parallel verification, selective redacted disclosures, signed offline distributed-custody handoff, and the release-grade full trust lane.
+Implemented through **Phase 16**:
 
-Next: **Phase 17 — immutable candidate freeze**. See [the roadmap](docs/ROADMAP.md).
+```text
+canonical evidence core
+independent verifier
+local content-addressed store
+append-only custody
+Ollama reference observation + real-model CI
+stdio MCP
+Rust CLI/TUI
+read-only localhost UI
+generic HTTP/process adapters
+portable forensic packages
+detached Ed25519 signatures + Git anchors
+bounded deterministic parallel verification
+selective redacted disclosures
+signed offline distributed custody
+release-grade full trust lane
+```
+
+### Immutable implementation baseline
+
+The frozen implementation baseline is:
+
+```text
+tag:    v1.0.0
+commit: 0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
+```
+
+The published GitHub release is immutable and the tag points directly to that commit.
+
+For formalization and archival claims, **`v1.0.0` / `0b1a2eea…` is the implementation authority**. Later documentation, proof sources, archival metadata, and release-support material may advance on `main`, but they do not change the frozen implementation target.
+
+Any future implementation, schema-semantic, verifier-semantic, or evidence-contract change must be treated as a new candidate rather than silently redefining `v1.0.0`.
+
+Formal verification and the final archival work proceed against this fixed baseline. See [Release Trust Lane](docs/RELEASE.md) and [Roadmap](docs/ROADMAP.md).
 
 ## Documentation
 

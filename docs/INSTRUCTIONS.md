@@ -1,6 +1,8 @@
 # Usage Instructions
 
-This guide covers the normal PROVENANCE workflow and the major interfaces. Deep evidence semantics live in the linked specifications.
+This guide covers the current PROVENANCE reference implementation through **Phase 16**. The immutable implementation baseline is **`v1.0.0`**, fixed at **`0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742`**.
+
+Deep semantics remain in the subsystem specifications. This document focuses on operating the implemented interfaces without weakening the evidence contract.
 
 ## Core workflow
 
@@ -16,6 +18,8 @@ finalize immutable snapshot
 independently verify
     ↓
 inspect / export / package
+    ↓
+optional sign / redact / transfer
 ```
 
 ## Evidence classes
@@ -23,12 +27,16 @@ inspect / export / package
 | Class | Meaning |
 |---|---|
 | `OBSERVED` | Directly captured at the declared observation boundary |
-| `DECLARED` | Supplied or asserted by a caller/provider/operator |
+| `DECLARED` | Supplied or asserted by a caller, provider, or operator |
 | `DERIVED` | Computed from identified source evidence |
 
-Do not promote declarations into observations simply because an adapter parsed them. See [INVARIANTS.md](INVARIANTS.md).
+Do not promote declarations into observations merely because an adapter, CLI, or MCP server parsed them.
 
-## Rust CLI
+See [INVARIANTS.md](INVARIANTS.md).
+
+---
+
+# Rust CLI
 
 Build:
 
@@ -42,7 +50,31 @@ Development binary:
 ./provenance-cli/target/debug/provenance
 ```
 
-### Record text
+Current commands:
+
+```text
+record
+inspect
+verify
+finalize
+export
+package
+sign-package
+anchor-payload
+anchor-git
+verify-assurance
+redact-disclosure
+verify-disclosure
+transfer-create
+transfer-receive
+verify-transfer
+verify-receipt
+tui
+```
+
+The Rust binary delegates evidence operations to the existing PROVENANCE contracts. It is an interface, not an alternate evidence implementation.
+
+## Record text
 
 ```bash
 ./provenance-cli/target/debug/provenance record \
@@ -53,7 +85,7 @@ Development binary:
   --operation "example.capture"
 ```
 
-### Record a file
+## Record a file
 
 ```bash
 ./provenance-cli/target/debug/provenance record \
@@ -67,7 +99,9 @@ Development binary:
 
 Add `--digest-only` when identity and metadata should be retained without retaining source bytes.
 
-### Inspect
+Operator-supplied content is DECLARED. Successful CLI record calls also retain separate OBSERVED occurrence evidence.
+
+## Inspect
 
 ```bash
 ./provenance-cli/target/debug/provenance inspect \
@@ -77,7 +111,7 @@ Add `--digest-only` when identity and metadata should be retained without retain
 
 Use `--identity sha256:<digest>` for a known evidence identity.
 
-### Finalize
+## Finalize
 
 ```bash
 ./provenance-cli/target/debug/provenance finalize \
@@ -86,9 +120,11 @@ Use `--identity sha256:<digest>` for a known evidence identity.
   --scope closed
 ```
 
-Use `--scope open` when collection gaps must remain explicit.
+Use `--scope open` when collection gaps or ongoing collection must remain explicit.
 
-### Verify
+Finalization never authorizes rewriting earlier records.
+
+## Verify
 
 ```bash
 ./provenance-cli/target/debug/provenance verify \
@@ -96,9 +132,11 @@ Use `--scope open` when collection gaps must remain explicit.
   --custody /path/to/custody
 ```
 
-### Export versus package
+Verification recomputes evidence rather than trusting stored success claims.
 
-`export` is the historical verified Phase 2 snapshot-copy operation:
+## Export versus package
+
+`export` creates the historical verified snapshot copy:
 
 ```bash
 ./provenance-cli/target/debug/provenance export \
@@ -116,19 +154,46 @@ Use `--scope open` when collection gaps must remain explicit.
   --destination /path/to/forensic-package
 ```
 
+A forensic package binds its physical members by path, content identity, and byte count and carries the finalized evidence, custody snapshot, schema/version metadata, verification metadata, and declared gaps.
+
 See [PACKAGE.md](PACKAGE.md).
 
-## Optional Phase 12 authenticity
+## TUI
 
-After creating a finalized Phase 11 package, you can add detached authenticity records without changing the package.
+```bash
+./provenance-cli/target/debug/provenance tui \
+  --store /path/to/store \
+  --custody /path/to/custody
+```
 
-Generate an Ed25519 key if needed:
+The keyboard-first palette exposes the working-store commands:
+
+```text
+record
+inspect
+verify
+finalize
+export
+package
+```
+
+The TUI does not add new evidence semantics.
+
+See [CLI.md](CLI.md).
+
+---
+
+# Optional authenticity: signatures and Git anchors
+
+Phase 12 adds detached trust records without changing package identity.
+
+Generate an Ed25519 signing key:
 
 ```bash
 ssh-keygen -t ed25519 -f ./provenance-signing-key
 ```
 
-Sign the exact canonical `package.json` bytes:
+Create a detached SSHSIG record:
 
 ```bash
 ./provenance-cli/target/debug/provenance sign-package \
@@ -137,7 +202,7 @@ Sign the exact canonical `package.json` bytes:
   --output ./package.signature.json
 ```
 
-For a Git commit anchor, first write the canonical payload:
+Create a Git anchor payload:
 
 ```bash
 ./provenance-cli/target/debug/provenance anchor-payload \
@@ -145,7 +210,7 @@ For a Git commit anchor, first write the canonical payload:
   --output /path/to/repo/package.provenance
 ```
 
-Commit that file, then create the detached anchor record:
+Commit that payload, then bind the package to the existing commit:
 
 ```bash
 ./provenance-cli/target/debug/provenance anchor-git \
@@ -156,7 +221,7 @@ Commit that file, then create the detached anchor record:
   --output ./package.git-anchor.json
 ```
 
-Verify integrity, signature, and anchor separately:
+Verify integrity, signature, and anchor as separate dimensions:
 
 ```bash
 ./provenance-cli/target/debug/provenance verify-assurance \
@@ -166,8 +231,13 @@ Verify integrity, signature, and anchor separately:
   --git-repo /path/to/repo
 ```
 
-See [TRUST.md](TRUST.md) for exactly what these mechanisms prove—and what they do not.
-## Read-only UI
+A valid key signature proves that the corresponding key signed the bytes. It does not automatically prove legal identity, organizational authority, intent, or truth.
+
+See [TRUST.md](TRUST.md).
+
+---
+
+# Read-only UI
 
 ```bash
 python3 -m provenance_ui \
@@ -175,9 +245,23 @@ python3 -m provenance_ui \
   --custody /path/to/custody
 ```
 
-Default bind: `127.0.0.1:8765`. Non-loopback binding requires explicit operator action. See [UI.md](UI.md).
+Default bind:
 
-## MCP
+```text
+127.0.0.1:8765
+```
+
+Non-loopback binding requires explicit operator action.
+
+The UI consumes finalized evidence and immutable custody records. It has no evidentiary authority and is tested for non-interference.
+
+See [UI.md](UI.md).
+
+---
+
+# MCP
+
+Start the dependency-free stdio interface:
 
 ```bash
 python3 -m provenance_mcp \
@@ -185,7 +269,7 @@ python3 -m provenance_mcp \
   --custody /path/to/custody
 ```
 
-Tools:
+Current tools:
 
 ```text
 provenance.record
@@ -196,15 +280,35 @@ provenance.export
 provenance.package
 ```
 
+Values supplied through `provenance.record` remain DECLARED. The MCP invocation occurrence is recorded separately as OBSERVED evidence.
+
+MCP and CLI share the same hardened operational working-state journal so pending evidence cannot silently diverge between interfaces.
+
 See [MCP.md](MCP.md).
 
-## Adapters
+---
 
-Reference observation paths include local Ollama, generic HTTP/HTTPS, and local process execution. Provider-specific metadata stays behind a provider-neutral adapter boundary.
+# Adapters
+
+Implemented reference observation paths include:
+
+```text
+local Ollama
+generic HTTP/HTTPS
+local process / CLI
+```
+
+Provider-specific metadata remains behind the generic adapter boundary.
+
+The Ollama reference path retains exact request/response bytes and preserves the distinction between directly observed transport bytes and provider/model declarations.
 
 See [ADAPTERS.md](ADAPTERS.md) and [OLLAMA.md](OLLAMA.md).
 
-## Python verification APIs
+---
+
+# Python verification APIs
+
+Verify an evidence bundle:
 
 ```python
 from pathlib import Path
@@ -215,6 +319,8 @@ print(report.integrity_verified)
 print(report.errors)
 ```
 
+Verify a portable forensic package:
+
 ```python
 from provenance_verify import verify_forensic_package
 
@@ -224,25 +330,15 @@ print(report.package_identity)
 print(report.errors)
 ```
 
-## Focused test lanes
+Where a serial reference API exists, it is retained for semantic comparison with the optimized verifier.
 
-```bash
-python3 -m unittest tests.test_core -v
-python3 -m unittest tests.test_verify -v
-python3 -m unittest tests.test_store -v
-python3 -m unittest tests.test_custody -v
-python3 -m unittest tests.test_mcp -v
-python3 -m unittest tests.test_ui -v
-python3 -m unittest tests.test_generic_adapters -v
-python3 -m unittest tests.test_package -v
-cargo test --manifest-path provenance-cli/Cargo.toml --locked
-```
+---
 
-## Phase 13 reference and benchmark verification
+# Phase 13: reference and optimized verification
 
-Normal verification uses the bounded deterministic parallel path.
+Normal verification uses bounded deterministic parallelism where allowed.
 
-For conformance/debugging, the serial reference APIs remain available:
+Reference APIs remain available for conformance/debugging:
 
 ```python
 from provenance_verify import (
@@ -251,7 +347,17 @@ from provenance_verify import (
 )
 ```
 
-Re-run the environment-scoped benchmark with:
+The required invariant is:
+
+```text
+OPTIMIZED REPORT
+==
+REFERENCE REPORT
+```
+
+including deterministic check/error ordering for stable evidence inputs.
+
+Run the benchmark:
 
 ```bash
 python3 scripts/benchmark_phase13.py \
@@ -260,12 +366,15 @@ python3 scripts/benchmark_phase13.py \
   --repetitions 5
 ```
 
-Do not transfer benchmark numbers to another host without re-measuring. See [PERFORMANCE.md](PERFORMANCE.md).
-## Phase 14 selective disclosure
+Benchmark results are environment-scoped. Re-measure on a different host.
 
-A redacted disclosure is created from a retained artifact in a finalized Phase 11 package.
+See [PERFORMANCE.md](PERFORMANCE.md).
 
-Example:
+---
+
+# Phase 14: selective disclosure
+
+Create a deterministic redacted derivative from a retained source artifact:
 
 ```bash
 ./provenance-cli/target/debug/provenance redact-disclosure \
@@ -275,14 +384,14 @@ Example:
   --output /path/to/disclosure
 ```
 
-Verify disclosed lineage without revealing source bytes:
+Verify disclosed lineage without the source package:
 
 ```bash
 ./provenance-cli/target/debug/provenance verify-disclosure \
   --disclosure /path/to/disclosure
 ```
 
-If the original source package is available, additionally recompute the transform:
+When the original package is available, recompute the transform:
 
 ```bash
 ./provenance-cli/target/debug/provenance verify-disclosure \
@@ -290,14 +399,15 @@ If the original source package is available, additionally recompute the transfor
   --source-package /path/to/forensic-package
 ```
 
-The disclosure retains the source digest and original ArtifactRecord metadata but omits the source content bytes. The derivative is always a new DERIVED artifact.
+The source bytes are not silently relabeled. The disclosure retains source identity/metadata while the redacted content is a new DERIVED artifact.
 
-See [PRIVACY.md](PRIVACY.md) for privacy leakage limits, digest confirmation risks, and exact verification semantics.
-## Phase 15 distributed custody handoff
+See [PRIVACY.md](PRIVACY.md).
 
-A finalized Phase 11 package can be handed to an independently operated receiver without requiring a live network service.
+---
 
-Create the signed sender bundle:
+# Phase 15: distributed custody handoff
+
+Create a signed sender bundle:
 
 ```bash
 ./provenance-cli/target/debug/provenance transfer-create \
@@ -308,9 +418,16 @@ Create the signed sender bundle:
   --output /path/to/transfer
 ```
 
-Copy that directory through the chosen offline/store-and-forward channel.
+Verify sender-side transfer integrity:
 
-At the receiver:
+```bash
+./provenance-cli/target/debug/provenance verify-transfer \
+  --transfer /path/to/transfer
+```
+
+Move the transfer directory through the chosen offline/store-and-forward channel.
+
+Receiver acceptance requires a sender fingerprint supplied independently of the transfer being accepted:
 
 ```bash
 ./provenance-cli/target/debug/provenance transfer-receive \
@@ -323,7 +440,7 @@ At the receiver:
   --expected-sender-fingerprint 'SHA256:<trusted-sender-fingerprint>'
 ```
 
-Verify the end-to-end handoff:
+Verify the receiver acknowledgement:
 
 ```bash
 ./provenance-cli/target/debug/provenance verify-receipt \
@@ -332,40 +449,185 @@ Verify the end-to-end handoff:
   --package /receiver/package
 ```
 
-Do not compare sender and receiver wall clocks to infer order. The protocol exposes only evidence-backed partial-order edges. See [TRANSFER.md](TRANSFER.md).
+Important boundaries:
 
-## Phase 16 release-grade trust lane
+- sender and receiver clocks remain independent;
+- wall-clock comparison does not manufacture global order;
+- completed duplicate delivery is idempotent;
+- receiver custody is local and append-only;
+- signing-key possession does not automatically establish legal/organizational identity;
+- acceptance fails closed when the independently supplied sender fingerprint does not match.
 
-Routine focused workflows remain the normal development feedback path.
+See [TRANSFER.md](TRANSFER.md).
 
-For a release candidate, select the exact candidate ref in GitHub Actions and manually run the `full` workflow.
+---
 
-The gate requires:
+# Focused validation lanes
 
-```text
-pinned Python + Rust
-complete Python invariant/tamper/integration suite
-Rust CLI build + tests
-canonical core/verifier cross-seed recheck
-clean source tree
-real Ollama smoke on both reference models
-release-gate success
+Fast development validation remains modular.
+
+Build the Rust CLI before running `tests.test_cli` or the complete Python discovery, because the terminal integration tests execute the compiled development binary:
+
+```bash
+cargo build --manifest-path provenance-cli/Cargo.toml --locked
 ```
 
-A green run qualifies only the exact tested commit. If the implementation changes, run `full` again before freezing.
+Python suites:
 
-Phase 16 does not create the immutable tag and does not run Lean. Those are Phase 17 and Phase 18.
+```bash
+python3 -m unittest tests.test_core -v
+python3 -m unittest tests.test_verify -v
+python3 -m unittest tests.test_store -v
+python3 -m unittest tests.test_custody -v
+python3 -m unittest tests.test_ollama_adapter tests.test_ollama_transport -v
+python3 -m unittest tests.test_mcp -v
+python3 -m unittest tests.test_cli -v
+python3 -m unittest tests.test_ui -v
+python3 -m unittest tests.test_generic_adapters -v
+python3 -m unittest tests.test_package -v
+python3 -m unittest tests.test_trust -v
+python3 -m unittest tests.test_performance -v
+python3 -m unittest tests.test_privacy -v
+python3 -m unittest tests.test_transfer -v
+```
 
-See [RELEASE.md](RELEASE.md).
+Rust CLI:
 
-## Operational rules
+```bash
+cargo test --manifest-path provenance-cli/Cargo.toml --locked
+```
 
-- Do not put secrets into evidence-bearing URLs, argv, prompts, or artifacts unless retention is intentional.
+Complete local Python discovery:
+
+```bash
+python3 -m unittest discover -s tests -p "test_*.py" -v
+```
+
+The real Ollama smoke lane additionally requires Ollama/model downloads and is normally exercised in GitHub Actions.
+
+---
+
+# Phase 16: release-grade trust lane
+
+Routine focused workflows are for development feedback.
+
+The release-grade `full` workflow is the gate for a candidate intended for freeze.
+
+It requires:
+
+```text
+fresh checkout
+pinned Python toolchain
+pinned Rust toolchain
+complete Python invariant/tamper/integration suite
+Rust CLI build + unit tests
+canonical core/verifier cross-seed recheck
+clean source tree
+real Ollama qwen2.5:0.5b lane
+real Ollama qwen2:0.5b lane
+tamper detection in both real-model lanes
+release-gate aggregation
+```
+
+The reference pins and exact assurance boundary are documented in [RELEASE.md](RELEASE.md).
+
+A green run qualifies only the exact commit it tested.
+
+```text
+COMMIT CHANGES
+→
+QUALIFICATION MUST RUN AGAIN
+```
+
+Do not substitute a collection of green focused workflows for the final `release-gate`.
+
+---
+
+# Phase 17: immutable implementation baseline
+
+The immutable implementation baseline has been established as:
+
+```text
+tag:    v1.0.0
+commit: 0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
+```
+
+The published GitHub release is immutable and the tag points directly to that commit.
+
+For all later formal-verification and archival claims, cite both:
+
+```text
+v1.0.0
+0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
+```
+
+The frozen baseline covers:
+
+```text
+implementation
+schema semantics
+verifier semantics
+evidence-contract semantics
+```
+
+Later changes on `main` may add or refine:
+
+```text
+documentation
+formal proof sources
+archival metadata
+release-support material
+```
+
+provided they do not retroactively redefine the implementation represented by `v1.0.0`.
+
+To verify the tag locally:
+
+```bash
+git fetch --tags
+git rev-list -n 1 v1.0.0
+```
+
+Expected result:
+
+```text
+0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
+```
+
+If a future defect requires changing implementation, schema semantics, verifier semantics, or evidence-contract semantics, do not reinterpret the frozen tag. Return to the release-candidate process and establish a new candidate baseline.
+
+Phase 18 formalization and archival work must target this exact frozen implementation unless a new candidate is explicitly declared.
+
+---
+
+# Operational rules
+
+- Do not put credentials or private keys into ordinary evidence payloads unless retention is explicitly intended.
+- Do not put secrets into evidence-bearing URLs, argv, prompts, or artifacts merely for convenience.
 - Treat `DIGEST_ONLY`, `MISSING`, open scope, and incomplete custody as evidence states—not defects to hide.
 - Do not edit finalized evidence to make verification pass.
 - Preserve exact identities when transferring evidence.
-- Prefer the independent verifier over producer/UI claims.
+- Obtain trusted sender fingerprints independently of untrusted transfer bundles.
+- Prefer the independent verifier over producer, UI, or adapter success claims.
+- A signature proves key possession over bytes, not legal truth.
+- A green release lane is engineering assurance, not formal proof.
 
 ## Deep reference
 
-[Architecture](ARCHITECTURE.md) · [Invariants](INVARIANTS.md) · [Store](STORE.md) · [Custody](CUSTODY.md) · [Bundle](BUNDLE.md) · [Package](PACKAGE.md) · [Trust](TRUST.md) · [Performance](PERFORMANCE.md) · [Privacy](PRIVACY.md) · [Transfer](TRANSFER.md) · [Release](RELEASE.md) · [CLI](CLI.md) · [MCP](MCP.md) · [UI](UI.md) · [Adapters](ADAPTERS.md) · [Roadmap](ROADMAP.md)
+[Architecture](ARCHITECTURE.md) ·
+[Invariants](INVARIANTS.md) ·
+[Store](STORE.md) ·
+[Custody](CUSTODY.md) ·
+[Bundle](BUNDLE.md) ·
+[Package](PACKAGE.md) ·
+[Trust](TRUST.md) ·
+[Performance](PERFORMANCE.md) ·
+[Privacy](PRIVACY.md) ·
+[Transfer](TRANSFER.md) ·
+[Release](RELEASE.md) ·
+[CLI](CLI.md) ·
+[MCP](MCP.md) ·
+[UI](UI.md) ·
+[Adapters](ADAPTERS.md) ·
+[Ollama](OLLAMA.md) ·
+[Roadmap](ROADMAP.md)
