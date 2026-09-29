@@ -57,6 +57,68 @@ def _event_object(store_root: Path, identity: str) -> Path:
 
 
 class LocalEvidenceStoreTests(unittest.TestCase):
+    def test_concurrent_initializer_never_reads_partial_store_format(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "store"
+            original_write_all = store_module._write_all
+            first_write_entered = threading.Event()
+            release_first_write = threading.Event()
+            gate_lock = threading.Lock()
+            first_write = True
+            stores: list[LocalEvidenceStore] = []
+            errors: list[BaseException] = []
+
+            def paused_first_write(fd: int, data: bytes) -> None:
+                nonlocal first_write
+                should_pause = False
+                with gate_lock:
+                    if first_write:
+                        first_write = False
+                        should_pause = True
+                if should_pause:
+                    first_write_entered.set()
+                    if not release_first_write.wait(timeout=5):
+                        raise RuntimeError(
+                            "timed out waiting to release first STORE_FORMAT write"
+                        )
+                original_write_all(fd, data)
+
+            def construct() -> None:
+                try:
+                    stores.append(LocalEvidenceStore(root))
+                except BaseException as exc:
+                    errors.append(exc)
+
+            with mock.patch.object(
+                store_module,
+                "_write_all",
+                side_effect=paused_first_write,
+            ):
+                first = threading.Thread(target=construct)
+                first.start()
+                self.assertTrue(first_write_entered.wait(timeout=3))
+
+                second = threading.Thread(target=construct)
+                second.start()
+                second.join(timeout=5)
+                self.assertFalse(
+                    second.is_alive(),
+                    "second initializer blocked on unpublished temp marker",
+                )
+
+                release_first_write.set()
+                first.join(timeout=5)
+                self.assertFalse(first.is_alive())
+
+            self.assertEqual(errors, [])
+            self.assertEqual(len(stores), 2)
+            self.assertEqual(
+                (root / "STORE_FORMAT").read_text(encoding="ascii"),
+                store_module.STORE_FORMAT + "\n",
+            )
+            for store in stores:
+                self.assertIsNone(store.current_manifest_identity)
+
     def test_finalize_uses_posix_record_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = LocalEvidenceStore(Path(tmp) / "store")
@@ -75,6 +137,116 @@ class LocalEvidenceStoreTests(unittest.TestCase):
             commands = [call.args[1] for call in lockf.call_args_list]
             self.assertIn(store_module.fcntl.LOCK_EX, commands)
             self.assertIn(store_module.fcntl.LOCK_UN, commands)
+
+    def test_refresh_postcheck_root_swap_keeps_bound_reconstructed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "store"
+            moved_root = base / "store-original"
+
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"refresh postcheck binding")
+            store.put_event(
+                _event_for(
+                    artifact.content_identity,
+                    operation="refresh-postcheck-binding",
+                )
+            )
+            snapshot = store.finalize()
+            original_identity = snapshot.manifest_identity
+
+            original_load_head = store._load_head
+            swapped = False
+
+            def load_then_swap(*, root_fd: int | None = None) -> None:
+                nonlocal swapped
+                original_load_head(root_fd=root_fd)
+                if not swapped:
+                    swapped = True
+                    root.rename(moved_root)
+                    LocalEvidenceStore(root)
+
+            with mock.patch.object(
+                store,
+                "_load_head",
+                side_effect=load_then_swap,
+            ):
+                store.refresh_from_disk()
+
+            self.assertTrue(swapped)
+            self.assertEqual(
+                store.current_manifest_identity,
+                original_identity,
+            )
+            self.assertEqual(
+                LocalEvidenceStore(moved_root).current_manifest_identity,
+                original_identity,
+            )
+            self.assertIsNone(
+                LocalEvidenceStore(root).current_manifest_identity
+            )
+
+            with self.assertRaisesRegex(
+                StoreError,
+                "root filesystem identity changed",
+            ):
+                store.verify_current()
+
+    def test_refresh_rejects_root_swap_after_bound_head_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "store"
+            moved_root = base / "store-original"
+            replacement_staging = base / "store-replacement"
+
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"refresh root binding")
+            store.put_event(
+                _event_for(
+                    artifact.content_identity,
+                    operation="refresh-root-binding",
+                )
+            )
+            snapshot = store.finalize()
+            original_identity = snapshot.manifest_identity
+
+            shutil.copytree(root, replacement_staging)
+            original_read = store._read_head_from_root_fd
+            swapped = False
+
+            def read_then_swap(root_fd: int) -> str | None:
+                nonlocal swapped
+                identity = original_read(root_fd)
+                if not swapped:
+                    swapped = True
+                    root.rename(moved_root)
+                    replacement_staging.rename(root)
+                return identity
+
+            with mock.patch.object(
+                store,
+                "_read_head_from_root_fd",
+                side_effect=read_then_swap,
+            ):
+                with self.assertRaisesRegex(
+                    StoreError,
+                    "root filesystem identity changed",
+                ):
+                    store.refresh_from_disk()
+
+            self.assertTrue(swapped)
+            self.assertEqual(
+                store.current_manifest_identity,
+                original_identity,
+            )
+            self.assertEqual(
+                LocalEvidenceStore(moved_root).current_manifest_identity,
+                original_identity,
+            )
+            self.assertEqual(
+                LocalEvidenceStore(root).current_manifest_identity,
+                original_identity,
+            )
 
     def test_same_process_instances_serialize_finalize(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

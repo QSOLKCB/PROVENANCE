@@ -55,6 +55,30 @@ If you cloned PROVENANCE somewhere else, change the `cd` path accordingly.
 
 This runs all current module tests. GitHub Actions uses narrower module-specific lanes for speed, but the full local command above is the simplest way to reproduce the complete suite.
 
+## MCP stdio interface
+
+Phase 7 adds a dependency-free MCP server over stdio:
+
+```bash
+python3 -m provenance_mcp \
+  --store /path/to/store \
+  --custody /path/to/custody
+```
+
+The initial tool surface is:
+
+```text
+provenance.record
+provenance.inspect
+provenance.verify
+provenance.finalize
+provenance.export
+```
+
+Caller assertions sent through `provenance.record` remain **DECLARED**. The server separately records an **OBSERVED** per-call receipt so repeated identical declarations do not erase evidence that multiple MCP calls occurred.
+
+See `MCP.md` for the transport, resource, compatibility, and evidence-boundary contract.
+
 ---
 
 ## Why PROVENANCE Exists

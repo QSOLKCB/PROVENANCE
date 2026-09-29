@@ -11,7 +11,7 @@ import shutil
 import stat
 import threading
 import uuid
-from typing import Iterator
+from typing import Iterable, Iterator
 
 from provenance_core import (
     ArtifactRecord,
@@ -162,6 +162,20 @@ class LocalEvidenceStore:
     def event_count(self) -> int:
         return len(self._events)
 
+    def current_artifact_entry(
+        self,
+        content_identity: str,
+    ) -> ManifestArtifact | None:
+        _digest(content_identity, label="artifact content identity")
+        return self._artifacts.get(content_identity)
+
+    def refresh_from_disk(self) -> None:
+        # Hold the already-bound root descriptor throughout reconstruction.
+        # _load_head(root_fd=...) reads authoritative HEAD from that descriptor
+        # and does not accept rebuilt state until the bound path checks pass.
+        with self._root_fd() as root_fd:
+            self._load_head(root_fd=root_fd)
+
     def _initialize(self) -> None:
         self._ensure_root_directory_durable()
         try:
@@ -212,6 +226,10 @@ class LocalEvidenceStore:
                 except FileNotFoundError:
                     try:
                         os.mkdir(part, mode=0o700, dir_fd=current_fd)
+                    except FileExistsError:
+                        # Another process created the same component after our
+                        # failed open. Reopen and validate it below.
+                        pass
                     except OSError as exc:
                         raise StoreError(
                             f"store root component {part!r} cannot be created: {exc}"
@@ -305,6 +323,59 @@ class LocalEvidenceStore:
 
     def _ensure_store_format(self, root_fd: int) -> None:
         expected = (STORE_FORMAT + "\n").encode("ascii")
+        temp_prefix = f".{_FORMAT}."
+        temp_suffix = ".tmp"
+
+        def is_format_temp(name: str) -> bool:
+            if not (
+                name.startswith(temp_prefix)
+                and name.endswith(temp_suffix)
+            ):
+                return False
+            token = name[len(temp_prefix) : -len(temp_suffix)]
+            return (
+                len(token) == 32
+                and all(char in "0123456789abcdef" for char in token)
+            )
+
+        def open_existing() -> int:
+            try:
+                return os.open(
+                    _FORMAT,
+                    _file_read_flags(),
+                    dir_fd=root_fd,
+                )
+            except OSError as exc:
+                raise StoreError(
+                    f"STORE_FORMAT marker cannot be opened safely: {exc}"
+                ) from exc
+
+        def validate_existing(fd: int) -> None:
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise StoreError(
+                        "STORE_FORMAT marker must be a regular file"
+                    )
+                raw = _read_all(fd)
+                if raw != expected:
+                    raise StoreError(
+                        "unsupported or corrupt STORE_FORMAT marker: "
+                        + raw.decode(
+                            "ascii",
+                            errors="replace",
+                        ).rstrip("\n")
+                    )
+                try:
+                    os.fsync(fd)
+                except OSError as exc:
+                    raise StoreError(
+                        "existing STORE_FORMAT marker cannot be synced "
+                        f"durably: {exc}"
+                    ) from exc
+            finally:
+                os.close(fd)
+            _fsync_directory(root_fd)
+
         try:
             fd = os.open(
                 _FORMAT,
@@ -316,61 +387,99 @@ class LocalEvidenceStore:
                 raise StoreError(
                     "store format initialization requires scandir(fd) support"
                 )
+
             with os.scandir(root_fd) as entries:
                 existing = [entry.name for entry in entries]
-            if existing:
+
+            unexpected = [
+                name
+                for name in existing
+                if name != _FORMAT and not is_format_temp(name)
+            ]
+            if unexpected:
                 raise StoreError(
                     "existing store root has no STORE_FORMAT marker; "
                     "refusing to assume a layout version"
                 )
+
+            # Publish through a private, fully written temporary file. The
+            # authoritative marker name is never visible with partial bytes.
+            temp_name = (
+                f"{temp_prefix}{uuid.uuid4().hex}{temp_suffix}"
+            )
+            temp_fd: int | None = None
             try:
-                fd = os.open(
-                    _FORMAT,
-                    _file_create_flags(),
-                    0o600,
-                    dir_fd=root_fd,
-                )
-            except OSError as exc:
-                raise StoreError(
-                    f"STORE_FORMAT marker cannot be created: {exc}"
-                ) from exc
-            try:
-                _write_all(fd, expected)
-                os.fsync(fd)
-            except OSError as exc:
-                raise StoreError(
-                    f"STORE_FORMAT marker cannot be written durably: {exc}"
-                ) from exc
+                try:
+                    temp_fd = os.open(
+                        temp_name,
+                        _file_create_flags(),
+                        0o600,
+                        dir_fd=root_fd,
+                    )
+                except OSError as exc:
+                    raise StoreError(
+                        "STORE_FORMAT temporary marker cannot be created: "
+                        f"{exc}"
+                    ) from exc
+
+                try:
+                    _write_all(temp_fd, expected)
+                    os.fsync(temp_fd)
+                except OSError as exc:
+                    raise StoreError(
+                        "STORE_FORMAT temporary marker cannot be written "
+                        f"durably: {exc}"
+                    ) from exc
+                finally:
+                    os.close(temp_fd)
+                    temp_fd = None
+
+                try:
+                    os.link(
+                        temp_name,
+                        _FORMAT,
+                        src_dir_fd=root_fd,
+                        dst_dir_fd=root_fd,
+                        follow_symlinks=False,
+                    )
+                    published = True
+                except FileExistsError:
+                    # Another fully-written temporary marker won the atomic
+                    # publication race. Validate that winner below.
+                    published = False
+                except OSError as exc:
+                    raise StoreError(
+                        f"STORE_FORMAT marker cannot be published: {exc}"
+                    ) from exc
+
+                try:
+                    os.unlink(temp_name, dir_fd=root_fd)
+                except FileNotFoundError:
+                    pass
+
+                _fsync_directory(root_fd)
+
+                if published:
+                    fd = open_existing()
+                    validate_existing(fd)
+                    return
+
+                fd = open_existing()
+                validate_existing(fd)
+                return
             finally:
-                os.close(fd)
-            _fsync_directory(root_fd)
-            return
+                if temp_fd is not None:
+                    os.close(temp_fd)
+                try:
+                    os.unlink(temp_name, dir_fd=root_fd)
+                except FileNotFoundError:
+                    pass
         except OSError as exc:
             raise StoreError(
                 f"STORE_FORMAT marker cannot be opened safely: {exc}"
             ) from exc
 
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                raise StoreError("STORE_FORMAT marker must be a regular file")
-            raw = _read_all(fd)
-            if raw != expected:
-                raise StoreError(
-                    "unsupported or corrupt STORE_FORMAT marker: "
-                    + raw.decode("ascii", errors="replace").rstrip("\n")
-                )
-            try:
-                os.fsync(fd)
-            except OSError as exc:
-                raise StoreError(
-                    f"existing STORE_FORMAT marker cannot be synced durably: {exc}"
-                ) from exc
-        finally:
-            os.close(fd)
-
-        # The initial marker publication may also have failed before its root
-        # directory entry was made durable.
-        _fsync_directory(root_fd)
+        validate_existing(fd)
 
     def _ensure_lock_file(self, root_fd: int) -> None:
         process_lock = _process_lock_for_root(root_fd)
@@ -639,6 +748,170 @@ class LocalEvidenceStore:
         self._artifacts[record.content_identity] = entry
         self._session_changed_artifacts.add(record.content_identity)
         return record
+
+    def _validated_artifact_for_restore(
+        self,
+        entry: ManifestArtifact,
+    ) -> ArtifactRecord:
+        if entry.retention is RetentionState.MISSING:
+            raise StoreError(
+                "unfinalized working membership cannot restore a MISSING artifact"
+            )
+        if entry.record_identity is None:
+            raise StoreError(
+                "unfinalized working artifact lacks record identity"
+            )
+
+        value = self._read_artifact_record_object(entry.record_identity)
+        try:
+            retention = RetentionState(value.get("retention"))
+            record = ArtifactRecord(
+                content_identity=value.get("content_identity"),
+                byte_count=value.get("byte_count"),
+                media_type=value.get("media_type"),
+                retention=retention,
+            )
+        except (TypeError, ValueError) as exc:
+            raise StoreError(
+                f"unfinalized artifact record cannot be reconstructed: {exc}"
+            ) from exc
+
+        if (
+            record.record_identity != entry.record_identity
+            or ManifestArtifact.from_record(record) != entry
+        ):
+            raise StoreError(
+                "unfinalized artifact membership does not match its record"
+            )
+
+        if entry.retention is RetentionState.CONTENT_RETAINED:
+            digest = _digest(
+                entry.content_identity,
+                label="artifact content identity",
+            )
+            with self._root_fd() as root_fd:
+                parent_fd = self._open_dir_chain(
+                    root_fd,
+                    _OBJECT_ARTIFACTS,
+                    create=False,
+                )
+                try:
+                    fd = self._open_regular_member(
+                        parent_fd,
+                        digest,
+                        label=f"artifact content {entry.content_identity}",
+                    )
+                    try:
+                        hasher = hashlib.sha256()
+                        byte_count = 0
+                        while True:
+                            chunk = os.read(fd, _CHUNK_SIZE)
+                            if not chunk:
+                                break
+                            byte_count += len(chunk)
+                            hasher.update(chunk)
+                    finally:
+                        os.close(fd)
+                finally:
+                    os.close(parent_fd)
+            observed_identity = f"sha256:{hasher.hexdigest()}"
+            if (
+                observed_identity != entry.content_identity
+                or byte_count != record.byte_count
+            ):
+                raise StoreError(
+                    "unfinalized retained artifact content does not match its record"
+                )
+
+        return record
+
+    def _validate_event_for_restore(self, identity: str) -> None:
+        digest = _digest(identity, label="event identity")
+        with self._root_fd() as root_fd:
+            parent_fd = self._open_dir_chain(
+                root_fd,
+                _OBJECT_EVENTS,
+                create=False,
+            )
+            try:
+                fd = self._open_regular_member(
+                    parent_fd,
+                    digest + ".json",
+                    label=f"event {identity}",
+                )
+                try:
+                    raw = _read_all(fd)
+                finally:
+                    os.close(fd)
+            finally:
+                os.close(parent_fd)
+
+        try:
+            value = parse_canonical_json_bytes(raw)
+        except (CanonicalizationError, RecursionError) as exc:
+            raise StoreError(
+                f"unfinalized event {identity} is not canonical: {exc}"
+            ) from exc
+        if not isinstance(value, dict) or set(value) != {
+            "core",
+            "event_identity",
+            "self_hash_exclusion",
+        }:
+            raise StoreError(
+                f"unfinalized event {identity} envelope is malformed"
+            )
+        core = value.get("core")
+        if (
+            not isinstance(core, dict)
+            or value.get("self_hash_exclusion") != "event_identity"
+            or value.get("event_identity") != identity
+            or event_identity(core) != identity
+        ):
+            raise StoreError(
+                f"unfinalized event {identity} does not match its identity"
+            )
+
+    def restore_unfinalized_membership(
+        self,
+        *,
+        artifacts: Iterable[ManifestArtifact],
+        events: Iterable[str],
+        expected_head: str | None,
+    ) -> None:
+        if self._read_head() != expected_head:
+            raise StoreError(
+                "store HEAD changed before unfinalized membership recovery"
+            )
+        if self._current_manifest_identity != expected_head:
+            raise StoreError(
+                "loaded store HEAD does not match recovery base"
+            )
+
+        validated_artifacts: list[
+            tuple[ManifestArtifact, ArtifactRecord]
+        ] = []
+        for entry in artifacts:
+            if not isinstance(entry, ManifestArtifact):
+                raise TypeError(
+                    "restored artifacts must contain ManifestArtifact values"
+                )
+            record = self._validated_artifact_for_restore(entry)
+            self._check_artifact_rebinding(entry, new_record=record)
+            validated_artifacts.append((entry, record))
+
+        validated_events: list[str] = []
+        for identity in events:
+            if not isinstance(identity, str):
+                raise TypeError("restored event identities must be strings")
+            self._validate_event_for_restore(identity)
+            validated_events.append(identity)
+
+        for entry, _record in validated_artifacts:
+            prior = self._artifacts.get(entry.content_identity)
+            self._artifacts[entry.content_identity] = entry
+            if prior != entry:
+                self._session_changed_artifacts.add(entry.content_identity)
+        self._events.update(validated_events)
 
     def _check_artifact_rebinding(
         self,
@@ -1119,6 +1392,10 @@ class LocalEvidenceStore:
         return self.root.joinpath(*_SNAPSHOTS, digest)
 
     def verify_current(self) -> VerificationReport:
+        # Refuse a configured-path replacement before deriving any snapshot
+        # path from self.root.
+        with self._root_fd():
+            pass
         path = self.current_snapshot_path()
         if path is None or self._current_manifest_identity is None:
             raise StoreError("store has no finalized snapshot")
@@ -1128,23 +1405,22 @@ class LocalEvidenceStore:
             label="current snapshot",
         )
 
-    def _read_head(self) -> str | None:
-        with self._root_fd() as root_fd:
+    def _read_head_from_root_fd(self, root_fd: int) -> str | None:
+        try:
+            fd = os.open(_HEAD, _file_read_flags(), dir_fd=root_fd)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise StoreError(f"HEAD cannot be opened safely: {exc}") from exc
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise StoreError("HEAD must be a regular file")
             try:
-                fd = os.open(_HEAD, _file_read_flags(), dir_fd=root_fd)
-            except FileNotFoundError:
-                return None
+                raw = _read_all(fd)
             except OSError as exc:
-                raise StoreError(f"HEAD cannot be opened safely: {exc}") from exc
-            try:
-                if not stat.S_ISREG(os.fstat(fd).st_mode):
-                    raise StoreError("HEAD must be a regular file")
-                try:
-                    raw = _read_all(fd)
-                except OSError as exc:
-                    raise StoreError(f"HEAD cannot be read: {exc}") from exc
-            finally:
-                os.close(fd)
+                raise StoreError(f"HEAD cannot be read: {exc}") from exc
+        finally:
+            os.close(fd)
 
         try:
             text = raw.decode("ascii")
@@ -1155,6 +1431,10 @@ class LocalEvidenceStore:
         identity = text[:-1]
         _digest(identity, label="HEAD manifest identity")
         return identity
+
+    def _read_head(self) -> str | None:
+        with self._root_fd() as root_fd:
+            return self._read_head_from_root_fd(root_fd)
 
     def _read_snapshot_manifest(
         self,
@@ -1453,9 +1733,30 @@ class LocalEvidenceStore:
             finally:
                 os.close(snapshot_fd)
 
-    def _load_head(self) -> None:
-        identity = self._read_head()
+    def _load_head(self, *, root_fd: int | None = None) -> None:
+        if root_fd is None:
+            identity = self._read_head()
+        else:
+            bound_identity = (
+                os.fstat(root_fd).st_dev,
+                os.fstat(root_fd).st_ino,
+            )
+            if self._root_identity is not None and (
+                bound_identity != self._root_identity
+            ):
+                raise StoreError(
+                    "store root filesystem identity changed before HEAD load"
+                )
+            identity = self._read_head_from_root_fd(root_fd)
+
         if identity is None:
+            if root_fd is not None:
+                with self._root_fd():
+                    pass
+            self._artifacts = {}
+            self._events = set()
+            self._current_manifest_identity = None
+            self._session_changed_artifacts.clear()
             return
         digest = _digest(identity, label="HEAD manifest identity")
         snapshot = self.root.joinpath(*_SNAPSHOTS, digest)
@@ -1514,7 +1815,25 @@ class LocalEvidenceStore:
             label="HEAD snapshot after reconstruction checks",
         )
 
+        previous_artifacts = self._artifacts
+        previous_events = self._events
+        previous_manifest_identity = self._current_manifest_identity
+        previous_changed_artifacts = self._session_changed_artifacts
+
         self._artifacts = loaded_artifacts
         self._events = loaded_events
         self._current_manifest_identity = identity
-        self._session_changed_artifacts.clear()
+        self._session_changed_artifacts = set()
+
+        if root_fd is not None:
+            # No filesystem-derived state is assigned after this continuity
+            # observation. If it fails, restore the previously accepted state.
+            try:
+                with self._root_fd():
+                    pass
+            except Exception:
+                self._artifacts = previous_artifacts
+                self._events = previous_events
+                self._current_manifest_identity = previous_manifest_identity
+                self._session_changed_artifacts = previous_changed_artifacts
+                raise
