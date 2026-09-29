@@ -1690,6 +1690,36 @@ If content is omitted, that fact must remain explicit.
 
 ---
 
+# 39A. Phase 14 Selective Disclosure
+
+The reference privacy path creates a new derivative rather than mutating evidence:
+
+```text
+verified retained source artifact
+        ↓ deterministic redaction
+new DERIVED artifact
+        ↓
+selective-disclosure package
+```
+
+The disclosure package withholds original source bytes while retaining the source content identity and exact original ArtifactRecord metadata as a witness.
+
+Original retention and disclosure retention are separate concepts:
+
+```text
+source package: CONTENT_RETAINED
+selective disclosure: DIGEST_ONLY source witness
+derivative: CONTENT_RETAINED
+```
+
+Standalone disclosure verification proves disclosed content integrity and DERIVED lineage. Exact transform verification requires the original source package and is reported separately.
+
+The source package is held open and verified by descriptor before source bytes are used for derivation.
+
+See [PRIVACY.md](PRIVACY.md).
+
+---
+
 # 40. Framework Neutrality
 
 The architecture must support:
