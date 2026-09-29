@@ -4,12 +4,14 @@ from __future__ import annotations
 import argparse
 import base64
 from contextlib import contextmanager
+import fcntl
 import json
 import os
 from pathlib import Path
 import re
 import stat
 import sys
+import threading
 from typing import Any, BinaryIO, Iterator, TextIO
 from urllib.parse import urlsplit
 import uuid
@@ -55,7 +57,10 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _HEX_DIGEST_LENGTH = 64
 
 _MCP_WORKING_STATE = ".provenance-mcp-working.json"
+_MCP_WORKING_LOCK = ".provenance-mcp-working.lock"
 _MCP_WORKING_SCHEMA = "provenance.mcp-working-state.v1"
+_MCP_PROCESS_LOCKS_GUARD = threading.Lock()
+_MCP_PROCESS_LOCKS: dict[tuple[int, int], threading.RLock] = {}
 
 _CAPABILITIES = {
     "tools": {"listChanged": False},
@@ -202,6 +207,16 @@ def _directory_identity(fd: int) -> tuple[int, int]:
     if not stat.S_ISDIR(value.st_mode):
         raise ValueError("expected directory descriptor")
     return value.st_dev, value.st_ino
+
+
+def _process_working_lock(root_fd: int) -> threading.RLock:
+    key = _directory_identity(root_fd)
+    with _MCP_PROCESS_LOCKS_GUARD:
+        lock = _MCP_PROCESS_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _MCP_PROCESS_LOCKS[key] = lock
+        return lock
 
 
 def _fd_is_within(
@@ -540,10 +555,53 @@ class ProvenanceMCPServer:
         self._working_base_manifest_identity = (
             self.store.current_manifest_identity
         )
-        self._recover_working_state()
+        with self._working_state_lock():
+            self._synchronize_working_state_locked()
 
     def _working_state_path(self) -> Path:
         return self.store.root / _MCP_WORKING_STATE
+
+    @contextmanager
+    def _working_state_lock(self) -> Iterator[None]:
+        root_fd = os.open(self.store.root, _directory_flags())
+        process_lock = _process_working_lock(root_fd)
+        process_lock.acquire()
+        lock_fd: int | None = None
+        try:
+            try:
+                lock_fd = os.open(
+                    _MCP_WORKING_LOCK,
+                    os.O_RDWR
+                    | os.O_CREAT
+                    | os.O_NOFOLLOW
+                    | os.O_CLOEXEC,
+                    0o600,
+                    dir_fd=root_fd,
+                )
+            except OSError as exc:
+                raise RuntimeError(
+                    f"MCP working-state lock cannot be opened safely: {exc}"
+                ) from exc
+            if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+                raise RuntimeError(
+                    "MCP working-state lock must be a regular file"
+                )
+            os.fsync(root_fd)
+            try:
+                fcntl.lockf(lock_fd, fcntl.LOCK_EX)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"MCP working-state lock cannot be acquired: {exc}"
+                ) from exc
+            try:
+                yield
+            finally:
+                fcntl.lockf(lock_fd, fcntl.LOCK_UN)
+        finally:
+            if lock_fd is not None:
+                os.close(lock_fd)
+            os.close(root_fd)
+            process_lock.release()
 
     def _read_working_state(self) -> dict[str, Any] | None:
         try:
@@ -734,7 +792,15 @@ class ProvenanceMCPServer:
         self._pending_events.clear()
         self._working_base_manifest_identity = manifest_identity_value
 
-    def _recover_working_state(self) -> None:
+    def _synchronize_working_state_locked(self) -> None:
+        store_root = self.store.root
+        self.store = LocalEvidenceStore(store_root)
+        self._pending_artifacts.clear()
+        self._pending_events.clear()
+        self._working_base_manifest_identity = (
+            self.store.current_manifest_identity
+        )
+
         state = self._read_working_state()
         if state is None:
             return
@@ -817,6 +883,11 @@ class ProvenanceMCPServer:
         return envelope.custody_identity
 
     def _record(self, arguments: object) -> dict[str, Any]:
+        with self._working_state_lock():
+            self._synchronize_working_state_locked()
+            return self._record_locked(arguments)
+
+    def _record_locked(self, arguments: object) -> dict[str, Any]:
         args = _require_object(arguments, label="provenance.record arguments")
         _require_exact_keys(
             args,
@@ -936,6 +1007,11 @@ class ProvenanceMCPServer:
         }
 
     def _finalize(self, arguments: object) -> dict[str, Any]:
+        with self._working_state_lock():
+            self._synchronize_working_state_locked()
+            return self._finalize_locked(arguments)
+
+    def _finalize_locked(self, arguments: object) -> dict[str, Any]:
         args = _require_object(arguments, label="provenance.finalize arguments")
         _require_exact_keys(
             args,
