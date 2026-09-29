@@ -62,7 +62,7 @@ verification report contents
 The Phase 13 scheduler uses:
 
 ~~~text
-default worker cap = 4
+worker hard cap = 4
 bounded queued batches = 2 × active workers
 ordered executor.map reduction
 ~~~
@@ -133,14 +133,14 @@ Observed on the Phase 13 GitHub Actions validation run:
 
 ~~~text
 runner:
-  GitHub Actions 1000096576
+  GitHub Actions 1000096651
 
 OS:
   Linux 6.17.0-1022-azure x86_64
   Ubuntu 24.04.5 runner image
 
 CPU:
-  AMD EPYC 9V74 80-Core Processor
+  AMD EPYC 7763 64-Core Processor
   4 logical CPUs exposed to runner
 
 toolchain:
@@ -159,23 +159,23 @@ workload:
 ### Bundle verification
 
 ~~~text
-serial reference median = 45.343164 ms
-optimized median        = 25.792463 ms
-median ratio            = 0.568828
-observed median gain    = 43.117%
-reference stdev         = 0.206271 ms
-optimized stdev         = 0.203136 ms
+serial reference median = 43.851859 ms
+optimized median        = 26.336839 ms
+median ratio            = 0.600587
+observed median gain    = 39.941%
+reference stdev         = 0.160592 ms
+optimized stdev         = 0.910858 ms
 ~~~
 
 ### Forensic-package verification
 
 ~~~text
-serial reference median = 96.480844 ms
-optimized median        = 59.515135 ms
-median ratio            = 0.616860
-observed median gain    = 38.314%
-reference stdev         = 0.502481 ms
-optimized stdev         = 2.283362 ms
+serial reference median = 92.626357 ms
+optimized median        = 61.895547 ms
+median ratio            = 0.668228
+observed median gain    = 33.177%
+reference stdev         = 0.264995 ms
+optimized stdev         = 8.368796 ms
 ~~~
 
 These are archived environment-specific observations.
