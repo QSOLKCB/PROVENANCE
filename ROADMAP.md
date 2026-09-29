@@ -1044,6 +1044,12 @@ Deleting the UI changes no evidence identity and no verification outcome.
 
 # Phase 10 — Generic Adapter Interface
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Make adapters easy to build without letting them redefine the core.
@@ -1081,9 +1087,33 @@ Adapters should be developed only when a real integration or test case exists.
 
 Do not create empty provider modules for completeness.
 
+## Reference implementation
+
+Phase 10 defines a provider-neutral `AdapterContract`, shared capture/translation records, and one persistence path that composes the existing store, custody, and verifier modules.
+
+The first two additional executable adapters are deliberately structurally different:
+
+```text
+GenericHTTPAdapter
+    → ordinary HTTP/HTTPS request-response boundary
+
+ProcessAdapter
+    → local argv/stdin/stdout/stderr process boundary
+```
+
+Both emit ordinary core `ArtifactRecord` and `EventEnvelope` values. Provider- or transport-specific metadata remains a retained DECLARED artifact under an explicit extension namespace rather than changing `provenance-core`.
+
+Failure observations remain persistable and use `COLLECTION_FAILED` instead of disappearing when the underlying operation fails.
+
+HTTP credential-bearing header values and inherited process environments are runtime-only and are not retained as ordinary evidence payloads.
+
+See `ADAPTERS.md`.
+
 ## Exit Gate
 
 At least two structurally different providers/systems can emit evidence into the same core schema without provider-specific changes to core semantics.
+
+The Phase 10 executed test uses a local HTTP server and a local child process, persists both observations through the same store/custody path, and independently verifies the resulting evidence.
 
 ---
 
