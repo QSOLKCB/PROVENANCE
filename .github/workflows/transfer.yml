@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - "provenance_transfer/**"
+      - "provenance_trust/**"
       - "provenance_verify/**"
       - "provenance_custody/**"
       - "provenance_export/**"
