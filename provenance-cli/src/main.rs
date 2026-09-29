@@ -3,7 +3,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const COMMANDS: &[&str] = &["record", "inspect", "verify", "finalize", "export"];
+const COMMANDS: &[&str] = &["record", "inspect", "verify", "finalize", "export", "package"];
 
 fn print_help() {
     println!("PROVENANCE Phase 8 CLI");
@@ -18,6 +18,7 @@ fn print_help() {
     println!("  verify    Independently verify current bundle + custody");
     println!("  finalize  Finalize the current working evidence set");
     println!("  export    Copy and independently verify the current snapshot");
+    println!("  package   Create a portable Phase 11 forensic package");
     println!("  tui       Keyboard-first slash-command palette");
     println!();
     println!("Type 'provenance <command> --help' for backend command options.");
@@ -270,7 +271,7 @@ mod tests {
     fn backend_commands_are_stable() {
         assert_eq!(
             COMMANDS,
-            ["record", "inspect", "verify", "finalize", "export"]
+            ["record", "inspect", "verify", "finalize", "export", "package"]
         );
     }
 }
