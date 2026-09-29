@@ -679,6 +679,12 @@ detect tampering
 
 # Phase 7 — MCP Interface
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Expose PROVENANCE through MCP without making MCP part of the core evidence contract.
@@ -752,7 +758,31 @@ request provenance
 verify returned evidence
 ```
 
+## Reference implementation
+
+The Phase 7 reference server is dependency-free and stdio-only.
+
+It supports the current `2026-07-28` stateless MCP era and the `2025-11-25` initialize-handshake era without making either lifecycle part of the evidence core.
+
+`provenance.record` stores caller assertions as DECLARED evidence and emits a separate unique OBSERVED MCP receipt so repeated identical calls cannot collapse into one occurrence.
+
+The interface delegates finalization and verification to the existing store/verifier modules, exposes evidence through identity-derived `provenance://` resources, and includes a narrow snapshot-copy export without claiming completion of the later Phase 11 forensic-package contract.
+
+See `MCP.md`.
+
 ## Exit Gate
+
+An executed stdio client/server integration can:
+
+```text
+record through MCP
+preserve caller data as DECLARED
+prove each call occurrence separately
+finalize through the existing store
+read identity-addressed evidence resources
+independently verify bundle + custody
+export and independently verify a snapshot copy
+```
 
 MCP can be removed entirely without invalidating existing evidence.
 
