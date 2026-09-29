@@ -1,4 +1,8 @@
-"""Optional Phase 12 authenticity mechanisms for PROVENANCE."""
+"""Phase 12 trust-record schemas for PROVENANCE.
+
+Mutable signing/anchor producers live in provenance_trust.records.
+Independent verification lives in provenance_verify.trust.
+"""
 
 from .model import (
     EXTERNAL_ANCHOR_SCHEMA,
@@ -11,12 +15,6 @@ from .model import (
     git_anchor_payload,
     signature_record_identity,
 )
-from .records import (
-    TrustRecordError,
-    create_git_anchor_record,
-    create_signature_record,
-    write_trust_record,
-)
 
 __all__ = [
     "EXTERNAL_ANCHOR_SCHEMA",
@@ -24,12 +22,8 @@ __all__ = [
     "SIGNATURE_NAMESPACE",
     "SIGNATURE_SCHEMA",
     "SUBJECT_KIND_FORENSIC_PACKAGE",
-    "TrustRecordError",
-    "create_git_anchor_record",
-    "create_signature_record",
     "ed25519_key_fingerprint",
     "external_anchor_identity",
     "git_anchor_payload",
     "signature_record_identity",
-    "write_trust_record",
 ]
