@@ -22,6 +22,7 @@ The repository root is intentionally small. Detailed contracts, subsystem notes,
 | [PACKAGE.md](PACKAGE.md) | Phase 11 portable forensic package |
 | [TRUST.md](TRUST.md) | Phase 12 detached signatures and external anchoring |
 | [PERFORMANCE.md](PERFORMANCE.md) | Phase 13 exact verifier performance hardening and benchmark evidence |
+| [PRIVACY.md](PRIVACY.md) | Phase 14 redaction, retention boundaries, and selective disclosure |
 
 ## Interfaces and integrations
 
