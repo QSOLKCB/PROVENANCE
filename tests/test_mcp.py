@@ -533,6 +533,83 @@ class ProvenanceMCPTests(unittest.TestCase):
             self.assertEqual(stderr, "")
             self.assertFalse(state_path.exists())
 
+    def test_long_lived_server_refreshes_latest_head_for_current_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+
+            stale = ProvenanceMCPServer(store_root, custody_root)
+            writer = ProvenanceMCPServer(store_root, custody_root)
+
+            first_record = writer._record(
+                {
+                    "actor": "writer",
+                    "operation": "snapshot.first",
+                    "value": {"generation": 1},
+                }
+            )
+            self.assertEqual(first_record["classification"], "DECLARED")
+            first = writer._finalize({"scope": "closed"})
+
+            # This server existed before any finalized HEAD. Verification must
+            # refresh rather than reporting "no finalized snapshot".
+            verified_first = stale._verify({})
+            self.assertTrue(verified_first["bundle"]["integrity_verified"])
+            self.assertEqual(
+                verified_first["bundle"]["manifest_identity"],
+                first["manifest_identity"],
+            )
+
+            second_record = writer._record(
+                {
+                    "actor": "writer",
+                    "operation": "snapshot.second",
+                    "value": {"generation": 2},
+                }
+            )
+            self.assertEqual(second_record["classification"], "DECLARED")
+            second = writer._finalize({"scope": "closed"})
+            self.assertNotEqual(
+                first["manifest_identity"],
+                second["manifest_identity"],
+            )
+
+            inspected = stale._inspect({})
+            self.assertEqual(
+                inspected["current_manifest_identity"],
+                second["manifest_identity"],
+            )
+            self.assertEqual(
+                inspected["manifest"]["manifest_identity"],
+                second["manifest_identity"],
+            )
+
+            verified_second = stale._verify({})
+            self.assertTrue(verified_second["bundle"]["integrity_verified"])
+            self.assertEqual(
+                verified_second["bundle"]["manifest_identity"],
+                second["manifest_identity"],
+            )
+
+            export_root = root / "latest-export"
+            exported = stale._export(
+                {"destination": str(export_root)}
+            )
+            self.assertEqual(
+                exported["manifest_identity"],
+                second["manifest_identity"],
+            )
+            exported_report = verify_bundle(export_root)
+            self.assertTrue(
+                exported_report.integrity_verified,
+                exported_report.errors,
+            )
+            self.assertEqual(
+                exported_report.manifest_identity,
+                second["manifest_identity"],
+            )
+
     def test_restart_recovers_unfinalized_record_membership(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
