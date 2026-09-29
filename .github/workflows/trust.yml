@@ -1,0 +1,39 @@
+name: trust
+
+on:
+  push:
+    paths:
+      - "provenance_trust/**"
+      - "provenance_verify/**"
+      - "provenance_export/**"
+      - "tests/test_trust.py"
+      - "docs/TRUST.md"
+      - "docs/ROADMAP.md"
+      - ".github/workflows/trust.yml"
+  pull_request:
+    paths:
+      - "provenance_trust/**"
+      - "provenance_verify/**"
+      - "provenance_export/**"
+      - "tests/test_trust.py"
+      - "docs/TRUST.md"
+      - "docs/ROADMAP.md"
+      - ".github/workflows/trust.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  trust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Require reference trust tools
+        run: |
+          command -v ssh-keygen
+          command -v git
+      - name: Run Phase 12 trust tests
+        run: python3 -m unittest tests.test_trust -v
