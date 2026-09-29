@@ -170,10 +170,9 @@ def build_manifest() -> dict[str, object]:
         "proof_files": files,
         "schema": "provenance.phase18-formal-evidence.v1",
         "verification_contract": {
-            "axiom_audit": True,
             "build": "lake build",
             "leanchecker": True,
-            "nanoda_allow_sorry": False,
+            "placeholder_scan": True,
         },
     }
 
