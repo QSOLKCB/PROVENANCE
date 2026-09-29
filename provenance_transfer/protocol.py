@@ -103,12 +103,15 @@ def _publish_directory(
     staging_identity: tuple[int, int],
     label: str,
 ) -> Path:
-    _rename_noreplace_at(
-        parent_fd,
-        staging_name,
-        parent_fd,
-        destination_name,
-    )
+    try:
+        _rename_noreplace_at(
+            parent_fd,
+            staging_name,
+            parent_fd,
+            destination_name,
+        )
+    except Exception as exc:
+        raise TransferError(str(exc)) from exc
     os.fsync(parent_fd)
     final_fd = os.open(
         destination_name,
@@ -250,6 +253,11 @@ def create_transfer_bundle(
     if supplied.exists() or supplied.is_symlink():
         raise TransferError("transfer destination must not already exist")
     parent = supplied.parent.resolve(strict=True)
+    source_resolved = package_path.resolve(strict=True)
+    if parent == source_resolved or source_resolved in parent.parents:
+        raise TransferError(
+            "transfer destination must be outside the source package"
+        )
     parent_fd = os.open(parent, _directory_flags())
     staging_name = f".{supplied.name}.{uuid.uuid4().hex}.tmp"
     created = False
@@ -539,6 +547,33 @@ def receive_transfer(
 
     package_dest = Path(package_destination).expanduser()
     receipt_dest = Path(receipt_destination).expanduser()
+    transfer_resolved = transfer_path.resolve(strict=True)
+
+    package_parent = package_dest.parent.resolve(strict=True)
+    receipt_parent = receipt_dest.parent.resolve(strict=True)
+    if (
+        package_parent == transfer_resolved
+        or transfer_resolved in package_parent.parents
+    ):
+        raise TransferError(
+            "received package destination must be outside the transfer bundle"
+        )
+    if (
+        receipt_parent == transfer_resolved
+        or transfer_resolved in receipt_parent.parents
+    ):
+        raise TransferError(
+            "receipt destination must be outside the transfer bundle"
+        )
+    if package_dest.exists() and package_dest.is_dir():
+        package_resolved = package_dest.resolve(strict=True)
+        if (
+            receipt_parent == package_resolved
+            or package_resolved in receipt_parent.parents
+        ):
+            raise TransferError(
+                "receipt destination must be outside the received package"
+            )
 
     if receipt_dest.exists() or receipt_dest.is_symlink():
         existing = verify_transfer_receipt(
