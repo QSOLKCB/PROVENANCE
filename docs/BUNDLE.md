@@ -214,3 +214,21 @@ RECOMPUTE.
 DO NOT TRUST STORED CLAIMS WHEN THEY CAN BE RECOMPUTED.
 DO NOT REPAIR THE EVIDENCE TO MAKE IT PASS.
 ~~~
+
+---
+
+## Phase 13 verification execution
+
+The default bundle verifier may execute independent artifact/content and event checks using bounded parallel workers.
+
+Its report contract is unchanged.
+
+A serial reference entry point is retained:
+
+~~~python
+from provenance_verify import verify_bundle_reference
+~~~
+
+Phase 13 CI requires the optimized and serial `VerificationReport` values to compare exactly equal on stable valid and failing evidence, including deterministic check/error ordering.
+
+See [PERFORMANCE.md](PERFORMANCE.md).

@@ -1,0 +1,41 @@
+name: performance
+
+on:
+  push:
+    paths:
+      - "provenance_verify/**"
+      - "provenance_store/**"
+      - "provenance_export/**"
+      - "tests/test_performance.py"
+      - "scripts/benchmark_phase13.py"
+      - "docs/PERFORMANCE.md"
+      - "docs/ROADMAP.md"
+      - ".github/workflows/performance.yml"
+  pull_request:
+    paths:
+      - "provenance_verify/**"
+      - "provenance_store/**"
+      - "provenance_export/**"
+      - "tests/test_performance.py"
+      - "scripts/benchmark_phase13.py"
+      - "docs/PERFORMANCE.md"
+      - "docs/ROADMAP.md"
+      - ".github/workflows/performance.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  performance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run Phase 13 equivalence tests
+        run: python3 -m unittest tests.test_performance -v
+      - name: Run environment-scoped benchmark
+        run: |
+          python3 scripts/benchmark_phase13.py             --artifact-count 32             --artifact-bytes 1048576             --repetitions 5             | tee phase13-benchmark.json
+          cat phase13-benchmark.json >> "$GITHUB_STEP_SUMMARY"

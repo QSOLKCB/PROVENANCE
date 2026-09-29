@@ -21,8 +21,13 @@ from provenance_core import (
     parse_canonical_json_bytes,
     require_sha256_identity,
 )
+from ._parallel import DEFAULT_MAX_VERIFY_WORKERS, ordered_bounded_map
 from .custody import verify_custody_records
-from .verifier import verify_bundle, verify_bundle_fd
+from .verifier import (
+    verify_bundle,
+    verify_bundle_fd,
+    verify_bundle_fd_reference,
+)
 
 
 FORENSIC_PACKAGE_SCHEMA = "provenance.forensic-package.v1"
@@ -493,8 +498,23 @@ def _custody_records(
     return raws, errors
 
 
-def verify_forensic_package(
+def _member_hash_task(
+    args: tuple[int, dict[str, object]],
+) -> tuple[str, str | None, int | None, str | None]:
+    root_fd, item = args
+    relative = str(item["path"])
+    try:
+        identity, byte_count = _hash_member(root_fd, relative)
+    except Exception as exc:
+        return relative, None, None, str(exc)
+    return relative, identity, byte_count, None
+
+
+def _verify_forensic_package(
     package_dir: Path | str,
+    *,
+    max_workers: int,
+    reference_dependencies: bool,
 ) -> ForensicPackageVerificationReport:
     package = Path(package_dir)
     checks: list[str] = []
@@ -704,13 +724,22 @@ def verify_forensic_package(
         checks.append("physical package membership exactly matches package.json")
 
         member_ok = True
-        for item in normalized_members:
-            relative = str(item["path"])
-            try:
-                identity, byte_count = _hash_member(root_fd, relative)
-            except Exception as exc:
+        member_results = ordered_bounded_map(
+            _member_hash_task,
+            [(root_fd, item) for item in normalized_members],
+            max_workers=max_workers,
+        )
+        for (
+            relative,
+            identity,
+            byte_count,
+            member_error,
+        ), item in zip(member_results, normalized_members):
+            if member_error is not None:
                 member_ok = False
-                errors.append(f"{relative}: cannot hash member: {exc}")
+                errors.append(
+                    f"{relative}: cannot hash member: {member_error}"
+                )
                 continue
             if identity != item["content_identity"]:
                 member_ok = False
@@ -723,7 +752,11 @@ def verify_forensic_package(
 
         evidence_fd = _open_directory_at(root_fd, ("evidence",))
         try:
-            bundle_report = verify_bundle_fd(evidence_fd)
+            bundle_report = (
+                verify_bundle_fd_reference(evidence_fd)
+                if reference_dependencies
+                else verify_bundle_fd(evidence_fd)
+            )
         finally:
             os.close(evidence_fd)
         if not bundle_report.integrity_verified:
@@ -814,3 +847,27 @@ def verify_forensic_package(
         )
     finally:
         os.close(root_fd)
+
+
+def verify_forensic_package_reference(
+    package_dir: Path | str,
+) -> ForensicPackageVerificationReport:
+    """Serial Phase 11 verifier retained as the Phase 13 reference path."""
+
+    return _verify_forensic_package(
+        package_dir,
+        max_workers=1,
+        reference_dependencies=True,
+    )
+
+
+def verify_forensic_package(
+    package_dir: Path | str,
+) -> ForensicPackageVerificationReport:
+    """Verify a forensic package with bounded deterministic parallel work."""
+
+    return _verify_forensic_package(
+        package_dir,
+        max_workers=DEFAULT_MAX_VERIFY_WORKERS,
+        reference_dependencies=False,
+    )

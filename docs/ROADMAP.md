@@ -1301,6 +1301,12 @@ The executed Phase 12 CI lane generates a real Ed25519 key, signs and verifies a
 
 # Phase 13 — Performance Hardening
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Reduce overhead without changing evidence semantics.
@@ -1347,6 +1353,47 @@ variance where relevant
 
 Do not promote environment-specific numbers into universal defaults.
 
+## Reference implementation
+
+Phase 13 applies bounded deterministic parallel execution to independent verifier work while retaining serial reference entry points.
+
+```text
+bundle artifact/content checks   → bounded parallel
+bundle event checks              → bounded parallel
+package member hashing/counting  → bounded parallel
+semantic reduction/error order   → deterministic input order
+```
+
+Worker policy:
+
+```text
+hard cap = 4 workers
+effective default = min(4, logical CPU count)
+2 queued/in-flight batches per worker
+```
+
+The conformance suite compares complete optimized/reference report objects on valid and multiply corrupted evidence and directly witnesses overlapping worker execution without exceeding the cap.
+
+The CI benchmark refuses to report performance unless exact report equivalence holds.
+
+Recorded environment-scoped observation on GitHub Actions (AMD EPYC 7763, 4 logical CPUs, CPython 3.12.3, 32 × 1 MiB retained artifacts + 32 events, 5 repetitions):
+
+```text
+bundle verifier:
+  serial median    43.851859 ms
+  optimized median 26.336839 ms
+  observed gain    39.941%
+
+forensic-package verifier:
+  serial median    92.626357 ms
+  optimized median 61.895547 ms
+  observed gain    33.177%
+```
+
+These measurements are environment-specific observations and must be re-measured before transfer to another environment.
+
+See `PERFORMANCE.md`.
+
 ## Exit Gate
 
 Measured overhead improves without weakening:
@@ -1357,6 +1404,8 @@ test coverage
 verification strength
 failure visibility
 ```
+
+The Phase 13 reference benchmark measured lower median runtime for both bundle and forensic-package verification while the optimized and serial reports remained exactly equal.
 
 ---
 
