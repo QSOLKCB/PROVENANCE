@@ -6,9 +6,10 @@ from pathlib import Path
 import subprocess
 from typing import Any, Mapping, Sequence
 
-from provenance_core import canonical_json_bytes
+from provenance_core import EvidenceClass, canonical_json_bytes
 
 from .base import (
+    ADAPTER_ARTIFACT_MEDIA_TYPE,
     AdapterContract,
     AdapterExecutionError,
     AdapterFailure,
@@ -89,12 +90,13 @@ class ProcessAdapter:
             CapturedArtifact(
                 label="invocation",
                 data=canonical_json_bytes(invocation),
-                media_type="application/json",
+                media_type=ADAPTER_ARTIFACT_MEDIA_TYPE,
+                evidence_class=EvidenceClass.DECLARED,
             ),
             CapturedArtifact(
                 label="stdin",
                 data=stdin,
-                media_type=stdin_media_type,
+                media_type=ADAPTER_ARTIFACT_MEDIA_TYPE,
             ),
         )
 
@@ -106,6 +108,7 @@ class ProcessAdapter:
         outputs: tuple[CapturedArtifact, ...],
         returncode: int | None,
         cwd: str | None,
+        stdin_media_type: str,
         declared_metadata: Mapping[str, Any] | None,
         extensions: Mapping[str, Any] | None,
         failure: AdapterFailure | None,
@@ -118,6 +121,7 @@ class ProcessAdapter:
                 "returncode": returncode,
                 "shell": False,
                 "environment_retained": False,
+                "stdin_media_type": stdin_media_type,
             },
             "caller": dict(declared_metadata or {}),
         }
@@ -220,6 +224,7 @@ class ProcessAdapter:
                 outputs=outputs,
                 returncode=None,
                 cwd=cwd_text,
+                stdin_media_type=stdin_media_type,
                 declared_metadata=declared_metadata,
                 extensions=extensions,
                 failure=failure,
@@ -239,6 +244,7 @@ class ProcessAdapter:
                 outputs=(),
                 returncode=None,
                 cwd=cwd_text,
+                stdin_media_type=stdin_media_type,
                 declared_metadata=declared_metadata,
                 extensions=extensions,
                 failure=failure,
@@ -265,6 +271,7 @@ class ProcessAdapter:
             outputs=outputs,
             returncode=completed.returncode,
             cwd=cwd_text,
+            stdin_media_type=stdin_media_type,
             declared_metadata=declared_metadata,
             extensions=extensions,
             failure=failure,
