@@ -872,6 +872,52 @@ Ollama's OpenAI-compatible endpoints are intentionally not used to redefine Phas
 
 ---
 
+# 17A. Generic Adapter Interface
+
+Phase 10 adds a provider-neutral adapter contract without changing the universal evidence schema.
+
+The reference contract declares:
+
+```text
+adapter identity
+source kind
+observation boundary
+extension namespace
+```
+
+Adapter-specific execution produces directly captured payload artifacts plus conservatively DECLARED request/invocation descriptors and ordinary `EventEnvelope` values. Transport/provider metadata is retained as a separate DECLARED artifact rather than adding fields to `EventCore`.
+
+The first two executable reference adapters are intentionally structurally different:
+
+```text
+GenericHTTPAdapter
+  request descriptor + request body
+  response body / observed prefix
+  HTTP transport boundary
+
+ProcessAdapter
+  argv descriptor + stdin
+  stdout + stderr
+  direct child-process boundary
+```
+
+Both flow through the same `build_observation()` and `persist_observation()` path.
+
+Credentials are outside the ordinary evidence path unless the operator explicitly places them in captured content:
+
+```text
+HTTP header values = runtime-only
+inherited process environment = runtime-only
+```
+
+HTTP target URLs and process argv are evidence-bearing inputs. Operators must therefore avoid putting secrets in URLs/query strings or argv when those values should not be retained.
+
+Failure does not erase observation. Failed HTTP/process operations return a persistable observation whose completion event is `COLLECTION_FAILED`.
+
+See `ADAPTERS.md`.
+
+---
+
 # 18. Ollama CI Contract
 
 The initial real-model lane uses a GitHub Actions matrix with separate clean runners. Each matrix job starts its own Ollama server and pulls one small reference model.

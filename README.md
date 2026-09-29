@@ -97,6 +97,23 @@ See `UI.md` for the read-only, gap-visibility, timeline, graph, and verification
 
 ---
 
+## Generic adapter interface
+
+Phase 10 adds one provider-neutral evidence translation contract plus two executable reference adapters:
+
+```text
+GenericHTTPAdapter → HTTP/HTTPS request-response boundaries
+ProcessAdapter     → local argv/stdin/stdout/stderr boundaries
+```
+
+Both emit the existing core evidence schema and can be persisted through the same store/custody/verifier path. Transport/provider metadata remains a DECLARED artifact under an explicit adapter extension namespace rather than changing `provenance-core`.
+
+HTTP authorization/header values and inherited process environments are intentionally not retained as ordinary evidence payloads.
+
+See `ADAPTERS.md` for the contract, failure semantics, credential boundary, and CI demonstration.
+
+---
+
 ## Why PROVENANCE Exists
 
 Modern AI systems rarely perform a single isolated operation.
@@ -749,6 +766,8 @@ See [CLI.md](CLI.md) for the Phase 8 Rust terminal CLI/TUI contract.
 
 See [UI.md](UI.md) for the Phase 9 read-only localhost HTTP viewer contract.
 
+See [ADAPTERS.md](ADAPTERS.md) for the Phase 10 provider-neutral generic adapter contract.
+
 ---
 
 # Implementation Roadmap
@@ -778,7 +797,7 @@ Phase 8  Rust terminal CLI/TUI
    ↓
 Phase 9  read-only localhost HTTP viewer
    ↓
-additional adapters
+Phase 10 generic HTTP + local process adapters
 ```
 
 The full roadmap, exit gates, CI progression, and later trust/privacy/distributed phases are defined in [ROADMAP.md](ROADMAP.md).
@@ -865,7 +884,7 @@ A dedicated Ollama Actions lane launches independent small-model instances on cl
 
 The stdio MCP interface and the Rust terminal CLI/TUI are now implemented. The CLI exposes record, inspect, verify, finalize, export, and a keyboard-first slash-command palette while delegating evidence semantics and independent verification to the existing modules. MCP and CLI share one hardened operational working-state journal so acknowledged pending evidence cannot silently diverge between interfaces.
 
-The local pure-HTML/CSS/JS viewer and generic/provider adapters remain later roadmap phases.
+The local pure-HTML/CSS/JS viewer and the Phase 10 generic HTTP/process adapter interface are now implemented. Provider-specific adapters remain optional later work and must stay behind the same provider-neutral boundary.
 
 Interfaces and compatibility guarantees should still be considered unstable until explicitly versioned and released.
 
