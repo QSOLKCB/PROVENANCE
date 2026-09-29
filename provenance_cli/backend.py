@@ -1,4 +1,4 @@
-"""Phase 8 terminal backend composed from existing PROVENANCE modules."""
+"""PROVENANCE terminal backend composed from existing modules."""
 from __future__ import annotations
 
 import argparse
@@ -56,7 +56,7 @@ _CHUNK_SIZE = 1024 * 1024
 
 
 class CliError(RuntimeError):
-    """Raised when the Phase 8 operator surface cannot preserve its contract."""
+    """Raised when the terminal operator surface cannot preserve its contract."""
 
 
 def _json_text(value: object) -> str:
@@ -1099,7 +1099,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="provenance",
-        description="PROVENANCE Phase 8 terminal backend.",
+        description="PROVENANCE terminal backend.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
