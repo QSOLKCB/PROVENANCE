@@ -98,6 +98,23 @@ python3 -m provenance_ui \
 
 Open `http://127.0.0.1:8765/`.
 
+## Optional: create a redacted disclosure
+
+For a retained artifact identity in a package:
+
+```bash
+./provenance-cli/target/debug/provenance redact-disclosure \
+  --package .demo/forensic-package \
+  --source sha256:<artifact-digest> \
+  --range START:END \
+  --output .demo/disclosure
+
+./provenance-cli/target/debug/provenance verify-disclosure \
+  --disclosure .demo/disclosure \
+  --source-package .demo/forensic-package
+```
+
+The original package is unchanged. See [PRIVACY.md](PRIVACY.md).
 ## Next
 
 - [Full usage instructions](INSTRUCTIONS.md)
