@@ -2,9 +2,11 @@
 
 > **Cryptographic chain of custody for LLMs, software, agents, tools, and automated systems.**
 
-PROVENANCE records **who did what, when, where, why, and how — backed by evidence**. It captures actions, binds artifacts and events to cryptographic identities, preserves append-only custody, and independently verifies the resulting record.
+PROVENANCE records **who did what, when, where, why, and how — backed by evidence**. It captures actions, binds artifacts and events to cryptographic identities, preserves append-only custody, supports signed offline handoff between systems, and independently verifies the resulting record.
 
-**Start here:** [Getting Started](docs/GETTING_STARTED.md) · [Usage Instructions](docs/INSTRUCTIONS.md) · [Documentation](docs/README.md) · [Roadmap](docs/ROADMAP.md)
+The project is implemented through **Phase 16** and now has a release-grade validation lane. The next roadmap action is **Phase 17: freeze an exact implementation commit as the immutable candidate for formal verification**.
+
+**Start here:** [Getting Started](docs/GETTING_STARTED.md) · [Usage Instructions](docs/INSTRUCTIONS.md) · [Release Trust Lane](docs/RELEASE.md) · [Documentation](docs/README.md) · [Roadmap](docs/ROADMAP.md)
 
 [![Version](https://img.shields.io/badge/version-v0.1--dev-4c1.svg)](docs/ROADMAP.md)
 [![Phase](https://img.shields.io/badge/roadmap-Phase%2016%20implemented-2ea44f.svg)](docs/ROADMAP.md)
@@ -53,6 +55,8 @@ FINALIZED SNAPSHOT
 INDEPENDENT VERIFY
       ↓
 INSPECT / EXPORT / PACKAGE
+      ↓
+OPTIONAL SIGN / REDACT / TRANSFER
 ```
 
 Quick CLI example:
@@ -99,9 +103,41 @@ The core remains provider- and interface-neutral. Verification consumes finalize
 
 ## Status
 
-Implemented through **Phase 16**: canonical core, verifier, local store, custody, Ollama + real-model CI, MCP, Rust CLI/TUI, read-only UI, generic adapters, portable forensic packages, detached signatures/Git anchors, exact bounded-parallel verification, selective redacted disclosures, signed offline distributed-custody handoff, and the release-grade full trust lane.
+Implemented through **Phase 16**:
 
-Next: **Phase 17 — immutable candidate freeze**. See [the roadmap](docs/ROADMAP.md).
+```text
+canonical evidence core
+independent verifier
+local content-addressed store
+append-only custody
+Ollama reference observation + real-model CI
+stdio MCP
+Rust CLI/TUI
+read-only localhost UI
+generic HTTP/process adapters
+portable forensic packages
+detached Ed25519 signatures + Git anchors
+bounded deterministic parallel verification
+selective redacted disclosures
+signed offline distributed custody
+release-grade full trust lane
+```
+
+### Release candidate boundary
+
+The codebase is ready for the **Phase 17 immutable candidate freeze**, but the freeze does not exist until an exact commit is tagged.
+
+Before tagging:
+
+1. merge the final documentation/release-preparation changes;
+2. identify the exact resulting `main` commit;
+3. require the **`full`** workflow to pass for that exact commit;
+4. record the commit SHA and workflow run;
+5. tag that exact SHA.
+
+If the tag is the Phase 17 freeze target, implementation, schema semantics, verifier semantics, and evidence-contract semantics must not change afterward without returning to Phase 16 and cutting a new candidate.
+
+Formal verification and the final archival release remain **Phase 18**. See [Release Trust Lane](docs/RELEASE.md) and [Roadmap](docs/ROADMAP.md).
 
 ## Documentation
 
