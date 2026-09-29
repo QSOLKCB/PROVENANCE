@@ -25,6 +25,8 @@ from provenance_core import (
     require_sha256_identity,
 )
 
+from ._parallel import DEFAULT_MAX_VERIFY_WORKERS, ordered_bounded_map
+
 VERIFICATION_REPORT_SCHEMA = "provenance.verification-report.v1"
 READ_CHUNK_SIZE = 1024 * 1024
 
