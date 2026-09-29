@@ -104,6 +104,135 @@ def _fork_held_process_lock_worker(result_queue) -> None:
         result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
 
 
+def _fork_inside_active_observation_worker(
+    store_root: str,
+    custody_root: str,
+    result_queue,
+) -> None:
+    origin_pid = os.getpid()
+    child_read_fd, child_write_fd = os.pipe()
+    marker_path = Path(store_root).parent / "fork-transport-markers.bin"
+    marker_fd = os.open(
+        marker_path,
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+        0o600,
+    )
+    child_pid: int | None = None
+
+    response_bytes = (
+        b'{"model":"qwen2.5:0.5b","created_at":"2026-09-29T00:00:00Z",'
+        b'"response":"fork regression","done":true}'
+    )
+
+    try:
+        store = LocalEvidenceStore(Path(store_root))
+        custody = LocalCustodyLedger(Path(custody_root))
+        adapter = OllamaAdapter("http://127.0.0.1:11434", timeout_seconds=5)
+
+        def fork_during_transport(request_bytes: bytes) -> bytes:
+            nonlocal child_pid
+            pid = os.fork()
+            if pid == 0:
+                os.close(child_read_fd)
+                signal.alarm(5)
+                os.write(marker_fd, b"C")
+                return response_bytes
+
+            child_pid = pid
+            os.write(marker_fd, b"P")
+            return response_bytes
+
+        adapter._post_generate = fork_during_transport  # type: ignore[method-assign]
+
+        try:
+            observation = adapter.observe_generate(
+                model="qwen2.5:0.5b",
+                prompt="fork inside active observation",
+                store=store,
+                custody=custody,
+            )
+        except BaseException as exc:
+            if os.getpid() != origin_pid:
+                message = f"{type(exc).__name__}: {exc}".encode(
+                    "utf-8",
+                    "replace",
+                )
+                try:
+                    os.write(child_write_fd, message)
+                finally:
+                    signal.alarm(0)
+                    os.close(child_write_fd)
+                    os.close(marker_fd)
+                expected = (
+                    isinstance(exc, OllamaAdapterError)
+                    and "cannot continue after fork" in str(exc)
+                )
+                os._exit(0 if expected else 21)
+
+            result_queue.put(
+                ("error", f"parent {type(exc).__name__}: {exc}")
+            )
+            if child_pid is not None:
+                os.close(child_write_fd)
+                os.waitpid(child_pid, 0)
+            return
+
+        if os.getpid() != origin_pid:
+            try:
+                os.write(child_write_fd, b"child unexpectedly returned observation")
+            finally:
+                signal.alarm(0)
+                os.close(child_write_fd)
+                os.close(marker_fd)
+            os._exit(22)
+
+        assert child_pid is not None
+        os.close(child_write_fd)
+        child_message = os.read(child_read_fd, 4096)
+        os.close(child_read_fd)
+        _, child_status = os.waitpid(child_pid, 0)
+        os.close(marker_fd)
+
+        reopened_store = LocalEvidenceStore(Path(store_root))
+        reopened_custody = LocalCustodyLedger(Path(custody_root))
+        result_queue.put(
+            (
+                "ok",
+                marker_path.read_bytes(),
+                child_message.decode("utf-8", "replace"),
+                child_status,
+                observation.snapshot.manifest_identity,
+                reopened_store.current_manifest_identity,
+                reopened_store.verify_current().integrity_verified,
+                reopened_custody.verify().integrity_verified,
+                reopened_store.artifact_count,
+                reopened_store.event_count,
+            )
+        )
+    except BaseException as exc:
+        if os.getpid() == origin_pid:
+            result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
+        else:
+            try:
+                os.write(
+                    child_write_fd,
+                    f"unexpected child {type(exc).__name__}: {exc}".encode(
+                        "utf-8",
+                        "replace",
+                    ),
+                )
+            except OSError:
+                pass
+            os._exit(23)
+    finally:
+        if os.getpid() == origin_pid:
+            for fd in (child_read_fd, child_write_fd, marker_fd):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+
 def _multiprocess_observe_worker(
     store_root: str,
     custody_root: str,
@@ -553,6 +682,48 @@ class OllamaAdapterTests(unittest.TestCase):
                 failure_status=200,
             )
             self.assertEqual(store.artifact_count, 2)
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
+    def test_fork_inside_active_observation_aborts_inherited_child(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+            LocalEvidenceStore(store_root)
+            LocalCustodyLedger(custody_root)
+
+            ctx = multiprocessing.get_context("spawn")
+            result_queue = ctx.Queue()
+            worker = ctx.Process(
+                target=_fork_inside_active_observation_worker,
+                args=(
+                    str(store_root),
+                    str(custody_root),
+                    result_queue,
+                ),
+            )
+            worker.start()
+            worker.join(timeout=12)
+
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=5)
+                self.fail(
+                    "active-observation fork regression worker deadlocked"
+                )
+
+            self.assertEqual(worker.exitcode, 0)
+            result = result_queue.get(timeout=3)
+            self.assertEqual(result[0], "ok", result)
+            self.assertEqual(sorted(result[1]), sorted(b"PC"), result)
+            self.assertIn("cannot continue after fork", result[2], result)
+            self.assertTrue(os.WIFEXITED(result[3]), result)
+            self.assertEqual(os.WEXITSTATUS(result[3]), 0, result)
+            self.assertEqual(result[4], result[5], result)
+            self.assertTrue(result[6], result)
+            self.assertTrue(result[7], result)
+            self.assertEqual(result[8], 2, result)
+            self.assertEqual(result[9], 3, result)
 
     @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
     def test_forking_thread_can_hold_process_observation_lock(self) -> None:
