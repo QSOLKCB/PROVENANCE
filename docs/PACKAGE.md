@@ -181,3 +181,19 @@ Signatures and external anchors do not become members of the Phase 11 package.
 They are detached sidecars that bind the finalized `package.json` / package identity without changing package closure or package identity.
 
 See [TRUST.md](TRUST.md).
+
+---
+
+## Phase 13 verification execution
+
+The default forensic-package verifier uses bounded parallel member hashing/counting and the optimized Phase 2 embedded-bundle verifier.
+
+A serial reference entry point remains available:
+
+~~~python
+from provenance_verify import verify_forensic_package_reference
+~~~
+
+The optimized/reference package reports must compare exactly equal for stable inputs.
+
+See [PERFORMANCE.md](PERFORMANCE.md).
