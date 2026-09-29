@@ -44,6 +44,8 @@ provenance-cli/target/debug/provenance
 
 The initial implementation is checkout-native. It locates the repository automatically when run from the checkout/build tree. Set PROVENANCE_ROOT when invoking the binary from elsewhere.
 
+PROVENANCE_ROOT selects where the implementation is loaded from; it does not change the caller's working directory. Relative --store, --custody, --file, and --destination paths are resolved relative to the directory from which the operator invoked provenance.
+
 PROVENANCE_PYTHON may select the Python executable. The default is python3.
 
 ---
@@ -263,6 +265,8 @@ A second integration test launches two independent Rust CLI processes concurrent
 The palette is also driven through stdin to prove slash-command discovery works without a graphical UI.
 
 The CLI workflow is triggered by changes to the Rust surface, the Python CLI backend, and its transitive PROVENANCE contracts: core, store, custody, verifier, and MCP interoperability. This prevents a lower-layer change from bypassing terminal lifecycle coverage merely because no CLI-owned file changed.
+
+The integration suite also executes the built binary from outside the repository with PROVENANCE_ROOT pointing back to the checkout. That regression requires relative source, store, custody, and export paths to remain anchored to the caller's working directory.
 
 ---
 
