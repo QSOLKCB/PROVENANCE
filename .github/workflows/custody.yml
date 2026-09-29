@@ -6,7 +6,7 @@ on:
       - "provenance_core/**"
       - "provenance_verify/custody.py"
       - "provenance_custody/**"
-      - "CUSTODY.md"
+      - "docs/CUSTODY.md"
       - "tests/test_custody.py"
       - ".github/workflows/custody.yml"
   push:
@@ -15,7 +15,7 @@ on:
       - "provenance_core/**"
       - "provenance_verify/custody.py"
       - "provenance_custody/**"
-      - "CUSTODY.md"
+      - "docs/CUSTODY.md"
       - "tests/test_custody.py"
       - ".github/workflows/custody.yml"
   workflow_dispatch:

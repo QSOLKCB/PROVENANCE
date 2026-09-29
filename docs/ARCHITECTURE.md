@@ -31,19 +31,15 @@ They must not become inseparable.
 
 Normative engineering law remains in:
 
-```text
-AGENTS.md
-INVARIANTS.md
-```
+- [`../AGENTS.md`](../AGENTS.md) — repository and coding-agent rules.
+- [`INVARIANTS.md`](INVARIANTS.md) — formal evidence and verification invariants.
 
 Project context and engineering ancestry remain in:
 
-```text
-README.md
-README4AIs.md
-DONORS.md
-LINEAGE.md
-```
+- [`../README.md`](../README.md) — the project landing page.
+- [`../README4AIs.md`](../README4AIs.md) — machine-oriented project guidance.
+- [`DONORS.md`](DONORS.md) — donor and provenance acknowledgements.
+- [`LINEAGE.md`](LINEAGE.md) — architectural lineage and influences.
 
 ---
 
@@ -137,32 +133,37 @@ PROVENANCE should initially remain one repository.
 
 Module separation does **not** require separate GitHub repositories.
 
-Preferred bootstrap structure:
+Current documentation-oriented repository structure:
 
 ```text
 PROVENANCE/
-│
-├── provenance-core/
-├── provenance-verify/
-├── provenance-store/
-├── provenance-mcp/
-├── provenance-cli/
-├── provenance-ui/
-├── provenance-adapters/
-│
-├── schemas/
-├── tests/
-│
 ├── README.md
 ├── README4AIs.md
 ├── AGENTS.md
-├── INVARIANTS.md
-├── ARCHITECTURE.md
-├── DONORS.md
-└── LINEAGE.md
+├── LICENSE
+├── docs/
+│   ├── README.md
+│   ├── GETTING_STARTED.md
+│   ├── INSTRUCTIONS.md
+│   ├── ARCHITECTURE.md
+│   ├── INVARIANTS.md
+│   ├── ROADMAP.md
+│   └── subsystem contracts...
+├── provenance_core/
+├── provenance_verify/
+├── provenance_store/
+├── provenance_custody/
+├── provenance_export/
+├── provenance_mcp/
+├── provenance_cli/
+├── provenance_ui/
+├── provenance_adapters/
+├── provenance-cli/
+├── scripts/
+└── tests/
 ```
 
-This shape is conceptual until implementation requires each module.
+The repository root intentionally keeps only project-entry and agent-guidance Markdown. Detailed specifications live under `docs/`.
 
 Do not create empty modules merely to make the tree look mature.
 
