@@ -67,6 +67,25 @@ def _read_bounded(
                 "only the observed prefix is retained"
             ),
         )
+
+    declared_length = response.headers.get("Content-Length")
+    if declared_length is not None:
+        try:
+            expected_length = int(declared_length, 10)
+        except ValueError:
+            expected_length = None
+        if (
+            expected_length is not None
+            and expected_length >= 0
+            and len(data) < expected_length
+        ):
+            return data, AdapterFailure(
+                category="truncated_response",
+                detail=(
+                    "HTTP response ended before the declared Content-Length; "
+                    "only the observed prefix is retained"
+                ),
+            )
     return data, None
 
 
