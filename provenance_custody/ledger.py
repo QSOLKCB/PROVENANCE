@@ -11,6 +11,7 @@ import uuid
 from typing import Iterator
 
 from provenance_core import (
+    ClockAssurance,
     CustodyAction,
     CustodyCore,
     CustodyEnvelope,
@@ -518,6 +519,197 @@ class LocalCustodyLedger:
                 )
         return tuple(selected)
 
+    def ensure_action_sequence(
+        self,
+        subject_identity: str,
+        actions: tuple[CustodyAction, ...],
+        *,
+        actor: str,
+        source: str,
+        related_identity: str,
+        clock: ClockObservation | None = None,
+    ) -> tuple[bytes, ...]:
+        """Atomically ensure one actor/source/relationship action prefix.
+
+        Existing matching records must form an exact prefix of the requested
+        actions. Missing suffix records are appended under one ledger lock.
+        If a prefix exists, its clock observation remains authoritative.
+        """
+
+        require_sha256_identity(
+            subject_identity,
+            label="custody subject identity",
+        )
+        require_sha256_identity(
+            related_identity,
+            label="custody related identity",
+        )
+        if (
+            not isinstance(actions, tuple)
+            or not actions
+            or not all(isinstance(item, CustodyAction) for item in actions)
+        ):
+            raise TypeError(
+                "actions must be a non-empty tuple of CustodyAction values"
+            )
+        if len(set(actions)) != len(actions):
+            raise ValueError("custody action sequence must not repeat actions")
+        if not isinstance(actor, str) or not actor:
+            raise ValueError("custody actor must be non-empty text")
+        if not isinstance(source, str) or not source:
+            raise ValueError("custody source must be non-empty text")
+        if clock is None:
+            clock = observe_clock()
+        if not isinstance(clock, ClockObservation):
+            raise TypeError("clock must be a ClockObservation")
+
+        with self._exclusive_lock():
+            self._recover_staging_locked()
+            before = self.verify()
+            if not before.integrity_verified:
+                raise CustodyLedgerError(
+                    "cannot ensure custody sequence in invalid ledger: "
+                    + "; ".join(before.errors)
+                )
+
+            all_records = self._record_bytes()
+            selected: list[bytes] = []
+            parsed: dict[str, dict[str, object]] = {}
+            for raw in all_records:
+                value = parse_canonical_json_bytes(raw)
+                if not isinstance(value, dict):
+                    continue
+                core = value.get("core")
+                if (
+                    isinstance(core, dict)
+                    and core.get("subject_identity") == subject_identity
+                ):
+                    selected.append(raw)
+                    parsed[str(value["custody_identity"])] = core
+
+            if selected:
+                report = verify_custody_records(selected)
+                if not report.integrity_verified:
+                    raise CustodyLedgerError(
+                        "selected custody subject chain failed verification: "
+                        + "; ".join(report.errors)
+                    )
+
+            child_of: dict[str, str] = {}
+            root: str | None = None
+            for identity, core in parsed.items():
+                previous = core.get("previous_custody")
+                if previous is None:
+                    if root is not None:
+                        raise CustodyLedgerError(
+                            "custody subject has multiple roots"
+                        )
+                    root = identity
+                else:
+                    child_of[str(previous)] = identity
+
+            ordered: list[dict[str, object]] = []
+            if parsed:
+                if root is None:
+                    raise CustodyLedgerError("custody subject has no root")
+                current: str | None = root
+                seen: set[str] = set()
+                while current is not None:
+                    if current in seen or current not in parsed:
+                        raise CustodyLedgerError(
+                            "custody subject chain traversal failed"
+                        )
+                    seen.add(current)
+                    ordered.append(parsed[current])
+                    current = child_of.get(current)
+                if len(seen) != len(parsed):
+                    raise CustodyLedgerError(
+                        "custody subject chain is disconnected"
+                    )
+
+            matching = [
+                core
+                for core in ordered
+                if (
+                    core.get("actor") == actor
+                    and core.get("source") == source
+                    and core.get("related_identity") == related_identity
+                )
+            ]
+            existing_actions = [
+                str(core.get("action")) for core in matching
+            ]
+            expected_actions = [item.value for item in actions]
+            if existing_actions != expected_actions[: len(existing_actions)]:
+                raise CustodyLedgerError(
+                    "existing custody acknowledgement is not a valid "
+                    "action-sequence prefix"
+                )
+
+            effective_clock = clock
+            if matching:
+                clocks = {
+                    (
+                        str(core.get("recorded_at")),
+                        str(core.get("clock_source")),
+                        str(core.get("clock_assurance")),
+                    )
+                    for core in matching
+                }
+                if len(clocks) != 1:
+                    raise CustodyLedgerError(
+                        "existing custody acknowledgement prefix uses "
+                        "inconsistent clocks"
+                    )
+                recorded_at, clock_source, assurance = next(iter(clocks))
+                effective_clock = ClockObservation(
+                    recorded_at=recorded_at,
+                    clock_source=clock_source,
+                    clock_assurance=ClockAssurance(assurance),
+                )
+
+            previous = dict(before.tips).get(subject_identity)
+            for action in actions[len(existing_actions):]:
+                envelope = CustodyEnvelope.seal(
+                    CustodyCore(
+                        subject_identity=subject_identity,
+                        action=action,
+                        recorded_at=effective_clock.recorded_at,
+                        clock_source=effective_clock.clock_source,
+                        clock_assurance=effective_clock.clock_assurance,
+                        actor=actor,
+                        source=source,
+                        previous_custody=previous,
+                        related_identity=related_identity,
+                    )
+                )
+                self._publish(envelope)
+                previous = envelope.custody_identity
+
+            after = self.verify()
+            if not after.integrity_verified:
+                raise CustodyLedgerError(
+                    "custody action sequence produced invalid chain: "
+                    + "; ".join(after.errors)
+                )
+            if previous is not None and (
+                dict(after.tips).get(subject_identity) != previous
+            ):
+                raise CustodyLedgerError(
+                    "custody action sequence did not become subject tip"
+                )
+
+            result: list[bytes] = []
+            for raw in self._record_bytes():
+                value = parse_canonical_json_bytes(raw)
+                if (
+                    isinstance(value, dict)
+                    and isinstance(value.get("core"), dict)
+                    and value["core"].get("subject_identity")
+                    == subject_identity
+                ):
+                    result.append(raw)
+            return tuple(result)
     def verify(self) -> CustodyVerificationReport:
         try:
             records = self._record_bytes()
