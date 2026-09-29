@@ -14,6 +14,8 @@ from provenance_core import (
     EventCore,
     EventEnvelope,
     RetentionState,
+    canonical_json_bytes,
+    parse_canonical_json_bytes,
     sha256_identity,
 )
 from provenance_custody import ClockObservation, LocalCustodyLedger
@@ -22,7 +24,7 @@ from provenance_export import (
     create_forensic_package,
 )
 from provenance_store import LocalEvidenceStore
-from provenance_verify import verify_forensic_package
+from provenance_verify import forensic_package_identity, verify_forensic_package
 
 
 def _fingerprint(root: Path) -> tuple[tuple[object, ...], ...]:
@@ -308,6 +310,42 @@ class ForensicPackageTests(unittest.TestCase):
             self.assertTrue(
                 any(
                     "undeclared files" in error
+                    for error in report.errors
+                ),
+                report.errors,
+            )
+
+    def test_declared_attachment_outside_v1_layout_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store, custody, _manifest = _closed_fixture(root)
+            package = create_forensic_package(
+                store,
+                custody,
+                root / "package",
+            )
+
+            rogue = b"declared but unsupported attachment\n"
+            (package.path / "rogue.txt").write_bytes(rogue)
+            package_path = package.path / "package.json"
+            envelope = parse_canonical_json_bytes(package_path.read_bytes())
+            core = envelope["core"]
+            core["members"].append(
+                {
+                    "path": "rogue.txt",
+                    "content_identity": sha256_identity(rogue),
+                    "byte_count": len(rogue),
+                }
+            )
+            core["members"].sort(key=lambda item: item["path"])
+            envelope["package_identity"] = forensic_package_identity(core)
+            package_path.write_bytes(canonical_json_bytes(envelope))
+
+            report = verify_forensic_package(package.path)
+            self.assertFalse(report.integrity_verified)
+            self.assertTrue(
+                any(
+                    "outside the v1 layout" in error
                     for error in report.errors
                 ),
                 report.errors,
