@@ -7,9 +7,10 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from provenance_core import canonical_json_bytes
+from provenance_core import EvidenceClass, canonical_json_bytes
 
 from .base import (
+    ADAPTER_ARTIFACT_MEDIA_TYPE,
     AdapterContract,
     AdapterExecutionError,
     AdapterFailure,
@@ -41,7 +42,10 @@ class _RejectRedirects(urllib_request.HTTPRedirectHandler):
         return None
 
 
-def _read_bounded(response, max_bytes: int) -> tuple[bytes, AdapterFailure | None]:
+def _read_bounded(
+    response,
+    max_bytes: int,
+) -> tuple[bytes | None, AdapterFailure | None]:
     try:
         data = response.read(max_bytes + 1)
     except http_client.IncompleteRead as exc:
@@ -51,7 +55,7 @@ def _read_bounded(response, max_bytes: int) -> tuple[bytes, AdapterFailure | Non
             detail="HTTP response body terminated before declared transfer completed",
         )
     except http_client.HTTPException as exc:
-        return b"", AdapterFailure(
+        return None, AdapterFailure(
             category="response_read_failed",
             detail=f"HTTP response body could not be read: {exc}",
         )
@@ -114,7 +118,10 @@ class GenericHTTPAdapter:
         self.max_response_bytes = max_response_bytes
         self.headers = normalized_headers
         self._parsed = parsed
-        self._opener = urllib_request.build_opener(_RejectRedirects())
+        self._opener = urllib_request.build_opener(
+            urllib_request.ProxyHandler({}),
+            _RejectRedirects(),
+        )
 
     def _source_actor(self) -> str:
         authority = self._parsed.hostname or "unknown"
@@ -139,12 +146,13 @@ class GenericHTTPAdapter:
             CapturedArtifact(
                 label="request_descriptor",
                 data=canonical_json_bytes(descriptor),
-                media_type="application/json",
+                media_type=ADAPTER_ARTIFACT_MEDIA_TYPE,
+                evidence_class=EvidenceClass.DECLARED,
             ),
             CapturedArtifact(
                 label="request_body",
                 data=body,
-                media_type=media_type,
+                media_type=ADAPTER_ARTIFACT_MEDIA_TYPE,
             ),
         )
 
@@ -155,6 +163,7 @@ class GenericHTTPAdapter:
         inputs: tuple[CapturedArtifact, ...],
         outputs: tuple[CapturedArtifact, ...],
         status: int | None,
+        response_media_type: str | None,
         declared_metadata: Mapping[str, Any] | None,
         extensions: Mapping[str, Any] | None,
         failure: AdapterFailure | None,
@@ -168,6 +177,7 @@ class GenericHTTPAdapter:
                 "target_port": self._parsed.port,
                 "redirects_followed": False,
                 "request_header_values_retained": False,
+                "response_media_type": response_media_type,
             },
             "caller": dict(declared_metadata or {}),
         }
@@ -241,22 +251,27 @@ class GenericHTTPAdapter:
                 detail=f"HTTP exchange returned status {exc.code}",
             )
             outputs = (
-                CapturedArtifact(
-                    label=(
-                        "response_prefix"
-                        if read_failure is not None
-                        and read_failure.category == "response_too_large"
-                        else "response_body"
+                ()
+                if response_body is None
+                else (
+                    CapturedArtifact(
+                        label=(
+                            "response_prefix"
+                            if read_failure is not None
+                            and read_failure.category == "response_too_large"
+                            else "response_body"
+                        ),
+                        data=response_body,
+                        media_type=ADAPTER_ARTIFACT_MEDIA_TYPE,
                     ),
-                    data=response_body,
-                    media_type=response_type,
-                ),
+                )
             )
             observation = self._observation(
                 method=method,
                 inputs=inputs,
                 outputs=outputs,
                 status=exc.code,
+                response_media_type=response_type,
                 declared_metadata=declared_metadata,
                 extensions=extensions,
                 failure=failure,
@@ -275,6 +290,7 @@ class GenericHTTPAdapter:
                 inputs=inputs,
                 outputs=(),
                 status=None,
+                response_media_type=None,
                 declared_metadata=declared_metadata,
                 extensions=extensions,
                 failure=failure,
@@ -295,22 +311,27 @@ class GenericHTTPAdapter:
             response.close()
 
         outputs = (
-            CapturedArtifact(
-                label=(
-                    "response_prefix"
-                    if read_failure is not None
-                    and read_failure.category == "response_too_large"
-                    else "response_body"
+            ()
+            if response_body is None
+            else (
+                CapturedArtifact(
+                    label=(
+                        "response_prefix"
+                        if read_failure is not None
+                        and read_failure.category == "response_too_large"
+                        else "response_body"
+                    ),
+                    data=response_body,
+                    media_type=ADAPTER_ARTIFACT_MEDIA_TYPE,
                 ),
-                data=response_body,
-                media_type=response_type,
-            ),
+            )
         )
         observation = self._observation(
             method=method,
             inputs=inputs,
             outputs=outputs,
             status=status,
+            response_media_type=response_type,
             declared_metadata=declared_metadata,
             extensions=extensions,
             failure=read_failure,
