@@ -77,6 +77,21 @@ SAME OCCURRENCE
 
 A successful record call is also durably represented in the MCP operational working-state journal before the tool returns. The journal contains identities and working membership, not a second evidence schema, and is excluded from finalized evidence identity.
 
+The working-state journal is multi-writer safe. All MCP server processes sharing a store serialize working-state recovery, record publication, journal replacement, and finalization through one POSIX advisory lock in the store root. After acquiring that lock, a server reloads the current store HEAD and replays the complete durable journal before performing its mutation. A writer therefore extends the merged working set instead of replacing it from stale process-local state.
+
+This rule covers both concurrent writes and stale long-lived server instances:
+
+~~~text
+SERVER A ACKNOWLEDGES RECORD A
+SERVER B ACKNOWLEDGES RECORD B
+    ↓
+DURABLE JOURNAL = A ∪ B
+    ↓
+ANY LATER FINALIZER = A ∪ B
+~~~
+
+The same lock also serializes shared custody-ledger initialization for concurrently starting MCP servers using the same roots.
+
 After process restart, the server revalidates the journaled artifact records, retained bytes, and event identities against the object pool before reattaching them to the working snapshot. If the store HEAD advanced because finalization committed immediately before a crash, restart requires the journaled members to be present in that verified HEAD and completes fresh VERIFIED custody before clearing the journal.
 
 The caller cannot supply an `evidenceClass` override.
