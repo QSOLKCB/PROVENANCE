@@ -355,6 +355,8 @@ def _verify_disclosure_root_fd(
         else "FAILED"
     )
 
+    disclosure_integrity_ok = False
+
     try:
         envelope = _canonical_object(root_fd, "disclosure.json")
         if set(envelope) != {
@@ -661,6 +663,7 @@ def _verify_disclosure_root_fd(
             raise ValueError("disclosure derivation event identity mismatch")
 
         lineage = "VERIFIED"
+        disclosure_integrity_ok = True
         checks.append(
             "redacted derivative is distinct and lineage relationship verified"
         )
@@ -693,7 +696,7 @@ def _verify_disclosure_root_fd(
     except Exception as exc:
         errors.append(str(exc))
 
-    integrity_verified = not errors and lineage == "VERIFIED"
+    integrity_verified = disclosure_integrity_ok and lineage == "VERIFIED"
     return DisclosureVerificationReport(
         integrity_verified=integrity_verified,
         disclosure_identity=disclosure_identity_value,
