@@ -630,6 +630,176 @@ class DistributedCustodyTests(unittest.TestCase):
                 bundle_a.package_identity,
             )
 
+    def test_receive_pins_embedded_package_child_before_bundle_verification(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sender_a = root / "sender-a"
+            sender_b = root / "sender-b"
+            receiver = root / "receiver"
+            sender_a.mkdir()
+            sender_b.mkdir()
+            receiver.mkdir()
+            package_a = _sender_package(
+                sender_a,
+                content=b"pinned embedded package A\n",
+            )
+            package_b = _sender_package(
+                sender_b,
+                content=b"replacement embedded package B\n",
+            )
+            sender_key = root / "sender-key"
+            receiver_key = receiver / "receiver-key"
+            _key(sender_key)
+            _key(receiver_key)
+
+            bundle_a = create_transfer_bundle(
+                package_a,
+                sender_a / "transfer-a",
+                source_system="sender",
+                destination_system="receiver",
+                sender_key=sender_key,
+            )
+            bundle_b = create_transfer_bundle(
+                package_b,
+                sender_b / "transfer-b",
+                source_system="sender",
+                destination_system="receiver",
+                sender_key=sender_key,
+            )
+            sender_fingerprint = _sender_fingerprint(bundle_a.path)
+            saved_package_a = sender_a / "verified-package-a"
+
+            real_verify_fd = verify_transfer_bundle_fd
+            swapped = False
+
+            def verify_then_swap_child(
+                transfer_fd: int,
+                *,
+                expected_sender_fingerprint: str | None = None,
+            ):
+                nonlocal swapped
+                report = real_verify_fd(
+                    transfer_fd,
+                    expected_sender_fingerprint=expected_sender_fingerprint,
+                )
+                if not swapped:
+                    os.rename(bundle_a.path / "package", saved_package_a)
+                    os.rename(
+                        bundle_b.path / "package",
+                        bundle_a.path / "package",
+                    )
+                    swapped = True
+                return report
+
+            with patch(
+                "provenance_transfer.protocol.verify_transfer_bundle_fd",
+                side_effect=verify_then_swap_child,
+            ):
+                receipt = receive_transfer(
+                    bundle_a.path,
+                    receiver / "package",
+                    receiver / "receipt",
+                    receiver / "custody",
+                    receiver_system="receiver",
+                    receiver_key=receiver_key,
+                    expected_sender_fingerprint=sender_fingerprint,
+                )
+
+            copied = verify_forensic_package(receiver / "package")
+            self.assertTrue(copied.integrity_verified, copied.errors)
+            self.assertEqual(
+                copied.package_identity,
+                bundle_a.package_identity,
+            )
+            self.assertNotEqual(
+                copied.package_identity,
+                bundle_b.package_identity,
+            )
+            self.assertEqual(
+                receipt.package_identity,
+                bundle_a.package_identity,
+            )
+
+    def test_existing_received_package_swap_is_rejected_before_custody(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sender_a = root / "sender-a"
+            sender_b = root / "sender-b"
+            receiver = root / "receiver"
+            sender_a.mkdir()
+            sender_b.mkdir()
+            receiver.mkdir()
+            package_a = _sender_package(
+                sender_a,
+                content=b"existing received package A\n",
+            )
+            package_b = _sender_package(
+                sender_b,
+                content=b"replacement received package B\n",
+            )
+            sender_key = sender_a / "sender-key"
+            receiver_key = receiver / "receiver-key"
+            _key(sender_key)
+            _key(receiver_key)
+
+            bundle = create_transfer_bundle(
+                package_a,
+                sender_a / "transfer",
+                source_system="sender",
+                destination_system="receiver",
+                sender_key=sender_key,
+            )
+            sender_fingerprint = _sender_fingerprint(bundle.path)
+            shutil.copytree(package_a, receiver / "package")
+            shutil.copytree(package_b, receiver / "replacement-package")
+
+            from provenance_transfer import protocol as transfer_protocol
+
+            real_verify_package_fd = transfer_protocol.verify_forensic_package_fd
+            calls = 0
+
+            def verify_then_swap_destination(package_fd: int):
+                nonlocal calls
+                calls += 1
+                report = real_verify_package_fd(package_fd)
+                if calls == 2:
+                    os.rename(
+                        receiver / "package",
+                        receiver / "verified-package-a",
+                    )
+                    os.rename(
+                        receiver / "replacement-package",
+                        receiver / "package",
+                    )
+                return report
+
+            with patch(
+                "provenance_transfer.protocol.verify_forensic_package_fd",
+                side_effect=verify_then_swap_destination,
+            ):
+                with self.assertRaisesRegex(
+                    TransferError,
+                    "filesystem identity changed after verification",
+                ):
+                    receive_transfer(
+                        bundle.path,
+                        receiver / "package",
+                        receiver / "receipt",
+                        receiver / "custody",
+                        receiver_system="receiver",
+                        receiver_key=receiver_key,
+                        expected_sender_fingerprint=sender_fingerprint,
+                    )
+
+            self.assertFalse((receiver / "receipt").exists())
+            self.assertFalse((receiver / "custody").exists())
+            replacement = verify_forensic_package(receiver / "package")
+            self.assertTrue(replacement.integrity_verified, replacement.errors)
+            self.assertEqual(
+                replacement.package_identity,
+                verify_forensic_package(package_b).package_identity,
+            )
+
     def test_concurrent_first_acceptance_uses_one_custody_sequence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
