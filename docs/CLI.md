@@ -356,3 +356,38 @@ provenance verify-assurance \
 ~~~
 
 See `TRUST.md` for the exact proof boundary.
+
+---
+
+# Phase 14 extension — selective disclosure
+
+Create a redacted derivative disclosure from a retained artifact in a finalized Phase 11 package:
+
+~~~bash
+provenance redact-disclosure \
+  --package /path/to/source-package \
+  --source sha256:<source-digest> \
+  --range 17:29 \
+  --output /path/to/disclosure
+~~~
+
+Multiple `--range START:END` arguments are accepted. The default replacement byte is decimal `42` (`*`); use `--mask-byte` for another byte value.
+
+Verify disclosure structure/lineage without source content:
+
+~~~bash
+provenance verify-disclosure \
+  --disclosure /path/to/disclosure
+~~~
+
+Recompute the transform against the original package:
+
+~~~bash
+provenance verify-disclosure \
+  --disclosure /path/to/disclosure \
+  --source-package /path/to/source-package
+~~~
+
+These are standalone package/privacy commands, not TUI store-session commands.
+
+See `PRIVACY.md`.
