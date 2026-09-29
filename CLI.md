@@ -60,6 +60,7 @@ provenance inspect
 provenance verify
 provenance finalize
 provenance export
+provenance package
 provenance tui
 ~~~
 
@@ -279,3 +280,24 @@ THE VERIFIER REMAINS INDEPENDENT.
 MCP IS OPTIONAL.
 NETWORK IS OPTIONAL.
 ~~~
+
+---
+
+# Phase 11 extension — portable forensic package
+
+The Phase 8 `export` command remains a verified copy of the current immutable Phase 2 snapshot.
+
+Phase 11 adds a distinct command:
+
+~~~bash
+provenance package \
+  --store /path/to/store \
+  --custody /path/to/custody \
+  --destination /path/to/forensic-package
+~~~
+
+This creates and independently verifies a `provenance.forensic-package.v1` directory containing the evidence snapshot, stable custody snapshot, schema/version metadata, verification metadata, and recomputed declared gaps.
+
+After successful publication, the live custody ledger receives an `EXPORTED` record for the evidence manifest whose `related_identity` is the package identity. The already-finalized package is not rewritten to include that later export record.
+
+See `PACKAGE.md`.
