@@ -595,179 +595,200 @@ def _physical_files(root_fd: int) -> tuple[set[str], list[str]]:
     return files, unsafe
 
 
-def verify_bundle(bundle_dir: Path) -> VerificationReport:
-    """Verify a PROVENANCE bundle without modifying any evidence."""
-
-    bundle_dir = Path(bundle_dir)
+def _verify_bundle_root_fd(root_fd: int) -> VerificationReport:
     checks: list[str] = []
     errors: list[str] = []
     manifest_identity_value: str | None = None
     scope: str | None = None
     known_missing = 0
+    try:
+        (
+            _manifest_core,
+            artifacts,
+            events,
+            scope,
+            manifest_identity_value,
+            known_missing,
+        ) = _verify_manifest(root_fd)
+        checks.append("manifest canonical form, schema and identity verified")
+    except VerificationError as exc:
+        errors.append(str(exc))
+        return VerificationReport(
+            False,
+            manifest_identity_value,
+            scope,
+            known_missing,
+            tuple(checks),
+            tuple(errors),
+        )
 
+    expected_files: set[str] = {"manifest.json"}
+    for entry in artifacts:
+        if entry["retention"] == RetentionState.MISSING.value:
+            continue
+        expected_files.add(_artifact_record_relative(entry["record_identity"]))
+        if entry["retention"] == RetentionState.CONTENT_RETAINED.value:
+            expected_files.add(
+                _artifact_content_relative(entry["content_identity"])
+            )
+    for identity in events:
+        expected_files.add(_event_relative(identity))
+
+    try:
+        physical_files, unsafe_paths = _physical_files(root_fd)
+    except VerificationError as exc:
+        errors.append(str(exc))
+        return VerificationReport(
+            False,
+            manifest_identity_value,
+            scope,
+            known_missing,
+            tuple(checks),
+            tuple(errors),
+        )
+
+    membership_phase_ok = True
+    if unsafe_paths:
+        membership_phase_ok = False
+        errors.append(
+            "non-regular filesystem entries are forbidden inside evidence bundles: "
+            + ", ".join(sorted(unsafe_paths))
+        )
+
+    missing_files = sorted(expected_files - physical_files)
+    extra_files = sorted(physical_files - expected_files)
+    if missing_files:
+        membership_phase_ok = False
+        errors.append(
+            "bundle is missing declared files: " + ", ".join(missing_files)
+        )
+    if extra_files:
+        membership_phase_ok = False
+        errors.append(
+            "bundle contains undeclared files: " + ", ".join(extra_files)
+        )
+    if membership_phase_ok:
+        checks.append("physical bundle membership exactly matches the manifest")
+
+    # Unsafe entries can redirect or block path traversal. Do not read children
+    # after discovering them even though descriptor-relative opens would reject
+    # the same boundary again.
+    if unsafe_paths:
+        return VerificationReport(
+            False,
+            manifest_identity_value,
+            scope,
+            known_missing,
+            tuple(checks),
+            tuple(errors),
+        )
+
+    artifact_content_ids = {
+        str(entry["content_identity"]) for entry in artifacts
+    }
+    event_ids = set(events)
+
+    artifact_phase_ok = True
+    for entry in artifacts:
+        if entry["retention"] == RetentionState.MISSING.value:
+            continue
+        relative = _artifact_record_relative(entry["record_identity"])
+        try:
+            _verify_artifact_record(
+                root_fd,
+                relative,
+                manifest_entry=entry,
+            )
+        except VerificationError as exc:
+            artifact_phase_ok = False
+            errors.append(f"{relative}: {exc}")
+    if artifact_phase_ok:
+        checks.append("artifact metadata and available content verified")
+
+    event_phase_ok = True
+    references: list[tuple[str, str, str]] = []
+    for identity in events:
+        relative = _event_relative(identity)
+        try:
+            inputs, outputs, relationship_targets = _verify_event(
+                root_fd,
+                relative,
+                expected_identity=identity,
+            )
+        except VerificationError as exc:
+            event_phase_ok = False
+            errors.append(f"{relative}: {exc}")
+            continue
+        references.extend((relative, "input", value) for value in inputs)
+        references.extend((relative, "output", value) for value in outputs)
+        references.extend(
+            (relative, "relationship", value)
+            for value in relationship_targets
+        )
+
+    resolvable_relationship_targets = artifact_content_ids | event_ids
+    for relative, reference_kind, target in references:
+        if reference_kind in {"input", "output"}:
+            if target not in artifact_content_ids:
+                event_phase_ok = False
+                errors.append(
+                    f"{relative}: {reference_kind} does not resolve to a manifest artifact: {target}"
+                )
+        elif target not in resolvable_relationship_targets:
+            event_phase_ok = False
+            errors.append(
+                f"{relative}: relationship target does not resolve inside the manifest: {target}"
+            )
+
+    if event_phase_ok:
+        checks.append("event identities and references verified")
+
+    integrity_verified = (
+        membership_phase_ok
+        and artifact_phase_ok
+        and event_phase_ok
+        and not errors
+    )
+    return VerificationReport(
+        integrity_verified=integrity_verified,
+        manifest_identity=manifest_identity_value,
+        manifest_scope=scope,
+        known_missing_artifacts=known_missing,
+        checks=tuple(checks),
+        errors=tuple(errors),
+    )
+
+
+def verify_bundle_fd(bundle_fd: int) -> VerificationReport:
+    """Verify an already-open PROVENANCE bundle directory descriptor."""
+
+    checks: tuple[str, ...] = ()
+    try:
+        root_fd = os.dup(bundle_fd)
+        if not stat.S_ISDIR(os.fstat(root_fd).st_mode):
+            os.close(root_fd)
+            raise VerificationError("bundle descriptor must reference a directory")
+    except (OSError, TypeError, VerificationError) as exc:
+        return VerificationReport(
+            False, None, None, 0, checks, (str(exc),)
+        )
+    try:
+        return _verify_bundle_root_fd(root_fd)
+    finally:
+        os.close(root_fd)
+
+
+def verify_bundle(bundle_dir: Path) -> VerificationReport:
+    """Verify a PROVENANCE bundle without modifying any evidence."""
+
+    bundle_dir = Path(bundle_dir)
     try:
         root_fd = _open_bundle_root(bundle_dir)
     except VerificationError as exc:
         return VerificationReport(
-            False, None, None, 0, tuple(checks), (str(exc),)
+            False, None, None, 0, (), (str(exc),)
         )
-
     try:
-        try:
-            (
-                _manifest_core,
-                artifacts,
-                events,
-                scope,
-                manifest_identity_value,
-                known_missing,
-            ) = _verify_manifest(root_fd)
-            checks.append("manifest canonical form, schema and identity verified")
-        except VerificationError as exc:
-            errors.append(str(exc))
-            return VerificationReport(
-                False,
-                manifest_identity_value,
-                scope,
-                known_missing,
-                tuple(checks),
-                tuple(errors),
-            )
-
-        expected_files: set[str] = {"manifest.json"}
-        for entry in artifacts:
-            if entry["retention"] == RetentionState.MISSING.value:
-                continue
-            expected_files.add(_artifact_record_relative(entry["record_identity"]))
-            if entry["retention"] == RetentionState.CONTENT_RETAINED.value:
-                expected_files.add(
-                    _artifact_content_relative(entry["content_identity"])
-                )
-        for identity in events:
-            expected_files.add(_event_relative(identity))
-
-        try:
-            physical_files, unsafe_paths = _physical_files(root_fd)
-        except VerificationError as exc:
-            errors.append(str(exc))
-            return VerificationReport(
-                False,
-                manifest_identity_value,
-                scope,
-                known_missing,
-                tuple(checks),
-                tuple(errors),
-            )
-
-        membership_phase_ok = True
-        if unsafe_paths:
-            membership_phase_ok = False
-            errors.append(
-                "non-regular filesystem entries are forbidden inside evidence bundles: "
-                + ", ".join(sorted(unsafe_paths))
-            )
-
-        missing_files = sorted(expected_files - physical_files)
-        extra_files = sorted(physical_files - expected_files)
-        if missing_files:
-            membership_phase_ok = False
-            errors.append(
-                "bundle is missing declared files: " + ", ".join(missing_files)
-            )
-        if extra_files:
-            membership_phase_ok = False
-            errors.append(
-                "bundle contains undeclared files: " + ", ".join(extra_files)
-            )
-        if membership_phase_ok:
-            checks.append("physical bundle membership exactly matches the manifest")
-
-        # Unsafe entries can redirect or block path traversal. Do not read children
-        # after discovering them even though descriptor-relative opens would reject
-        # the same boundary again.
-        if unsafe_paths:
-            return VerificationReport(
-                False,
-                manifest_identity_value,
-                scope,
-                known_missing,
-                tuple(checks),
-                tuple(errors),
-            )
-
-        artifact_content_ids = {
-            str(entry["content_identity"]) for entry in artifacts
-        }
-        event_ids = set(events)
-
-        artifact_phase_ok = True
-        for entry in artifacts:
-            if entry["retention"] == RetentionState.MISSING.value:
-                continue
-            relative = _artifact_record_relative(entry["record_identity"])
-            try:
-                _verify_artifact_record(
-                    root_fd,
-                    relative,
-                    manifest_entry=entry,
-                )
-            except VerificationError as exc:
-                artifact_phase_ok = False
-                errors.append(f"{relative}: {exc}")
-        if artifact_phase_ok:
-            checks.append("artifact metadata and available content verified")
-
-        event_phase_ok = True
-        references: list[tuple[str, str, str]] = []
-        for identity in events:
-            relative = _event_relative(identity)
-            try:
-                inputs, outputs, relationship_targets = _verify_event(
-                    root_fd,
-                    relative,
-                    expected_identity=identity,
-                )
-            except VerificationError as exc:
-                event_phase_ok = False
-                errors.append(f"{relative}: {exc}")
-                continue
-            references.extend((relative, "input", value) for value in inputs)
-            references.extend((relative, "output", value) for value in outputs)
-            references.extend(
-                (relative, "relationship", value)
-                for value in relationship_targets
-            )
-
-        resolvable_relationship_targets = artifact_content_ids | event_ids
-        for relative, reference_kind, target in references:
-            if reference_kind in {"input", "output"}:
-                if target not in artifact_content_ids:
-                    event_phase_ok = False
-                    errors.append(
-                        f"{relative}: {reference_kind} does not resolve to a manifest artifact: {target}"
-                    )
-            elif target not in resolvable_relationship_targets:
-                event_phase_ok = False
-                errors.append(
-                    f"{relative}: relationship target does not resolve inside the manifest: {target}"
-                )
-
-        if event_phase_ok:
-            checks.append("event identities and references verified")
-
-        integrity_verified = (
-            membership_phase_ok
-            and artifact_phase_ok
-            and event_phase_ok
-            and not errors
-        )
-        return VerificationReport(
-            integrity_verified=integrity_verified,
-            manifest_identity=manifest_identity_value,
-            manifest_scope=scope,
-            known_missing_artifacts=known_missing,
-            checks=tuple(checks),
-            errors=tuple(errors),
-        )
+        return _verify_bundle_root_fd(root_fd)
     finally:
         os.close(root_fd)

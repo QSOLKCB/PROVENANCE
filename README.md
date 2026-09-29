@@ -114,6 +114,31 @@ See `ADAPTERS.md` for the contract, failure semantics, credential boundary, and 
 
 ---
 
+## Portable forensic packages
+
+Phase 11 creates a finalized archival envelope around the unchanged Phase 2 evidence bundle:
+
+```text
+package.json
+evidence/
+custody/
+schemas.json
+verification.json
+gaps.json
+```
+
+Use:
+
+```bash
+provenance package --store /path/to/store --custody /path/to/custody --destination /path/to/package
+```
+
+The resulting package can be moved to another machine and independently checked with `verify_forensic_package()`. The older `provenance export` command remains the historical snapshot-copy operation.
+
+See `PACKAGE.md` for the archival contract and verifier.
+
+---
+
 ## Why PROVENANCE Exists
 
 Modern AI systems rarely perform a single isolated operation.
@@ -768,6 +793,8 @@ See [UI.md](UI.md) for the Phase 9 read-only localhost HTTP viewer contract.
 
 See [ADAPTERS.md](ADAPTERS.md) for the Phase 10 provider-neutral generic adapter contract.
 
+See [PACKAGE.md](PACKAGE.md) for the Phase 11 portable forensic package contract.
+
 ---
 
 # Implementation Roadmap
@@ -798,6 +825,8 @@ Phase 8  Rust terminal CLI/TUI
 Phase 9  read-only localhost HTTP viewer
    ↓
 Phase 10 generic HTTP + local process adapters
+   ↓
+Phase 11 portable forensic packages
 ```
 
 The full roadmap, exit gates, CI progression, and later trust/privacy/distributed phases are defined in [ROADMAP.md](ROADMAP.md).

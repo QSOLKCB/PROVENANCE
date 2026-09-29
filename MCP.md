@@ -127,6 +127,7 @@ Returns the existing independent bundle-verification report and independent cust
 The MCP layer does not implement a second verifier.
 
 ## provenance.export
+provenance.package
 
 Copies the current immutable verified snapshot to a new destination directory, independently verifies the copy, and then appends EXPORTED custody for the manifest.
 
@@ -274,3 +275,21 @@ CALLER CLAIMS STAY DECLARED.
 OCCURRENCES MUST NOT COLLAPSE.
 VERIFICATION REMAINS INDEPENDENT.
 ~~~
+
+---
+
+# Phase 11 extension — `provenance.package`
+
+`provenance.package` takes:
+
+~~~json
+{"destination":"/path/to/forensic-package"}
+~~~
+
+and creates a finalized `provenance.forensic-package.v1` archival package through the shared Phase 11 producer/verifier.
+
+It is intentionally separate from `provenance.export`, whose Phase 7 contract remains a snapshot copy.
+
+After successful package publication, MCP appends an `EXPORTED` custody record for the evidence manifest and binds its `related_identity` to the package identity.
+
+See `PACKAGE.md`.

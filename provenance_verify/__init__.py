@@ -10,6 +10,7 @@ from .verifier import (
     VerificationError,
     VerificationReport,
     verify_bundle,
+    verify_bundle_fd,
 )
 
 __all__ = [
@@ -19,5 +20,27 @@ __all__ = [
     "VerificationError",
     "VerificationReport",
     "verify_bundle",
+    "verify_bundle_fd",
     "verify_custody_records",
+    "FORENSIC_PACKAGE_REPORT_SCHEMA",
+    "FORENSIC_PACKAGE_SCHEMA",
+    "ForensicPackageVerificationReport",
+    "derive_declared_gaps",
+    "derive_declared_gaps_fd",
+    "expected_schema_metadata",
+    "expected_verification_metadata",
+    "forensic_package_identity",
+    "verify_forensic_package",
 ]
+
+from .package import (
+    FORENSIC_PACKAGE_REPORT_SCHEMA,
+    FORENSIC_PACKAGE_SCHEMA,
+    ForensicPackageVerificationReport,
+    derive_declared_gaps,
+    derive_declared_gaps_fd,
+    expected_schema_metadata,
+    expected_verification_metadata,
+    forensic_package_identity,
+    verify_forensic_package,
+)

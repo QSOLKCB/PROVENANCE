@@ -10,6 +10,8 @@ STORAGE_BACKEND=UNSPECIFIED
 
 This document defines the physical evidence-bundle layout consumed by the Phase 2 independent verifier.
 
+Phase 11 portable forensic packages **embed this bundle unchanged** under `evidence/` and add custody, schema/version metadata, verification metadata, and declared gaps. See [PACKAGE.md](PACKAGE.md). A Phase 11 package does not redefine `provenance.bundle.v1`.
+
 It does **not** define how evidence must be stored while a system is running. Persistent storage remains a later module.
 
 ---

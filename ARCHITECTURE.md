@@ -1237,6 +1237,39 @@ evidence identity
 
 ---
 
+# 26A. Portable Forensic Package
+
+Phase 11 adds an archival producer/verifier pair outside the evidence core.
+
+```text
+finalized provenance.bundle.v1
+stable custody snapshot
+schema/version metadata
+recomputed verification metadata
+recomputed declared gaps
+        ↓
+provenance.forensic-package.v1
+```
+
+The package envelope binds every member by portable relative path, SHA-256 content identity, and byte count.
+
+The embedded Phase 2 evidence bundle remains unchanged and is independently re-verified after copying.
+
+Package finalization and evidence collection scope are independent dimensions:
+
+```text
+package_state = FINALIZED
+evidence_scope = open | closed
+```
+
+The producer uses hidden staging plus independent verification before atomic publication. The verifier requires exact physical membership and rejects undeclared directories as well as undeclared files and unsafe filesystem objects.
+
+CLI and MCP call the same producer contract through `provenance package` and `provenance.package`. Their older snapshot-copy `export` interface remains unchanged.
+
+See `PACKAGE.md`.
+
+---
+
 # 27. Observation Topologies
 
 Adapters may observe systems through several topologies.

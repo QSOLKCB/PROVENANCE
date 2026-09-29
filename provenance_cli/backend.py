@@ -26,6 +26,7 @@ from provenance_core import (
     require_sha256_identity,
 )
 from provenance_custody import LocalCustodyLedger, observe_clock
+from provenance_export import create_forensic_package
 from provenance_store import LocalEvidenceStore
 from provenance_verify import verify_bundle
 
@@ -882,6 +883,40 @@ class CliSession:
                 "custody_verified": custody_report.integrity_verified,
             }
 
+    def package(self, destination_text: str) -> dict[str, Any]:
+        if not destination_text:
+            raise CliError("destination must be non-empty")
+        with self._state_lock():
+            self._synchronize_locked()
+            result = create_forensic_package(
+                self.store.root,
+                self.custody.root,
+                destination_text,
+            )
+            custody_identity = self._append_custody(
+                result.evidence_manifest_identity,
+                CustodyAction.EXPORTED,
+                actor=CLI_INTERFACE_ID,
+                source=str(result.path),
+                related_identity=result.package_identity,
+            )
+            custody_report = self.custody.verify()
+            if not custody_report.integrity_verified:
+                raise CliError(
+                    "custody verification failed after forensic package export: "
+                    + "; ".join(custody_report.errors)
+                )
+            return {
+                "package_identity": result.package_identity,
+                "manifest_identity": result.evidence_manifest_identity,
+                "scope": result.evidence_scope,
+                "custody_record_count": result.custody_record_count,
+                "destination": str(result.path),
+                "integrity_verified": True,
+                "export_custody_identity": custody_identity,
+                "custody_verified": True,
+            }
+
     def export(self, destination_text: str) -> dict[str, Any]:
         if not destination_text:
             raise CliError("destination must be non-empty")
@@ -1089,6 +1124,10 @@ def _parser() -> argparse.ArgumentParser:
     _add_common(export)
     export.add_argument("--destination", required=True)
 
+    package = subparsers.add_parser("package")
+    _add_common(package)
+    package.add_argument("--destination", required=True)
+
     return parser
 
 
@@ -1132,6 +1171,8 @@ def main(argv: list[str] | None = None) -> int:
             result = session.finalize(scope=args.scope)
         elif args.command == "export":
             result = session.export(args.destination)
+        elif args.command == "package":
+            result = session.package(args.destination)
         else:
             raise CliError(f"unsupported command: {args.command}")
     except Exception as exc:

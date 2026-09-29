@@ -15,7 +15,7 @@ import provenance_mcp.server as mcp_server_module
 from provenance_custody import LocalCustodyLedger
 from provenance_mcp import ProvenanceMCPServer
 from provenance_store import LocalEvidenceStore
-from provenance_verify import verify_bundle
+from provenance_verify import verify_bundle, verify_forensic_package
 
 
 PROTOCOL_VERSION = "2026-07-28"
@@ -133,6 +133,7 @@ class ProvenanceMCPTests(unittest.TestCase):
             store_root = root / "store"
             custody_root = root / "custody"
             export_root = root / "exported"
+            package_root = root / "forensic-package"
             client = _StdioClient(store_root, custody_root)
             try:
                 discovered = client.request("server/discover")
@@ -154,6 +155,7 @@ class ProvenanceMCPTests(unittest.TestCase):
                         "provenance.inspect",
                         "provenance.record",
                         "provenance.verify",
+                        "provenance.package",
                         "provenance.export",
                     ],
                 )
@@ -366,6 +368,33 @@ class ProvenanceMCPTests(unittest.TestCase):
                 self.assertEqual(
                     exported_report.manifest_identity,
                     manifest_identity,
+                )
+
+                packaged = _tool_payload(
+                    client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.package",
+                            "arguments": {
+                                "destination": str(package_root),
+                            },
+                        },
+                    )
+                )
+                self.assertTrue(packaged["integrity_verified"])
+                self.assertTrue(packaged["custody_verified"])
+                self.assertEqual(
+                    packaged["manifest_identity"],
+                    manifest_identity,
+                )
+                package_report = verify_forensic_package(package_root)
+                self.assertTrue(
+                    package_report.integrity_verified,
+                    package_report.errors,
+                )
+                self.assertEqual(
+                    package_report.package_identity,
+                    packaged["package_identity"],
                 )
             finally:
                 returncode, stderr = client.close()
