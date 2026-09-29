@@ -416,7 +416,8 @@ provenance transfer-receive \
   --receipt /receiver/receipt \
   --custody /receiver/custody \
   --receiver-system org-b/system-9 \
-  --receiver-key /path/to/receiver-key
+  --receiver-key /path/to/receiver-key \
+  --expected-sender-fingerprint 'SHA256:<trusted-sender-fingerprint>'
 ~~~
 
 Verify sender handoff:
