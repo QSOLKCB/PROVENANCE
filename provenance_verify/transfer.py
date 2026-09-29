@@ -211,6 +211,7 @@ def verify_transfer_bundle(
     *,
     expected_sender_fingerprint: str | None = None,
     _transfer_fd: int | None = None,
+    _package_fd: int | None = None,
 ) -> TransferBundleVerificationReport:
     checks: list[str] = []
     errors: list[str] = []
@@ -350,7 +351,37 @@ def verify_transfer_bundle(
             transfer_identity = str(claimed)
             checks.append("transfer envelope and identity verified")
 
-            files, directories, unsafe = _physical_files(root_fd)
+            if _package_fd is None:
+                files, directories, unsafe = _physical_files(root_fd)
+            else:
+                files: set[str] = set()
+                directories: set[str] = set()
+                unsafe: set[str] = set()
+                if os.scandir not in os.supports_fd:
+                    raise ValueError(
+                        "transfer verification requires scandir(fd) support"
+                    )
+                with os.scandir(root_fd) as entries:
+                    for entry in entries:
+                        mode = entry.stat(follow_symlinks=False).st_mode
+                        if stat.S_ISREG(mode):
+                            files.add(entry.name)
+                        elif stat.S_ISDIR(mode):
+                            directories.add(entry.name)
+                        else:
+                            unsafe.add(entry.name)
+                package_files, package_dirs, package_unsafe = _physical_files(
+                    _package_fd
+                )
+                files.update(
+                    "package/" + path for path in package_files
+                )
+                directories.update(
+                    "package/" + path for path in package_dirs
+                )
+                unsafe.update(
+                    "package/" + path for path in package_unsafe
+                )
             expected_files = {"transfer.json", *paths}
             expected_dirs = {"package"}
             if unsafe:
@@ -376,9 +407,19 @@ def verify_transfer_bundle(
                     f"missing_dirs={missing_dirs} extra_dirs={extra_dirs}"
                 )
             for item in normalized:
-                identity, byte_count = _hash_member(
-                    root_fd, str(item["path"])
-                )
+                member_path = str(item["path"])
+                if (
+                    _package_fd is not None
+                    and member_path.startswith("package/")
+                ):
+                    identity, byte_count = _hash_member(
+                        _package_fd,
+                        member_path[len("package/"):],
+                    )
+                else:
+                    identity, byte_count = _hash_member(
+                        root_fd, member_path
+                    )
                 if identity != item["content_identity"]:
                     raise ValueError(
                         f"{item['path']}: member content identity mismatch"
@@ -477,7 +518,11 @@ def verify_transfer_bundle(
                     "sender key fingerprint binding verified"
                 )
 
-            package_fd = _open_directory_at(root_fd, ("package",))
+            package_fd = (
+                _open_directory_at(root_fd, ("package",))
+                if _package_fd is None
+                else os.dup(_package_fd)
+            )
             try:
                 package_report = verify_forensic_package_fd(package_fd)
             finally:
@@ -536,6 +581,7 @@ def verify_transfer_bundle_fd(
     transfer_fd: int,
     *,
     expected_sender_fingerprint: str | None = None,
+    _package_fd: int | None = None,
 ) -> TransferBundleVerificationReport:
     """Verify an already-open transfer directory descriptor."""
 
@@ -543,6 +589,7 @@ def verify_transfer_bundle_fd(
         ".",
         expected_sender_fingerprint=expected_sender_fingerprint,
         _transfer_fd=transfer_fd,
+        _package_fd=_package_fd,
     )
 
 
@@ -553,6 +600,7 @@ def verify_transfer_receipt(
     received_package: os.PathLike[str] | str | None = None,
     expected_sender_fingerprint: str | None = None,
     _transfer_fd: int | None = None,
+    _transfer_package_fd: int | None = None,
     _received_package_fd: int | None = None,
 ) -> TransferReceiptVerificationReport:
     checks: list[str] = []
@@ -820,6 +868,7 @@ def verify_transfer_receipt(
                         expected_sender_fingerprint
                     ),
                     _transfer_fd=_transfer_fd,
+                    _package_fd=_transfer_package_fd,
                 )
                 if not transfer_report.integrity_verified:
                     errors.append(
