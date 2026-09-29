@@ -2,7 +2,7 @@
 
 Get from a fresh checkout to independently verified PROVENANCE evidence, a portable forensic package, and—when needed—signed, redacted, or transferred derivatives.
 
-PROVENANCE is implemented through **Phase 16**. The normal local workflow remains lightweight; the heavier release-grade trust lane is separate.
+PROVENANCE is implemented through **Phase 16**. The immutable implementation baseline is **`v1.0.0`**, fixed at **`0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742`**. The normal local workflow remains lightweight; the heavier release-grade trust lane is separate.
 
 ## Requirements
 
@@ -251,38 +251,36 @@ The MCP surface exposes the same underlying evidence contracts. Caller-provided 
 
 See [MCP.md](MCP.md).
 
-## 12. Before tagging a release candidate
+## 12. Immutable v1.0.0 implementation baseline
 
-Phase 16 adds the release-grade `full` workflow.
-
-The important rule is:
+The Phase 17 implementation baseline has now been established:
 
 ```text
-GREEN RUN
-MUST MATCH
-THE EXACT COMMIT YOU TAG
+tag:    v1.0.0
+commit: 0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
 ```
 
-For the release candidate:
+That tag is the fixed implementation target for subsequent formal-verification and archival work.
 
-1. merge all intended code and documentation changes;
-2. identify the resulting exact `main` SHA;
-3. run or confirm the `full` workflow on that exact SHA;
-4. require `release-suite`, both Ollama matrix jobs, and `release-gate` to succeed;
-5. record the SHA and workflow run;
-6. tag that exact SHA.
-
-Useful local check:
+To inspect it locally:
 
 ```bash
-git checkout main
-git pull --ff-only
-git rev-parse HEAD
+git fetch --tags
+git show --no-patch --format=fuller v1.0.0
+git rev-list -n 1 v1.0.0
 ```
 
-If the tag is intended to become the **Phase 17 immutable candidate freeze**, no implementation, schema-semantic, verifier-semantic, or evidence-contract change should follow it. A required implementation fix means returning to Phase 16, re-running the release lane, and cutting a new candidate.
+The final command should resolve to:
 
-Phase 17 freezes the implementation. Phase 18 performs formal verification and the final archival release.
+```text
+0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
+```
+
+Documentation, proof sources, archival metadata, and release-support material may continue to change on `main` after the tag. Those later changes do **not** redefine the frozen implementation baseline.
+
+If a future implementation, schema-semantic, verifier-semantic, or evidence-contract change is required, treat it as a new candidate rather than modifying the meaning of `v1.0.0`.
+
+Formalization should cite both the tag and the exact commit SHA.
 
 See [RELEASE.md](RELEASE.md) and [ROADMAP.md](ROADMAP.md).
 
