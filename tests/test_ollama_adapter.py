@@ -6,7 +6,9 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
+import provenance_adapters.ollama as ollama_module
 from provenance_adapters import ADAPTER_ID, OllamaAdapter, OllamaAdapterError
 from provenance_core import (
     CollectionStatus,
@@ -406,16 +408,21 @@ class OllamaAdapterTests(unittest.TestCase):
                 timeout_seconds=5,
             )
 
-            with self.assertRaisesRegex(
-                OllamaAdapterError,
-                "nesting depth",
+            with mock.patch.object(
+                ollama_module.json,
+                "loads",
+                side_effect=RecursionError("synthetic parser depth limit"),
             ):
-                adapter.observe_generate(
-                    model="m",
-                    prompt="p",
-                    store=store,
-                    custody=custody,
-                )
+                with self.assertRaisesRegex(
+                    OllamaAdapterError,
+                    "nesting depth",
+                ):
+                    adapter.observe_generate(
+                        model="m",
+                        prompt="p",
+                        store=store,
+                        custody=custody,
+                    )
 
             self._assert_failure_evidence(
                 store=store,
