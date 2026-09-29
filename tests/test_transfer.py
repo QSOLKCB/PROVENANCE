@@ -589,11 +589,13 @@ class DistributedCustodyTests(unittest.TestCase):
                 transfer_fd: int,
                 *,
                 expected_sender_fingerprint: str | None = None,
+                _package_fd: int | None = None,
             ):
                 nonlocal swapped
                 report = real_verify_fd(
                     transfer_fd,
                     expected_sender_fingerprint=expected_sender_fingerprint,
+                    _package_fd=_package_fd,
                 )
                 if not swapped:
                     os.rename(bundle_a.path, saved_a)
@@ -676,11 +678,13 @@ class DistributedCustodyTests(unittest.TestCase):
                 transfer_fd: int,
                 *,
                 expected_sender_fingerprint: str | None = None,
+                _package_fd: int | None = None,
             ):
                 nonlocal swapped
                 report = real_verify_fd(
                     transfer_fd,
                     expected_sender_fingerprint=expected_sender_fingerprint,
+                    _package_fd=_package_fd,
                 )
                 if not swapped:
                     os.rename(bundle_a.path / "package", saved_package_a)
