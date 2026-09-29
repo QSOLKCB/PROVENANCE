@@ -2,13 +2,18 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import os
 from typing import Callable, Sequence, TypeVar
 
 
 T = TypeVar("T")
 R = TypeVar("R")
 
-DEFAULT_MAX_VERIFY_WORKERS = 4
+VERIFY_WORKER_HARD_CAP = 4
+DEFAULT_MAX_VERIFY_WORKERS = max(
+    1,
+    min(VERIFY_WORKER_HARD_CAP, os.cpu_count() or 1),
+)
 _INFLIGHT_BATCHES_PER_WORKER = 2
 
 
