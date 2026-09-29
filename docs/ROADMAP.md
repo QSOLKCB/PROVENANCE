@@ -1215,6 +1215,12 @@ The executed Phase 11 test copies the finalized package to a separate simulated 
 
 # Phase 12 — Signatures and External Anchoring
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Add optional authenticity mechanisms.
@@ -1249,6 +1255,34 @@ correctness
 physical location
 ```
 
+## Reference implementation
+
+Phase 12 uses detached trust records so finalized Phase 11 packages remain byte-identical.
+
+Reference signature mechanism:
+
+```text
+OpenSSH SSHSIG
+algorithm = ssh-ed25519
+namespace = provenance
+signed bytes = exact canonical package.json bytes
+```
+
+Reference external anchor mechanism:
+
+```text
+Git commit
+→ exact canonical PROVENANCE anchor payload
+→ exact commit OID + repository-relative path
+→ verification against a supplied Git object database
+```
+
+The verifier reports integrity, signature, and external-anchor assurance independently. Signature and anchor verification may remain valid even when current package-member integrity has failed, because they bind the signed/anchored package declaration rather than silently repairing damaged evidence.
+
+Signing and Git anchor records are optional detached sidecars. No private signing key enters the evidence package or MCP interface, and Phase 12 performs no automatic network calls.
+
+See `TRUST.md`.
+
 ## Exit Gate
 
 The verifier can distinguish:
@@ -1260,6 +1294,8 @@ external-anchor verification
 ```
 
 as separate dimensions.
+
+The executed Phase 12 CI lane generates a real Ed25519 key, signs and verifies a real Phase 11 package, creates and verifies a real Git commit anchor, and proves that integrity/signature/anchor outcomes remain separate.
 
 ---
 
