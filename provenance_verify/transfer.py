@@ -553,6 +553,7 @@ def verify_transfer_receipt(
     received_package: os.PathLike[str] | str | None = None,
     expected_sender_fingerprint: str | None = None,
     _transfer_fd: int | None = None,
+    _received_package_fd: int | None = None,
 ) -> TransferReceiptVerificationReport:
     checks: list[str] = []
     errors: list[str] = []
@@ -571,7 +572,9 @@ def verify_transfer_receipt(
         else "FAILED"
     )
     package_binding = (
-        "NOT_ATTEMPTED" if received_package is None else "FAILED"
+        "NOT_ATTEMPTED"
+        if received_package is None and _received_package_fd is None
+        else "FAILED"
     )
     causal_edges: list[tuple[str, str, str]] = []
 
@@ -842,14 +845,19 @@ def verify_transfer_receipt(
                     checks.append("transfer bundle binding verified")
                     causal_edges.extend(transfer_report.causal_edges)
 
-            if received_package is not None:
-                package_fd = os.open(
-                    received_package, _directory_flags()
-                )
-                try:
-                    package_report = verify_forensic_package_fd(package_fd)
-                finally:
-                    os.close(package_fd)
+            if received_package is not None or _received_package_fd is not None:
+                if _received_package_fd is None:
+                    package_fd = os.open(
+                        received_package, _directory_flags()
+                    )
+                    try:
+                        package_report = verify_forensic_package_fd(package_fd)
+                    finally:
+                        os.close(package_fd)
+                else:
+                    package_report = verify_forensic_package_fd(
+                        _received_package_fd
+                    )
                 if not package_report.integrity_verified:
                     errors.append(
                         "received package failed verification: "
