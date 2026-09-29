@@ -1,0 +1,226 @@
+name: full
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/full.yml"
+      - "docs/RELEASE.md"
+      - "docs/ROADMAP.md"
+      - "docs/ARCHITECTURE.md"
+      - "docs/README.md"
+      - "docs/INSTRUCTIONS.md"
+      - "README.md"
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/full.yml"
+      - "docs/RELEASE.md"
+      - "docs/ROADMAP.md"
+      - "docs/ARCHITECTURE.md"
+      - "docs/README.md"
+      - "docs/INSTRUCTIONS.md"
+      - "README.md"
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12.11"
+  RUST_TOOLCHAIN: "1.90.0"
+  OLLAMA_VERSION: "0.34.0"
+  OLLAMA_INSTALL_SHA256: "25f64b810b947145095956533e1bdf56eacea2673c55a7e586be4515fc882c9f"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  release-suite:
+    name: release-suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Fresh checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install pinned Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: false
+
+      - name: Install pinned Rust
+        shell: sh
+        run: |
+          set -eu
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Verify release toolchain
+        shell: sh
+        run: |
+          set -eu
+          python --version 2>&1 | grep -F "Python $PYTHON_VERSION"
+          rustc --version | grep -F "rustc $RUST_TOOLCHAIN "
+          cargo --version
+          command -v git
+          command -v ssh-keygen
+          command -v curl
+          command -v sha256sum
+          printf 'commit=%s\n' "$(git rev-parse HEAD)"
+          git status --porcelain --untracked-files=all
+
+      - name: Build pinned Rust CLI
+        run: cargo build --manifest-path provenance-cli/Cargo.toml --locked
+
+      - name: Run pinned Rust CLI tests
+        run: cargo test --manifest-path provenance-cli/Cargo.toml --locked
+
+      - name: Run complete invariant, tamper, and integration suite
+        env:
+          PYTHONHASHSEED: "0"
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Recheck canonical core under independent hash seed
+        env:
+          PYTHONHASHSEED: "8675309"
+        run: >-
+          python -m unittest
+          tests.test_core
+          tests.test_verify
+          -v
+
+      - name: Require clean source tree after validation
+        shell: sh
+        run: |
+          set -eu
+          rm -rf provenance-cli/target
+          dirty="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$dirty" ]; then
+            printf '%s\n' "$dirty"
+            echo "release suite mutated the source tree" >&2
+            exit 1
+          fi
+
+  ollama-smoke:
+    name: ollama-smoke (${{ matrix.lane }})
+    needs: release-suite
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - lane: qwen25-05b
+            model: "qwen2.5:0.5b"
+          - lane: qwen2-05b
+            model: "qwen2:0.5b"
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    env:
+      OLLAMA_HOST: "http://127.0.0.1:11434"
+      OLLAMA_MODEL: ${{ matrix.model }}
+
+    steps:
+      - name: Fresh checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install pinned Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: false
+
+      - name: Install pinned Ollama
+        shell: sh
+        run: |
+          set -eu
+          curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
+          printf '%s  %s\n' "$OLLAMA_INSTALL_SHA256" /tmp/ollama-install.sh | sha256sum -c -
+          OLLAMA_NO_START=1 OLLAMA_VERSION="$OLLAMA_VERSION" sh /tmp/ollama-install.sh
+          ollama --version
+
+      - name: Start independent Ollama instance
+        shell: sh
+        run: |
+          set -eu
+          OLLAMA_HOST=127.0.0.1:11434 \
+          OLLAMA_NUM_PARALLEL=1 \
+          OLLAMA_MAX_LOADED_MODELS=1 \
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
+          echo "$!" >/tmp/ollama.pid
+
+          python - <<'PY'
+          import time
+          import urllib.request
+
+          url = "http://127.0.0.1:11434/api/version"
+          for _ in range(120):
+              try:
+                  with urllib.request.urlopen(url, timeout=1) as response:
+                      if response.status == 200:
+                          print(response.read().decode("utf-8"))
+                          raise SystemExit(0)
+              except Exception:
+                  time.sleep(0.25)
+          raise SystemExit("Ollama server did not become ready")
+          PY
+
+      - name: Pull pinned reference model selector
+        run: ollama pull "$OLLAMA_MODEL"
+
+      - name: Run real observation and tamper verification
+        shell: sh
+        run: |
+          set -eu
+          out="$RUNNER_TEMP/provenance-release-${{ matrix.lane }}"
+          mkdir -p "$out"
+          python -m scripts.ollama_smoke \
+            --model "$OLLAMA_MODEL" \
+            --host "$OLLAMA_HOST" \
+            --output "$out"
+
+      - name: Upload release-lane observation evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase16-ollama-${{ matrix.lane }}
+          path: ${{ runner.temp }}/provenance-release-${{ matrix.lane }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Show Ollama log on failure
+        if: failure()
+        shell: sh
+        run: |
+          test ! -f /tmp/ollama.log || tail -n 200 /tmp/ollama.log
+
+  release-gate:
+    name: release-gate
+    needs:
+      - release-suite
+      - ollama-smoke
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require complete release-grade trust lane
+        shell: sh
+        run: |
+          set -eu
+          test "${{ needs.release-suite.result }}" = "success"
+          test "${{ needs.ollama-smoke.result }}" = "success"
+          {
+            echo "## Phase 16 release-grade trust lane"
+            echo
+            echo "- candidate: \`${{ github.sha }}\`"
+            echo "- release suite: \`${{ needs.release-suite.result }}\`"
+            echo "- real Ollama matrix: \`${{ needs.ollama-smoke.result }}\`"
+            echo "- formal verification: **not attempted in Phase 16**"
+            echo "- immutable freeze: **not yet applied; Phase 17**"
+          } >> "$GITHUB_STEP_SUMMARY"
