@@ -25,11 +25,11 @@ const BACKEND_COMMANDS: &[&str] = &[
 const TUI_COMMANDS: &[&str] = &["record", "inspect", "verify", "finalize", "export", "package"];
 
 fn print_help() {
-    println!("PROVENANCE Phase 8 CLI");
+    println!("PROVENANCE CLI");
     println!();
     println!("Usage:");
     println!("  provenance <store-command> --store <path> --custody <path> [options]");
-    println!("  provenance <trust-command> [options]");
+    println!("  provenance <standalone-command> [options]");
     println!("  provenance tui --store <path> --custody <path>");
     println!();
     println!("Commands:");
