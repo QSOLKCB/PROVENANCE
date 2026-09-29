@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you use PROVENANCE, please cite this software and its archival record."
+title: "PROVENANCE: Cryptographic Chain of Custody for LLMs, Software, Agents, Tools, and Automated Systems"
+type: software
+authors:
+  - family-names: "Slade"
+    given-names: "Trent"
+version: "1.0.0"
+doi: "10.5281/zenodo.23043860"
+date-released: "2026-09-29"
+repository-code: "https://github.com/QSOLKCB/PROVENANCE"
+url: "https://github.com/QSOLKCB/PROVENANCE/releases/tag/v1.0.0"
+license: "MPL-2.0"
