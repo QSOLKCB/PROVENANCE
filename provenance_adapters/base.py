@@ -20,6 +20,7 @@ from provenance_store import LocalEvidenceStore, StoredSnapshot
 
 
 ADAPTER_METADATA_SCHEMA = "provenance.adapter-metadata.v1"
+ADAPTER_ARTIFACT_MEDIA_TYPE = "application/octet-stream"
 
 
 class AdapterContractError(ValueError):
@@ -91,7 +92,8 @@ class CapturedArtifact:
 
     label: str
     data: bytes
-    media_type: str = "application/octet-stream"
+    media_type: str = ADAPTER_ARTIFACT_MEDIA_TYPE
+    evidence_class: EvidenceClass = EvidenceClass.OBSERVED
     retain_content: bool = True
 
     def __post_init__(self) -> None:
@@ -99,6 +101,10 @@ class CapturedArtifact:
         if not isinstance(self.data, bytes):
             raise AdapterContractError("captured artifact data must be bytes")
         _nonempty(self.media_type, label="captured artifact media_type")
+        if not isinstance(self.evidence_class, EvidenceClass):
+            raise AdapterContractError(
+                "captured artifact evidence_class must be an EvidenceClass"
+            )
         if type(self.retain_content) is not bool:
             raise AdapterContractError("retain_content must be a boolean")
 
@@ -255,7 +261,7 @@ def build_observation(
 
     input_events = tuple(
         _capture_event(
-            evidence_class=EvidenceClass.OBSERVED,
+            evidence_class=item.evidence_class,
             actor=contract.adapter_id,
             operation=f"{operation}.input.{item.label}",
             artifact=item,
@@ -268,7 +274,7 @@ def build_observation(
 
     output_events = tuple(
         _capture_event(
-            evidence_class=EvidenceClass.OBSERVED,
+            evidence_class=item.evidence_class,
             actor=source_actor,
             operation=f"{operation}.output.{item.label}",
             artifact=item,
@@ -300,7 +306,8 @@ def build_observation(
     metadata = CapturedArtifact(
         label="metadata",
         data=canonical_json_bytes(metadata_payload),
-        media_type="application/json",
+        media_type=ADAPTER_ARTIFACT_MEDIA_TYPE,
+        evidence_class=EvidenceClass.DECLARED,
         retain_content=True,
     )
     related_events = input_events + output_events
@@ -390,13 +397,14 @@ def persist_observation(
                 f"store changed adapter artifact semantics for {capture.label}"
             )
         artifact_identities.append(stored.content_identity)
-        custody.append(
-            stored.content_identity,
-            CustodyAction.CAPTURED,
-            actor=observation.contract.adapter_id,
-            source=observation.source_actor,
-            clock=effective_clock,
-        )
+        if capture.evidence_class is EvidenceClass.OBSERVED:
+            custody.append(
+                stored.content_identity,
+                CustodyAction.CAPTURED,
+                actor=observation.contract.adapter_id,
+                source=observation.source_actor,
+                clock=effective_clock,
+            )
         custody.append(
             stored.content_identity,
             CustodyAction.STORED,
