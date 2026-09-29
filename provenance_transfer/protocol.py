@@ -649,6 +649,7 @@ def receive_transfer(
         transfer_report = verify_transfer_bundle_fd(
             transfer_fd,
             expected_sender_fingerprint=expected_sender_fingerprint,
+            _package_fd=embedded_package_fd,
         )
         if not transfer_report.integrity_verified:
             raise TransferError(
@@ -720,6 +721,7 @@ def receive_transfer(
                 received_package=package_dest,
                 expected_sender_fingerprint=expected_sender_fingerprint,
                 _transfer_fd=transfer_fd,
+                _transfer_package_fd=embedded_package_fd,
                 _received_package_fd=received_package_fd,
             )
             if not existing.integrity_verified:
@@ -967,6 +969,7 @@ def receive_transfer(
                 received_package=package_dest,
                 expected_sender_fingerprint=expected_sender_fingerprint,
                 _transfer_fd=transfer_fd,
+                _transfer_package_fd=embedded_package_fd,
                 _received_package_fd=received_package_fd,
             )
             if (
@@ -1006,6 +1009,7 @@ def receive_transfer(
                 received_package=package_dest,
                 expected_sender_fingerprint=expected_sender_fingerprint,
                 _transfer_fd=transfer_fd,
+                _transfer_package_fd=embedded_package_fd,
                 _received_package_fd=received_package_fd,
             )
             if (
