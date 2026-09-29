@@ -52,6 +52,10 @@ Phase 5 deliberately supports exactly one Ollama exchange per fresh LocalEvidenc
 
 A second observation against a non-empty pair is rejected before transport.
 
+The freshness check is protected by a shared in-process observation reservation keyed by the filesystem identities of the store root and custody root. The reservation is held from freshness validation through complete success or failure finalization.
+
+Two threads or adapter instances sharing the same evidence pair therefore cannot both observe it as fresh and enter transport.
+
 This prevents repeated byte-identical exchanges from collapsing into the same deterministic event identities before the core has a justified occurrence discriminator.
 
 Multi-exchange sessions belong to a later contract extension.
