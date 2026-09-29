@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import http.client as http_client
 import json
 from typing import Mapping
 from urllib import error as urllib_error
@@ -36,10 +37,12 @@ class _TransportFailure(OllamaAdapterError):
         self,
         message: str,
         *,
+        category: str,
         status: int | None = None,
         response_bytes: bytes | None = None,
     ):
         super().__init__(message)
+        self.category = category
         self.status = status
         self.response_bytes = response_bytes
 
@@ -53,6 +56,7 @@ class _RejectRedirects(urllib_request.HTTPRedirectHandler):
         finally:
             raise _TransportFailure(
                 f"Ollama endpoint returned forbidden HTTP redirect {code}",
+                category="redirect_rejected",
                 status=code,
             )
 
@@ -113,6 +117,10 @@ def _parse_response(data: bytes) -> dict[str, object]:
         )
     except OllamaAdapterError:
         raise
+    except RecursionError as exc:
+        raise OllamaAdapterError(
+            "Ollama response exceeds supported JSON nesting depth"
+        ) from exc
     except (json.JSONDecodeError, TypeError, ValueError) as exc:
         raise OllamaAdapterError("Ollama response is not valid JSON") from exc
 
@@ -133,6 +141,22 @@ def _parse_response(data: bytes) -> dict[str, object]:
             "non-streaming Ollama response must report done=true"
         )
     return value
+
+
+def _failure_detail_bytes(
+    *,
+    category: str,
+    status: int | None,
+    detail: str,
+) -> bytes:
+    return _json_bytes(
+        {
+            "schema": "provenance.ollama-failure.v1",
+            "category": category,
+            "http_status": status,
+            "detail": detail,
+        }
+    )
 
 
 class OllamaAdapter:
@@ -192,10 +216,25 @@ class OllamaAdapter:
                 timeout=self.timeout_seconds,
             ) as response:
                 status = getattr(response, "status", None)
-                body = response.read()
+                try:
+                    body = response.read()
+                except http_client.IncompleteRead as exc:
+                    raise _TransportFailure(
+                        "Ollama response body was truncated",
+                        category="incomplete_read",
+                        status=status,
+                        response_bytes=bytes(exc.partial),
+                    ) from exc
+                except http_client.HTTPException as exc:
+                    raise _TransportFailure(
+                        f"Ollama HTTP protocol failure: {exc}",
+                        category="http_protocol_error",
+                        status=status,
+                    ) from exc
                 if status != 200:
                     raise _TransportFailure(
                         f"Ollama generate returned HTTP status {status}",
+                        category="http_status",
                         status=status,
                         response_bytes=body,
                     )
@@ -203,23 +242,51 @@ class OllamaAdapter:
         except _TransportFailure:
             raise
         except urllib_error.HTTPError as exc:
+            body: bytes | None
             try:
                 body = exc.read()
+            except http_client.IncompleteRead as read_exc:
+                body = bytes(read_exc.partial)
             except Exception:
-                body = b""
+                body = None
             raise _TransportFailure(
                 f"Ollama generate returned HTTP {exc.code}",
+                category="http_error",
                 status=exc.code,
-                response_bytes=body or None,
+                response_bytes=body,
             ) from exc
         except urllib_error.URLError as exc:
             raise _TransportFailure(
-                f"local Ollama endpoint is unavailable: {exc.reason}"
+                f"local Ollama endpoint is unavailable: {exc.reason}",
+                category="endpoint_unavailable",
             ) from exc
         except OSError as exc:
             raise _TransportFailure(
-                f"local Ollama request failed: {exc}"
+                f"local Ollama request failed: {exc}",
+                category="transport_os_error",
             ) from exc
+
+    def _require_fresh_evidence_targets(
+        self,
+        *,
+        store: LocalEvidenceStore,
+        custody: LocalCustodyLedger,
+    ) -> None:
+        custody_report = custody.verify()
+        if not custody_report.integrity_verified:
+            raise OllamaAdapterError(
+                "custody target failed verification before observation: "
+                + "; ".join(custody_report.errors)
+            )
+        if (
+            store.artifact_count != 0
+            or store.event_count != 0
+            or store.current_manifest_identity is not None
+            or custody_report.record_count != 0
+        ):
+            raise OllamaAdapterError(
+                "Phase 5 Ollama observation requires a fresh store and custody ledger"
+            )
 
     def _append_verified_custody(
         self,
@@ -257,13 +324,31 @@ class OllamaAdapter:
         request_event: EventEnvelope,
         operation: str,
         original_error: OllamaAdapterError,
+        failure_category: str,
+        failure_status: int | None = None,
         response_record: ArtifactRecord | None = None,
     ) -> None:
-        outputs = (
-            (response_record.content_identity,)
-            if response_record is not None
-            else ()
+        failure_detail = store.put_artifact(
+            _failure_detail_bytes(
+                category=failure_category,
+                status=failure_status,
+                detail=str(original_error),
+            ),
+            media_type="application/octet-stream",
+            retain_content=True,
         )
+        custody.append(
+            failure_detail.content_identity,
+            CustodyAction.STORED,
+            actor="provenance-store:local",
+            source=ADAPTER_ID,
+        )
+
+        outputs_list = [failure_detail.content_identity]
+        if response_record is not None:
+            outputs_list.insert(0, response_record.content_identity)
+        outputs = tuple(outputs_list)
+
         failure_event = EventEnvelope.seal(
             EventCore(
                 evidence_class=EvidenceClass.OBSERVED,
@@ -319,6 +404,11 @@ class OllamaAdapter:
         if options is not None and not isinstance(options, Mapping):
             raise TypeError("options must be a mapping when supplied")
 
+        self._require_fresh_evidence_targets(
+            store=store,
+            custody=custody,
+        )
+
         payload: dict[str, object] = {
             "model": model,
             "prompt": prompt,
@@ -331,7 +421,7 @@ class OllamaAdapter:
         request_clock: ClockObservation = observe_clock()
         request_record = store.put_artifact(
             request_bytes,
-            media_type="application/json",
+            media_type="application/octet-stream",
             retain_content=True,
         )
         custody.append(
@@ -387,6 +477,8 @@ class OllamaAdapter:
                 request_event=request_event,
                 operation="ollama.generate.transport.failed",
                 original_error=exc,
+                failure_category=exc.category,
+                failure_status=exc.status,
                 response_record=response_record,
             )
             raise AssertionError("unreachable")
@@ -423,6 +515,8 @@ class OllamaAdapter:
                 request_event=request_event,
                 operation="ollama.generate.response.invalid",
                 original_error=exc,
+                failure_category="response_invalid",
+                failure_status=200,
                 response_record=response_record,
             )
             raise AssertionError("unreachable")
