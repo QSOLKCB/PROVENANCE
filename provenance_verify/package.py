@@ -510,13 +510,12 @@ def _member_hash_task(
     return relative, identity, byte_count, None
 
 
-def _verify_forensic_package(
-    package_dir: Path | str,
+def _verify_forensic_package_root_fd(
+    root_fd: int,
     *,
     max_workers: int,
     reference_dependencies: bool,
 ) -> ForensicPackageVerificationReport:
-    package = Path(package_dir)
     checks: list[str] = []
     errors: list[str] = []
     package_identity_value: str | None = None
@@ -524,14 +523,6 @@ def _verify_forensic_package(
     evidence_scope: str | None = None
     custody_record_count = 0
 
-    try:
-        root_fd = _open_root(package)
-    except (OSError, ValueError, RuntimeError) as exc:
-        return ForensicPackageVerificationReport(
-            False, None, None, None, 0, (), (str(exc),)
-        )
-
-    try:
         try:
             envelope = _canonical_object(root_fd, "package.json")
             if set(envelope) != {
@@ -844,6 +835,51 @@ def _verify_forensic_package(
             custody_record_count=custody_record_count,
             checks=tuple(checks),
             errors=tuple(errors),
+        )
+
+
+def _verify_forensic_package(
+    package_dir: Path | str,
+    *,
+    max_workers: int,
+    reference_dependencies: bool,
+) -> ForensicPackageVerificationReport:
+    package = Path(package_dir)
+    try:
+        root_fd = _open_root(package)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return ForensicPackageVerificationReport(
+            False, None, None, None, 0, (), (str(exc),)
+        )
+    try:
+        return _verify_forensic_package_root_fd(
+            root_fd,
+            max_workers=max_workers,
+            reference_dependencies=reference_dependencies,
+        )
+    finally:
+        os.close(root_fd)
+
+
+def verify_forensic_package_fd(
+    package_fd: int,
+) -> ForensicPackageVerificationReport:
+    """Verify an already-open forensic-package directory descriptor."""
+
+    try:
+        root_fd = os.dup(package_fd)
+        if not stat.S_ISDIR(os.fstat(root_fd).st_mode):
+            os.close(root_fd)
+            raise ValueError("package descriptor must reference a directory")
+    except (OSError, TypeError, ValueError) as exc:
+        return ForensicPackageVerificationReport(
+            False, None, None, None, 0, (), (str(exc),)
+        )
+    try:
+        return _verify_forensic_package_root_fd(
+            root_fd,
+            max_workers=DEFAULT_MAX_VERIFY_WORKERS,
+            reference_dependencies=False,
         )
     finally:
         os.close(root_fd)
