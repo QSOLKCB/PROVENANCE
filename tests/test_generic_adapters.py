@@ -32,6 +32,15 @@ class _HTTPFixture(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         size = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(size)
+        if self.path == "/truncate":
+            payload = b"abc"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", "10")
+            self.end_headers()
+            self.wfile.write(payload)
+            self.close_connection = True
+            return
         if self.path == "/fail":
             payload = b"provider-failed\n"
             self.send_response(503)
@@ -233,6 +242,17 @@ class GenericAdapterTests(unittest.TestCase):
                 clock=self._clock(),
             )
             self.assertTrue(stored.snapshot.verification.integrity_verified)
+
+    def test_truncated_http_body_is_retained_only_as_observed_prefix(self) -> None:
+        adapter = GenericHTTPAdapter(self._url("/truncate"))
+        with self.assertRaises(GenericHTTPAdapterError) as raised:
+            adapter.observe(b"request")
+        observation = raised.exception.observation
+
+        self.assertEqual(observation.failure.category, "truncated_response")
+        self.assertEqual(len(observation.outputs), 1)
+        self.assertEqual(observation.outputs[0].label, "response_prefix")
+        self.assertEqual(observation.outputs[0].data, b"abc")
 
     def test_process_nonzero_exit_returns_persistable_failure_observation(self) -> None:
         adapter = ProcessAdapter()
