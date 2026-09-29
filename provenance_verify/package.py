@@ -151,6 +151,24 @@ def _safe_parts(relative: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
+def _member_path_allowed(relative: str) -> bool:
+    if relative in {"schemas.json", "verification.json", "gaps.json"}:
+        return True
+    if relative.startswith("evidence/"):
+        return len(PurePosixPath(relative).parts) >= 2
+    if relative.startswith("custody/sha256/"):
+        parts = PurePosixPath(relative).parts
+        if len(parts) != 3:
+            return False
+        name = parts[-1]
+        return (
+            len(name) == 69
+            and name.endswith(".json")
+            and all(char in "0123456789abcdef" for char in name[:-5])
+        )
+    return False
+
+
 def _open_directory_at(root_fd: int, parts: tuple[str, ...]) -> int:
     fd = os.dup(root_fd)
     try:
@@ -534,6 +552,10 @@ def verify_forensic_package(
                 if relative == "package.json":
                     raise ValueError(
                         "package.json must not be a self-declared member"
+                    )
+                if not _member_path_allowed(relative):
+                    raise ValueError(
+                        f"package member path is outside the v1 layout: {relative}"
                     )
                 content_identity = item.get("content_identity")
                 require_sha256_identity(
