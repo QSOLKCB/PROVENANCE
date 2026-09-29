@@ -448,27 +448,37 @@ def create_git_anchor_record(
     }
 
 
-def write_trust_record(
+def write_git_anchor_payload(
+    package_dir: Path | str,
     destination: Path | str,
-    record: dict[str, Any],
 ) -> Path:
-    """Publish one canonical detached trust record without overwrite."""
+    """Publish the exact canonical payload that a Git commit must contain."""
 
-    data = canonical_json_bytes(record)
+    _package_bytes, package_identity = _verified_package_subject(package_dir)
+    data = git_anchor_payload(package_identity)
+    return _write_new_file(destination, data, label="Git anchor payload")
+
+
+def _write_new_file(
+    destination: Path | str,
+    data: bytes,
+    *,
+    label: str,
+) -> Path:
     supplied = Path(destination).expanduser()
     if supplied.name in {"", ".", ".."}:
-        raise TrustRecordError("trust record destination name is invalid")
+        raise TrustRecordError(f"{label} destination name is invalid")
     if supplied.exists() or supplied.is_symlink():
-        raise TrustRecordError("trust record destination must not already exist")
+        raise TrustRecordError(f"{label} destination must not already exist")
     if supplied.parent.is_symlink():
         raise TrustRecordError(
-            "trust record destination parent must not be a symlink"
+            f"{label} destination parent must not be a symlink"
         )
     try:
         parent = supplied.parent.resolve(strict=True)
     except OSError as exc:
         raise TrustRecordError(
-            f"trust record destination parent cannot be resolved: {exc}"
+            f"{label} destination parent cannot be resolved: {exc}"
         ) from exc
 
     parent_fd = os.open(parent, _directory_flags())
@@ -489,23 +499,22 @@ def write_trust_record(
             created = True
         except OSError as exc:
             raise TrustRecordError(
-                f"trust record cannot be created safely: {exc}"
+                f"{label} cannot be created safely: {exc}"
             ) from exc
         try:
             offset = 0
             while offset < len(data):
                 written = os.write(fd, data[offset:])
                 if written <= 0:
-                    raise TrustRecordError("short trust record write")
+                    raise TrustRecordError(f"short {label} write")
                 offset += written
             os.fsync(fd)
         finally:
             os.close(fd)
         os.fsync(parent_fd)
-
         if not _path_still_matches(parent, parent_identity):
             raise TrustRecordError(
-                "trust record destination parent changed during publication"
+                f"{label} destination parent changed during publication"
             )
         return parent / supplied.name
     except Exception:
@@ -518,3 +527,17 @@ def write_trust_record(
         raise
     finally:
         os.close(parent_fd)
+
+
+def write_trust_record(
+    destination: Path | str,
+    record: dict[str, Any],
+) -> Path:
+    """Publish one canonical detached trust record without overwrite."""
+
+    data = canonical_json_bytes(record)
+    return _write_new_file(
+        destination,
+        data,
+        label="trust record",
+    )
