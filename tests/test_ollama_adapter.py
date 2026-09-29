@@ -408,10 +408,17 @@ class OllamaAdapterTests(unittest.TestCase):
                 timeout_seconds=5,
             )
 
+            real_json_loads = json.loads
+
+            def fail_only_nested_response(value, *args, **kwargs):
+                if value == nested.decode("utf-8"):
+                    raise RecursionError("synthetic parser depth limit")
+                return real_json_loads(value, *args, **kwargs)
+
             with mock.patch.object(
                 ollama_module.json,
                 "loads",
-                side_effect=RecursionError("synthetic parser depth limit"),
+                side_effect=fail_only_nested_response,
             ):
                 with self.assertRaisesRegex(
                     OllamaAdapterError,
