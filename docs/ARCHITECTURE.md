@@ -2344,3 +2344,56 @@ Phase 18 Lean formalization + archival release
 ```
 
 See [RELEASE.md](RELEASE.md).
+
+---
+
+# Phase 18 — Formal Verification and Archival Architecture
+
+Formal verification is downstream of the immutable implementation target.
+
+```text
+v1.0.0
+0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
+        ↓
+explicit model/runtime bridge
+        ↓
+Lean 4.34.1 proof model
+        ↓
+independent proof checks
+        ↓
+formal evidence manifest
+        ↓
+archive bundle
+        ↓
+final archival tag + Zenodo DOI
+```
+
+The dependency direction is one-way:
+
+```text
+frozen implementation
+        ↓
+formal model
+
+NEVER
+
+formal proof convenience
+        ↓
+silent frozen implementation rewrite
+```
+
+The proof source is not part of `provenance-core` and does not change evidence semantics.
+
+Phase 18 currently formalizes only:
+
+```text
+FV-01 self-hash exclusion
+FV-02 append-only history extension
+FV-03 classification non-promotion
+FV-04 presentation non-interference
+```
+
+Runtime correspondence is explicit in [FORMAL_VERIFICATION.md](FORMAL_VERIFICATION.md). The archival/DOI process is defined in [ARCHIVAL_RELEASE.md](ARCHIVAL_RELEASE.md).
+
+If the formalization discovers an implementation defect requiring contract changes, `v1.0.0` remains immutable and a new release candidate must be established.
+
