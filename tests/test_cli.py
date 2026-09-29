@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
+from provenance_mcp import ProvenanceMCPServer
 from provenance_verify import verify_bundle
 
 
@@ -285,6 +286,97 @@ class ProvenanceCliTests(unittest.TestCase):
                 verified["bundle"]["manifest_identity"],
                 finalized["manifest_identity"],
             )
+
+    def test_mcp_and_cli_share_one_working_set(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = root / "store"
+            custody = root / "custody"
+
+            mcp = ProvenanceMCPServer(store, custody)
+            mcp_record = mcp._record(
+                {
+                    "actor": "mcp:test",
+                    "operation": "cross-interface.mcp",
+                    "value": {"source": "mcp"},
+                }
+            )
+
+            cli_record = _json_result(
+                _run(
+                    "record",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                    "--text",
+                    "cli evidence",
+                    "--actor",
+                    "operator:cli",
+                    "--operation",
+                    "cross-interface.cli",
+                )
+            )
+
+            inspected = _json_result(
+                _run(
+                    "inspect",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                )
+            )
+            self.assertEqual(inspected["artifact_count"], 4)
+            self.assertEqual(inspected["event_count"], 4)
+
+            _json_result(
+                _run(
+                    "finalize",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                )
+            )
+            verified = _json_result(
+                _run(
+                    "verify",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                )
+            )
+            self.assertTrue(verified["bundle"]["integrity_verified"])
+            self.assertTrue(verified["custody"]["integrity_verified"])
+
+            identities = (
+                mcp_record["declaration_artifact_identity"],
+                mcp_record["receipt_artifact_identity"],
+                mcp_record["declaration_event_identity"],
+                mcp_record["receipt_event_identity"],
+                cli_record["artifact_identity"],
+                cli_record["receipt_artifact_identity"],
+                cli_record["event_identity"],
+                cli_record["receipt_event_identity"],
+            )
+            for identity in identities:
+                resolved = _json_result(
+                    _run(
+                        "inspect",
+                        "--store",
+                        str(store),
+                        "--custody",
+                        str(custody),
+                        "--identity",
+                        identity,
+                    )
+                )
+                self.assertIn(
+                    resolved["kind"],
+                    {"artifact", "event"},
+                )
 
     def test_tui_slash_palette_filters_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
