@@ -107,6 +107,19 @@ class OllamaObservation:
     response_text: str
 
 
+@dataclass(frozen=True, slots=True)
+class _ObservationReservationLease:
+    pid: int
+
+    def require_current_process(self) -> None:
+        current_pid = os.getpid()
+        if current_pid != self.pid:
+            raise OllamaAdapterError(
+                "Ollama observation cannot continue after fork; "
+                "the child must start a fresh observation reservation"
+            )
+
+
 def _json_bytes(value: object) -> bytes:
     return json.dumps(
         value,
@@ -261,7 +274,9 @@ if hasattr(os, "register_at_fork") and not _OBSERVATION_AT_FORK_REGISTERED:
 def _observation_reservation(
     store: LocalEvidenceStore,
     custody: LocalCustodyLedger,
-) -> Iterator[None]:
+) -> Iterator[_ObservationReservationLease]:
+    reservation_pid = os.getpid()
+    lease = _ObservationReservationLease(pid=reservation_pid)
     directory_flags = (
         os.O_RDONLY
         | os.O_DIRECTORY
@@ -334,22 +349,27 @@ def _observation_reservation(
 
             lock_fds.append(lock_fd)
 
-        yield
+        lease.require_current_process()
+        yield lease
     finally:
+        inherited_after_fork = os.getpid() != reservation_pid
+
         for lock_fd in reversed(lock_fds):
             try:
-                fcntl.lockf(
-                    lock_fd,
-                    fcntl.LOCK_UN,
-                    0,
-                    0,
-                    os.SEEK_SET,
-                )
+                if not inherited_after_fork:
+                    fcntl.lockf(
+                        lock_fd,
+                        fcntl.LOCK_UN,
+                        0,
+                        0,
+                        os.SEEK_SET,
+                    )
             finally:
                 os.close(lock_fd)
 
-        for process_lock in reversed(process_locks):
-            process_lock.release()
+        if not inherited_after_fork:
+            for process_lock in reversed(process_locks):
+                process_lock.release()
 
         for root_fd in root_fds.values():
             os.close(root_fd)
@@ -588,7 +608,9 @@ class OllamaAdapter:
         store.put_event(failure_event)
 
         try:
-            snapshot = store.finalize(scope="closed")
+            reservation.require_current_process()
+        snapshot = store.finalize(scope="closed")
+        reservation.require_current_process()
             subjects = (request_record.content_identity,) + outputs
             self._append_verified_custody(
                 custody=custody,
@@ -618,13 +640,14 @@ class OllamaAdapter:
         if not isinstance(custody, LocalCustodyLedger):
             raise TypeError("custody must be a LocalCustodyLedger")
 
-        with _observation_reservation(store, custody):
+        with _observation_reservation(store, custody) as reservation:
             return self._observe_generate_reserved(
                 model=model,
                 prompt=prompt,
                 store=store,
                 custody=custody,
                 options=options,
+                reservation=reservation,
             )
 
     def _observe_generate_reserved(
@@ -635,6 +658,7 @@ class OllamaAdapter:
         store: LocalEvidenceStore,
         custody: LocalCustodyLedger,
         options: Mapping[str, object] | None = None,
+        reservation: _ObservationReservationLease,
     ) -> OllamaObservation:
         if not isinstance(model, str) or not model:
             raise ValueError("model must be a non-empty string")
@@ -647,10 +671,12 @@ class OllamaAdapter:
         if options is not None and not isinstance(options, Mapping):
             raise TypeError("options must be a mapping when supplied")
 
+        reservation.require_current_process()
         self._require_fresh_evidence_targets(
             store=store,
             custody=custody,
         )
+        reservation.require_current_process()
 
         payload: dict[str, object] = {
             "model": model,
@@ -691,9 +717,11 @@ class OllamaAdapter:
         )
         store.put_event(request_event)
 
+        reservation.require_current_process()
         try:
             response_bytes = self._post_generate(request_bytes)
         except _TransportFailure as exc:
+            reservation.require_current_process()
             response_record: ArtifactRecord | None = None
             if exc.response_bytes is not None:
                 response_record = store.put_artifact(
@@ -726,6 +754,7 @@ class OllamaAdapter:
             )
             raise AssertionError("unreachable")
 
+        reservation.require_current_process()
         response_clock: ClockObservation = observe_clock()
 
         # Retain exactly what was observed before parsing or deriving claims.
@@ -748,6 +777,7 @@ class OllamaAdapter:
             source=ADAPTER_ID,
         )
 
+        reservation.require_current_process()
         try:
             parsed_response = _parse_response(response_bytes)
         except OllamaAdapterError as exc:
@@ -764,6 +794,7 @@ class OllamaAdapter:
             )
             raise AssertionError("unreachable")
 
+        reservation.require_current_process()
         declared_model = str(parsed_response["model"])
         response_text = str(parsed_response["response"])
 
@@ -806,6 +837,7 @@ class OllamaAdapter:
                 "Ollama observation snapshot failed independent verification"
             )
 
+        reservation.require_current_process()
         self._append_verified_custody(
             custody=custody,
             snapshot=snapshot,
