@@ -88,7 +88,7 @@ class AdapterContract:
 
 @dataclass(frozen=True, slots=True)
 class CapturedArtifact:
-    """Exact bytes captured at an adapter boundary."""
+    """Bytes retained by an adapter, with their explicit evidence classification."""
 
     label: str
     data: bytes
@@ -322,13 +322,17 @@ def build_observation(
         ),
     )
 
+    completion_sources = related_events + (metadata_event,)
     completion_relationships = tuple(
         Relationship(kind="includes", target=item.event_identity)
-        for item in related_events + (metadata_event,)
+        for item in completion_sources
+    ) + tuple(
+        Relationship(kind="derived_from", target=item.event_identity)
+        for item in completion_sources
     )
     completion_event = EventEnvelope.seal(
         EventCore(
-            evidence_class=EvidenceClass.OBSERVED,
+            evidence_class=EvidenceClass.DERIVED,
             actor=contract.adapter_id,
             operation=(
                 f"{operation}.completed"
