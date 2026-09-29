@@ -1568,6 +1568,12 @@ The Phase 15 CI suite proves this across separate sender/receiver directories, i
 
 # Phase 16 — Release-Grade Trust Lane
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Create a high-assurance release process distinct from routine fast CI.
@@ -1606,9 +1612,35 @@ bundle export
 independent verification
 ```
 
+## Reference implementation
+
+Phase 16 adds `.github/workflows/full.yml` as a separate high-assurance lane.
+
+It uses fresh GitHub-hosted checkouts, pinned Python/Rust/Ollama toolchains and pinned action commits, runs the complete Python invariant/tamper/integration corpus, builds and tests the Rust CLI, repeats the canonical core/verifier checks under a second Python hash seed, requires a clean source tree after validation, and executes the existing real Ollama smoke path against both small reference models.
+
+Routine module CI remains path-filtered. The full lane runs automatically when its own release contract changes and is otherwise invoked manually against the exact release candidate ref.
+
+The real-model jobs retain their observation directories as short-lived workflow artifacts for inspection. These are CI artifacts, not the final Phase 18 archival bundle.
+
+See `RELEASE.md`.
+
+## Boundary
+
+A green Phase 16 lane means the exact tested candidate passed the release-grade engineering gate.
+
+It does **not** mean:
+
+```text
+implementation frozen
+formal verification complete
+archival final release complete
+```
+
+Those are Phase 17 and Phase 18 responsibilities.
+
 ## Exit Gate
 
-The implementation intended for the archival release passes the complete release-grade trust lane and is ready to be frozen as the formalization target.
+The implementation intended for the archival release passes the complete release-grade trust lane at its exact candidate commit and is ready to be frozen as the formalization target.
 
 ---
 

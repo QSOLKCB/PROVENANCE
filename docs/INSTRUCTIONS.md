@@ -333,6 +333,31 @@ Verify the end-to-end handoff:
 ```
 
 Do not compare sender and receiver wall clocks to infer order. The protocol exposes only evidence-backed partial-order edges. See [TRANSFER.md](TRANSFER.md).
+
+## Phase 16 release-grade trust lane
+
+Routine focused workflows remain the normal development feedback path.
+
+For a release candidate, select the exact candidate ref in GitHub Actions and manually run the `full` workflow.
+
+The gate requires:
+
+```text
+pinned Python + Rust
+complete Python invariant/tamper/integration suite
+Rust CLI build + tests
+canonical core/verifier cross-seed recheck
+clean source tree
+real Ollama smoke on both reference models
+release-gate success
+```
+
+A green run qualifies only the exact tested commit. If the implementation changes, run `full` again before freezing.
+
+Phase 16 does not create the immutable tag and does not run Lean. Those are Phase 17 and Phase 18.
+
+See [RELEASE.md](RELEASE.md).
+
 ## Operational rules
 
 - Do not put secrets into evidence-bearing URLs, argv, prompts, or artifacts unless retention is intentional.
@@ -343,4 +368,4 @@ Do not compare sender and receiver wall clocks to infer order. The protocol expo
 
 ## Deep reference
 
-[Architecture](ARCHITECTURE.md) · [Invariants](INVARIANTS.md) · [Store](STORE.md) · [Custody](CUSTODY.md) · [Bundle](BUNDLE.md) · [Package](PACKAGE.md) · [Trust](TRUST.md) · [Performance](PERFORMANCE.md) · [Privacy](PRIVACY.md) · [Transfer](TRANSFER.md) · [CLI](CLI.md) · [MCP](MCP.md) · [UI](UI.md) · [Adapters](ADAPTERS.md) · [Roadmap](ROADMAP.md)
+[Architecture](ARCHITECTURE.md) · [Invariants](INVARIANTS.md) · [Store](STORE.md) · [Custody](CUSTODY.md) · [Bundle](BUNDLE.md) · [Package](PACKAGE.md) · [Trust](TRUST.md) · [Performance](PERFORMANCE.md) · [Privacy](PRIVACY.md) · [Transfer](TRANSFER.md) · [Release](RELEASE.md) · [CLI](CLI.md) · [MCP](MCP.md) · [UI](UI.md) · [Adapters](ADAPTERS.md) · [Roadmap](ROADMAP.md)
