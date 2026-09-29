@@ -238,6 +238,29 @@ python3 -m unittest tests.test_package -v
 cargo test --manifest-path provenance-cli/Cargo.toml --locked
 ```
 
+## Phase 13 reference and benchmark verification
+
+Normal verification uses the bounded deterministic parallel path.
+
+For conformance/debugging, the serial reference APIs remain available:
+
+```python
+from provenance_verify import (
+    verify_bundle_reference,
+    verify_forensic_package_reference,
+)
+```
+
+Re-run the environment-scoped benchmark with:
+
+```bash
+python3 scripts/benchmark_phase13.py \
+  --artifact-count 32 \
+  --artifact-bytes 1048576 \
+  --repetitions 5
+```
+
+Do not transfer benchmark numbers to another host without re-measuring. See [PERFORMANCE.md](PERFORMANCE.md).
 ## Operational rules
 
 - Do not put secrets into evidence-bearing URLs, argv, prompts, or artifacts unless retention is intentional.
@@ -248,4 +271,4 @@ cargo test --manifest-path provenance-cli/Cargo.toml --locked
 
 ## Deep reference
 
-[Architecture](ARCHITECTURE.md) · [Invariants](INVARIANTS.md) · [Store](STORE.md) · [Custody](CUSTODY.md) · [Bundle](BUNDLE.md) · [Package](PACKAGE.md) · [Trust](TRUST.md) · [CLI](CLI.md) · [MCP](MCP.md) · [UI](UI.md) · [Adapters](ADAPTERS.md) · [Roadmap](ROADMAP.md)
+[Architecture](ARCHITECTURE.md) · [Invariants](INVARIANTS.md) · [Store](STORE.md) · [Custody](CUSTODY.md) · [Bundle](BUNDLE.md) · [Package](PACKAGE.md) · [Trust](TRUST.md) · [Performance](PERFORMANCE.md) · [CLI](CLI.md) · [MCP](MCP.md) · [UI](UI.md) · [Adapters](ADAPTERS.md) · [Roadmap](ROADMAP.md)
