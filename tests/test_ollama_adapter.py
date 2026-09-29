@@ -475,6 +475,87 @@ class OllamaAdapterTests(unittest.TestCase):
             )
             self.assertEqual(store.artifact_count, 2)
 
+    def test_concurrent_observations_atomically_reserve_fresh_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalEvidenceStore(root / "store")
+            custody = LocalCustodyLedger(root / "custody")
+            adapter = OllamaAdapter(
+                f"http://127.0.0.1:{self.server.server_port}",
+                timeout_seconds=5,
+            )
+
+            entered_transport = threading.Event()
+            release_transport = threading.Event()
+            transport_calls = 0
+            transport_guard = threading.Lock()
+            results = []
+            errors: list[BaseException] = []
+
+            def fake_post(request_bytes: bytes) -> bytes:
+                nonlocal transport_calls
+                with transport_guard:
+                    transport_calls += 1
+                entered_transport.set()
+                if not release_transport.wait(timeout=5):
+                    raise AssertionError("transport release timed out")
+                return _FakeOllamaHandler.response_bytes
+
+            def worker() -> None:
+                try:
+                    results.append(
+                        adapter.observe_generate(
+                            model="qwen2.5:0.5b",
+                            prompt="same concurrent request",
+                            store=store,
+                            custody=custody,
+                        )
+                    )
+                except BaseException as exc:
+                    errors.append(exc)
+
+            with mock.patch.object(
+                adapter,
+                "_post_generate",
+                side_effect=fake_post,
+            ):
+                first = threading.Thread(target=worker)
+                second = threading.Thread(target=worker)
+                first.start()
+                self.assertTrue(
+                    entered_transport.wait(timeout=5),
+                    "first observation never reached transport",
+                )
+                second.start()
+
+                # The second thread may block on the observation reservation,
+                # but it must never enter transport while the first owns it.
+                second.join(timeout=0.2)
+                self.assertTrue(
+                    second.is_alive(),
+                    "second observation unexpectedly completed before release",
+                )
+                with transport_guard:
+                    self.assertEqual(transport_calls, 1)
+
+                release_transport.set()
+                first.join(timeout=5)
+                second.join(timeout=5)
+
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            with transport_guard:
+                self.assertEqual(transport_calls, 1)
+            self.assertEqual(len(results), 1)
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], OllamaAdapterError)
+            self.assertIn(
+                "requires a fresh store and custody ledger",
+                str(errors[0]),
+            )
+            self.assertTrue(results[0].snapshot.verification.integrity_verified)
+            self.assertTrue(custody.verify().integrity_verified)
+
     def test_repeated_observation_requires_fresh_evidence_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
