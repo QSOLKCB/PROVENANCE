@@ -319,7 +319,8 @@ At the receiver:
   --receipt /receiver/receipt \
   --custody /receiver/custody \
   --receiver-system org-b/system-9 \
-  --receiver-key /path/to/receiver-key
+  --receiver-key /path/to/receiver-key \
+  --expected-sender-fingerprint 'SHA256:<trusted-sender-fingerprint>'
 ```
 
 Verify the end-to-end handoff:
