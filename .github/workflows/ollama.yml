@@ -7,7 +7,7 @@ on:
       - "tests/test_ollama_adapter.py"
       - "tests/test_ollama_transport.py"
       - "scripts/ollama_smoke.py"
-      - "OLLAMA.md"
+      - "docs/OLLAMA.md"
       - ".github/workflows/ollama.yml"
   push:
     branches: ["main"]
@@ -16,7 +16,7 @@ on:
       - "tests/test_ollama_adapter.py"
       - "tests/test_ollama_transport.py"
       - "scripts/ollama_smoke.py"
-      - "OLLAMA.md"
+      - "docs/OLLAMA.md"
       - ".github/workflows/ollama.yml"
   workflow_dispatch:
 
