@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import http.client as http_client
 import json
+import os
+import threading
 from typing import Mapping
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -24,6 +26,12 @@ from provenance_store import LocalEvidenceStore, StoredSnapshot
 ADAPTER_ID = "provenance-adapter:ollama/v1"
 _ENDPOINT_ACTOR = "ollama:local-endpoint"
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+_OBSERVATION_LOCKS_GUARD = threading.Lock()
+_OBSERVATION_LOCKS: dict[
+    tuple[int, int, int, int],
+    threading.Lock,
+] = {}
 
 
 class OllamaAdapterError(RuntimeError):
@@ -169,6 +177,26 @@ def _failure_detail_bytes(
             "detail": detail,
         }
     )
+
+
+def _observation_lock(
+    store: LocalEvidenceStore,
+    custody: LocalCustodyLedger,
+) -> threading.Lock:
+    store_stat = os.stat(store.root, follow_symlinks=False)
+    custody_stat = os.stat(custody.root, follow_symlinks=False)
+    key = (
+        store_stat.st_dev,
+        store_stat.st_ino,
+        custody_stat.st_dev,
+        custody_stat.st_ino,
+    )
+    with _OBSERVATION_LOCKS_GUARD:
+        lock = _OBSERVATION_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _OBSERVATION_LOCKS[key] = lock
+        return lock
 
 
 class OllamaAdapter:
@@ -413,6 +441,30 @@ class OllamaAdapter:
         ) from original_error
 
     def observe_generate(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        store: LocalEvidenceStore,
+        custody: LocalCustodyLedger,
+        options: Mapping[str, object] | None = None,
+    ) -> OllamaObservation:
+        if not isinstance(store, LocalEvidenceStore):
+            raise TypeError("store must be a LocalEvidenceStore")
+        if not isinstance(custody, LocalCustodyLedger):
+            raise TypeError("custody must be a LocalCustodyLedger")
+
+        reservation = _observation_lock(store, custody)
+        with reservation:
+            return self._observe_generate_reserved(
+                model=model,
+                prompt=prompt,
+                store=store,
+                custody=custody,
+                options=options,
+            )
+
+    def _observe_generate_reserved(
         self,
         *,
         model: str,
