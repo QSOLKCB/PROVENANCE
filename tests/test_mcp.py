@@ -12,7 +12,9 @@ from unittest import mock
 
 from provenance_core import canonical_json_bytes, parse_canonical_json_bytes
 import provenance_mcp.server as mcp_server_module
+from provenance_custody import LocalCustodyLedger
 from provenance_mcp import ProvenanceMCPServer
+from provenance_store import LocalEvidenceStore
 from provenance_verify import verify_bundle
 
 
@@ -532,6 +534,91 @@ class ProvenanceMCPTests(unittest.TestCase):
             self.assertEqual(returncode, 0, stderr)
             self.assertEqual(stderr, "")
             self.assertFalse(state_path.exists())
+
+    def test_long_lived_server_rejects_replacement_store_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+
+            server = ProvenanceMCPServer(store_root, custody_root)
+            server._record(
+                {
+                    "actor": "root-binding-test",
+                    "operation": "root.binding",
+                    "value": {"generation": 1},
+                }
+            )
+            finalized = server._finalize({"scope": "closed"})
+            original_identity = finalized["manifest_identity"]
+
+            moved_root = root / "store-original"
+            store_root.rename(moved_root)
+            replacement = LocalEvidenceStore(store_root)
+            self.assertIsNone(replacement.current_manifest_identity)
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "store root filesystem identity changed",
+            ):
+                server._inspect({})
+
+            reopened_original = LocalEvidenceStore(moved_root)
+            self.assertEqual(
+                reopened_original.current_manifest_identity,
+                original_identity,
+            )
+            self.assertTrue(
+                reopened_original.verify_current().integrity_verified
+            )
+            self.assertIsNone(
+                LocalEvidenceStore(store_root).current_manifest_identity
+            )
+
+    def test_finalized_journal_rejects_unretained_verified_subject(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+
+            producer = ProvenanceMCPServer(store_root, custody_root)
+            producer._record(
+                {
+                    "actor": "journal-validation-test",
+                    "operation": "journal.valid",
+                    "value": {"x": 1},
+                }
+            )
+            finalized = producer._finalize({"scope": "closed"})
+            manifest_identity = finalized["manifest_identity"]
+
+            before = LocalCustodyLedger(custody_root).verify()
+            self.assertTrue(before.integrity_verified)
+            before_count = before.record_count
+
+            forged_subject = "sha256:" + "0" * 64
+            forged_state = {
+                "schema": "provenance.mcp-working-state.v1",
+                "phase": "finalized",
+                "base_manifest_identity": manifest_identity,
+                "finalized_manifest_identity": manifest_identity,
+                "artifacts": [],
+                "events": [],
+                "pending_verified_artifacts": [forged_subject],
+            }
+            state_path = store_root / ".provenance-mcp-working.json"
+            state_path.write_bytes(canonical_json_bytes(forged_state))
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "pending verification subjects must exactly match",
+            ):
+                ProvenanceMCPServer(store_root, custody_root)
+
+            after = LocalCustodyLedger(custody_root).verify()
+            self.assertTrue(after.integrity_verified)
+            self.assertEqual(after.record_count, before_count)
+            self.assertTrue(state_path.is_file())
 
     def test_long_lived_server_refreshes_latest_head_for_current_tools(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
