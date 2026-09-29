@@ -36,6 +36,11 @@ _OBSERVATION_LOCKS: dict[
     tuple[int, int],
     threading.Lock,
 ] = {}
+_OBSERVATION_LOCKS_HELD_FOR_FORK: tuple[threading.Lock, ...] = ()
+_OBSERVATION_AT_FORK_REGISTERED = globals().get(
+    "_OBSERVATION_AT_FORK_REGISTERED",
+    False,
+)
 
 
 class OllamaAdapterError(RuntimeError):
@@ -183,15 +188,73 @@ def _failure_detail_bytes(
     )
 
 
+def _process_observation_locks(
+    keys: list[tuple[int, int]],
+) -> list[threading.Lock]:
+    with _OBSERVATION_LOCKS_GUARD:
+        locks: list[threading.Lock] = []
+        for key in keys:
+            lock = _OBSERVATION_LOCKS.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                _OBSERVATION_LOCKS[key] = lock
+            locks.append(lock)
+        return locks
+
+
 def _process_observation_lock(
     key: tuple[int, int],
 ) -> threading.Lock:
-    with _OBSERVATION_LOCKS_GUARD:
-        lock = _OBSERVATION_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _OBSERVATION_LOCKS[key] = lock
-        return lock
+    return _process_observation_locks([key])[0]
+
+
+def _before_observation_fork() -> None:
+    global _OBSERVATION_LOCKS_HELD_FOR_FORK
+
+    _OBSERVATION_LOCKS_GUARD.acquire()
+    acquired: list[threading.Lock] = []
+    try:
+        for key in sorted(_OBSERVATION_LOCKS):
+            lock = _OBSERVATION_LOCKS[key]
+            lock.acquire()
+            acquired.append(lock)
+    except BaseException:
+        for lock in reversed(acquired):
+            lock.release()
+        _OBSERVATION_LOCKS_GUARD.release()
+        raise
+
+    _OBSERVATION_LOCKS_HELD_FOR_FORK = tuple(acquired)
+
+
+def _after_observation_fork_parent() -> None:
+    global _OBSERVATION_LOCKS_HELD_FOR_FORK
+
+    for lock in reversed(_OBSERVATION_LOCKS_HELD_FOR_FORK):
+        lock.release()
+    _OBSERVATION_LOCKS_HELD_FOR_FORK = ()
+    _OBSERVATION_LOCKS_GUARD.release()
+
+
+def _after_observation_fork_child() -> None:
+    global _OBSERVATION_LOCKS
+    global _OBSERVATION_LOCKS_GUARD
+    global _OBSERVATION_LOCKS_HELD_FOR_FORK
+
+    # The child has only the forking thread. Discard every inherited
+    # process-local mutex rather than attempting to reuse copied lock state.
+    _OBSERVATION_LOCKS = {}
+    _OBSERVATION_LOCKS_GUARD = threading.Lock()
+    _OBSERVATION_LOCKS_HELD_FOR_FORK = ()
+
+
+if hasattr(os, "register_at_fork") and not _OBSERVATION_AT_FORK_REGISTERED:
+    os.register_at_fork(
+        before=_before_observation_fork,
+        after_in_parent=_after_observation_fork_parent,
+        after_in_child=_after_observation_fork_child,
+    )
+    _OBSERVATION_AT_FORK_REGISTERED = True
 
 
 @contextmanager
@@ -227,8 +290,8 @@ def _observation_reservation(
 
         ordered_keys = sorted(root_fds)
 
-        for key in ordered_keys:
-            process_lock = _process_observation_lock(key)
+        reservation_locks = _process_observation_locks(ordered_keys)
+        for process_lock in reservation_locks:
             process_lock.acquire()
             process_locks.append(process_lock)
 
