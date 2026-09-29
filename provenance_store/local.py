@@ -1392,6 +1392,10 @@ class LocalEvidenceStore:
         return self.root.joinpath(*_SNAPSHOTS, digest)
 
     def verify_current(self) -> VerificationReport:
+        # Refuse a configured-path replacement before deriving any snapshot
+        # path from self.root.
+        with self._root_fd():
+            pass
         path = self.current_snapshot_path()
         if path is None or self._current_manifest_identity is None:
             raise StoreError("store has no finalized snapshot")
