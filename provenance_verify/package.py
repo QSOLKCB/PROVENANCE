@@ -309,7 +309,10 @@ def _manifest_and_events(evidence_root: Path) -> tuple[dict[str, Any], list[dict
     return value, events
 
 
-def derive_declared_gaps(evidence_root: Path) -> dict[str, object]:
+def derive_declared_gaps(
+    evidence_root: Path,
+    custody_records: list[bytes] | tuple[bytes, ...] = (),
+) -> dict[str, object]:
     manifest, events = _manifest_and_events(evidence_root)
     core = manifest["core"]
     manifest_identity = manifest.get("manifest_identity")
@@ -354,6 +357,55 @@ def derive_declared_gaps(evidence_root: Path) -> dict[str, object]:
                     "status": status,
                 }
             )
+
+    evidence_subjects: set[str] = set()
+    if isinstance(manifest_identity, str):
+        evidence_subjects.add(manifest_identity)
+    for entry in artifacts:
+        identity = entry.get("content_identity")
+        if isinstance(identity, str):
+            evidence_subjects.add(identity)
+    for event in events:
+        identity = event.get("event_identity")
+        if isinstance(identity, str):
+            evidence_subjects.add(identity)
+
+    custody_subjects: set[str] = set()
+    for index, raw in enumerate(custody_records):
+        try:
+            value = parse_canonical_json_bytes(raw)
+        except Exception as exc:
+            raise ValueError(
+                f"custody record[{index}] cannot be parsed for gap derivation: {exc}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise ValueError(
+                f"custody record[{index}] must be an object for gap derivation"
+            )
+        custody_core = value.get("core")
+        if not isinstance(custody_core, dict):
+            raise ValueError(
+                f"custody record[{index}] core must be an object for gap derivation"
+            )
+        subject = custody_core.get("subject_identity")
+        if isinstance(subject, str):
+            custody_subjects.add(subject)
+
+    missing_custody = sorted(evidence_subjects - custody_subjects)
+    if not custody_records and evidence_subjects:
+        gaps.append(
+            {
+                "kind": "CUSTODY_NOT_PRESENT",
+                "identities": sorted(evidence_subjects),
+            }
+        )
+    elif missing_custody:
+        gaps.append(
+            {
+                "kind": "PARTIAL_CUSTODY_COVERAGE",
+                "identities": missing_custody,
+            }
+        )
 
     gaps.sort(key=canonical_json_bytes)
     return {"schema": PACKAGE_GAPS_SCHEMA, "gaps": gaps}
@@ -544,7 +596,11 @@ def verify_forensic_package(
             )
 
         expected_files = {"package.json", *member_paths}
-        expected_directories: set[str] = set()
+        expected_directories: set[str] = {
+            "evidence",
+            "custody",
+            "custody/sha256",
+        }
         for relative in member_paths:
             parts = PurePosixPath(relative).parts[:-1]
             for index in range(1, len(parts) + 1):
@@ -667,7 +723,10 @@ def verify_forensic_package(
         if bundle_report.integrity_verified:
             try:
                 gaps = _canonical_object(root_fd, "gaps.json")
-                expected_gaps = derive_declared_gaps(evidence_root)
+                expected_gaps = derive_declared_gaps(
+                    evidence_root,
+                    custody_raws,
+                )
                 if gaps != expected_gaps:
                     errors.append(
                         "gaps.json does not match recomputed evidence gaps"
