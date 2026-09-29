@@ -854,7 +854,7 @@ The transport boundary is enforced by an adapter-owned urllib opener with enviro
 
 Prepared request evidence does not independently prove peer receipt. Transport and parse failures are recorded with COLLECTION_FAILED events and finalized evidence rather than silently disappearing.
 
-Phase 5 uses one fresh evidence store/custody pair per exchange. This prevents deterministic event identities from collapsing repeated byte-identical calls until the core has an evidence-supported occurrence discriminator.
+Phase 5 uses one fresh evidence store/custody pair per exchange. Freshness is atomically reserved in-process by a shared mutex keyed to the store and custody root filesystem identities and held across the complete observation/failure-finalization path. This prevents concurrent threads or adapter instances from both passing the freshness gate and prevents deterministic event identities from collapsing repeated byte-identical calls until the core has an evidence-supported occurrence discriminator.
 
 Adapter-retained HTTP payload bytes use one role-neutral artifact media type. Transport role is represented by events/custody so identical bytes can legitimately appear as both prepared request and observed response without rebinding content identity metadata.
 
