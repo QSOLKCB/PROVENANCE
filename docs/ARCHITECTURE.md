@@ -1369,6 +1369,40 @@ Cryptographic operations may be streamed or deferred only when doing so does not
 
 ---
 
+# 29A. Phase 13 Exact Parallel Verification
+
+Performance hardening may parallelize independent physical verification work only when observable verifier semantics remain equal to the serial reference.
+
+Phase 13 applies:
+
+```text
+bounded worker execution
++ deterministic input-order reduction
++ serial reference parity
+```
+
+to artifact/content checks, event checks, and forensic-package member hashing.
+
+Worker completion order is never report order.
+
+The required invariant is:
+
+```text
+optimized VerificationReport
+==
+serial-reference VerificationReport
+```
+
+including check order and error order.
+
+Parallel scheduling is bounded and batch-limited; configured worker count is not treated as evidence of actual overlap. CI separately witnesses overlapping work and enforces the live-worker cap.
+
+Exact parity is claimed for stable evidence inputs. Verification still does not provide an atomic snapshot of a concurrently mutated external directory tree.
+
+See [PERFORMANCE.md](PERFORMANCE.md).
+
+---
+
 # 30. Bounded Collection
 
 PROVENANCE must not use unbounded memory merely to avoid admitting that evidence was lost.
