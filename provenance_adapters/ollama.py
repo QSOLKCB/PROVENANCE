@@ -567,7 +567,9 @@ class OllamaAdapter:
         failure_category: str,
         failure_status: int | None = None,
         response_record: ArtifactRecord | None = None,
+        reservation: _ObservationReservationLease,
     ) -> None:
+        reservation.require_current_process()
         failure_detail = store.put_artifact(
             _failure_detail_bytes(
                 category=failure_category,
@@ -605,18 +607,20 @@ class OllamaAdapter:
                 collection_status=CollectionStatus.COLLECTION_FAILED,
             )
         )
+        reservation.require_current_process()
         store.put_event(failure_event)
 
         try:
             reservation.require_current_process()
-        snapshot = store.finalize(scope="closed")
-        reservation.require_current_process()
+            snapshot = store.finalize(scope="closed")
+            reservation.require_current_process()
             subjects = (request_record.content_identity,) + outputs
             self._append_verified_custody(
                 custody=custody,
                 snapshot=snapshot,
                 subjects=subjects,
             )
+            reservation.require_current_process()
         except Exception as evidence_error:
             raise OllamaAdapterError(
                 f"{original_error}; evidence finalization failed: {evidence_error}"
@@ -751,6 +755,7 @@ class OllamaAdapter:
                 failure_category=exc.category,
                 failure_status=exc.status,
                 response_record=response_record,
+                reservation=reservation,
             )
             raise AssertionError("unreachable")
 
@@ -791,6 +796,7 @@ class OllamaAdapter:
                 failure_category="response_invalid",
                 failure_status=200,
                 response_record=response_record,
+                reservation=reservation,
             )
             raise AssertionError("unreachable")
 
@@ -798,6 +804,7 @@ class OllamaAdapter:
         declared_model = str(parsed_response["model"])
         response_text = str(parsed_response["response"])
 
+        reservation.require_current_process()
         response_event = EventEnvelope.seal(
             EventCore(
                 evidence_class=EvidenceClass.OBSERVED,
@@ -829,9 +836,12 @@ class OllamaAdapter:
                 ),
             )
         )
+        reservation.require_current_process()
         store.put_event(declaration_event)
 
+        reservation.require_current_process()
         snapshot = store.finalize(scope="closed")
+        reservation.require_current_process()
         if not snapshot.verification.integrity_verified:
             raise OllamaAdapterError(
                 "Ollama observation snapshot failed independent verification"
@@ -847,6 +857,7 @@ class OllamaAdapter:
             ),
         )
 
+        reservation.require_current_process()
         return OllamaObservation(
             declared_model=declared_model,
             request=request_record,
