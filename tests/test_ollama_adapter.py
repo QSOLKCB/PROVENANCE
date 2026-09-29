@@ -104,6 +104,143 @@ def _fork_held_process_lock_worker(result_queue) -> None:
         result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
 
 
+def _fork_during_verified_custody_worker(
+    store_root: str,
+    custody_root: str,
+    result_queue,
+) -> None:
+    origin_pid = os.getpid()
+    child_read_fd, child_write_fd = os.pipe()
+    child_pid: int | None = None
+    forked = False
+
+    response_bytes = (
+        b'{"model":"qwen2.5:0.5b","created_at":"2026-09-29T00:00:00Z",'
+        b'"response":"verified custody fork regression","done":true}'
+    )
+
+    try:
+        store = LocalEvidenceStore(Path(store_root))
+        custody = LocalCustodyLedger(Path(custody_root))
+        adapter = OllamaAdapter("http://127.0.0.1:11434", timeout_seconds=5)
+        adapter._post_generate = (  # type: ignore[method-assign]
+            lambda request_bytes: response_bytes
+        )
+
+        original_append = custody.append
+
+        def fork_after_first_verified(*args, **kwargs):
+            nonlocal child_pid
+            nonlocal forked
+
+            envelope = original_append(*args, **kwargs)
+            action = args[1] if len(args) > 1 else kwargs.get("action")
+            if (
+                not forked
+                and os.getpid() == origin_pid
+                and action is CustodyAction.VERIFIED
+            ):
+                forked = True
+                pid = os.fork()
+                if pid == 0:
+                    os.close(child_read_fd)
+                    signal.alarm(5)
+                    return envelope
+                child_pid = pid
+            return envelope
+
+        custody.append = fork_after_first_verified  # type: ignore[method-assign]
+
+        try:
+            observation = adapter.observe_generate(
+                model="qwen2.5:0.5b",
+                prompt="fork during verified custody",
+                store=store,
+                custody=custody,
+            )
+        except BaseException as exc:
+            if os.getpid() != origin_pid:
+                message = f"{type(exc).__name__}: {exc}".encode(
+                    "utf-8",
+                    "replace",
+                )
+                try:
+                    os.write(child_write_fd, message)
+                finally:
+                    signal.alarm(0)
+                    os.close(child_write_fd)
+                expected = (
+                    isinstance(exc, OllamaAdapterError)
+                    and "cannot continue after fork" in str(exc)
+                )
+                os._exit(0 if expected else 31)
+
+            result_queue.put(
+                ("error", f"parent {type(exc).__name__}: {exc}")
+            )
+            if child_pid is not None:
+                os.close(child_write_fd)
+                os.waitpid(child_pid, 0)
+            return
+
+        if os.getpid() != origin_pid:
+            try:
+                os.write(
+                    child_write_fd,
+                    b"child unexpectedly returned observation",
+                )
+            finally:
+                signal.alarm(0)
+                os.close(child_write_fd)
+            os._exit(32)
+
+        assert child_pid is not None
+        os.close(child_write_fd)
+        child_message = os.read(child_read_fd, 4096)
+        os.close(child_read_fd)
+        _, child_status = os.waitpid(child_pid, 0)
+
+        reopened_store = LocalEvidenceStore(Path(store_root))
+        reopened_custody = LocalCustodyLedger(Path(custody_root))
+        custody_report = reopened_custody.verify()
+        result_queue.put(
+            (
+                "ok",
+                child_message.decode("utf-8", "replace"),
+                child_status,
+                observation.snapshot.manifest_identity,
+                reopened_store.current_manifest_identity,
+                reopened_store.verify_current().integrity_verified,
+                custody_report.integrity_verified,
+                custody_report.record_count,
+                reopened_store.artifact_count,
+                reopened_store.event_count,
+            )
+        )
+    except BaseException as exc:
+        if os.getpid() == origin_pid:
+            result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
+        else:
+            try:
+                os.write(
+                    child_write_fd,
+                    f"unexpected child {type(exc).__name__}: {exc}".encode(
+                        "utf-8",
+                        "replace",
+                    ),
+                )
+            except OSError:
+                pass
+            os._exit(33)
+    finally:
+        if os.getpid() == origin_pid:
+            for fd in (child_read_fd, child_write_fd):
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+
+
 def _fork_inside_active_observation_worker(
     store_root: str,
     custody_root: str,
@@ -682,6 +819,48 @@ class OllamaAdapterTests(unittest.TestCase):
                 failure_status=200,
             )
             self.assertEqual(store.artifact_count, 2)
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
+    def test_fork_during_verified_custody_stops_child_before_next_append(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+            LocalEvidenceStore(store_root)
+            LocalCustodyLedger(custody_root)
+
+            ctx = multiprocessing.get_context("spawn")
+            result_queue = ctx.Queue()
+            worker = ctx.Process(
+                target=_fork_during_verified_custody_worker,
+                args=(
+                    str(store_root),
+                    str(custody_root),
+                    result_queue,
+                ),
+            )
+            worker.start()
+            worker.join(timeout=12)
+
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(timeout=5)
+                self.fail(
+                    "verified-custody fork regression worker deadlocked"
+                )
+
+            self.assertEqual(worker.exitcode, 0)
+            result = result_queue.get(timeout=3)
+            self.assertEqual(result[0], "ok", result)
+            self.assertIn("cannot continue after fork", result[1], result)
+            self.assertTrue(os.WIFEXITED(result[2]), result)
+            self.assertEqual(os.WEXITSTATUS(result[2]), 0, result)
+            self.assertEqual(result[3], result[4], result)
+            self.assertTrue(result[5], result)
+            self.assertTrue(result[6], result)
+            self.assertEqual(result[7], 7, result)
+            self.assertEqual(result[8], 2, result)
+            self.assertEqual(result[9], 3, result)
 
     @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
     def test_fork_inside_active_observation_aborts_inherited_child(self) -> None:
