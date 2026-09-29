@@ -1,0 +1,10 @@
+[package]
+name = "provenance-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Phase 8 terminal operator interface for PROVENANCE"
+license = "MPL-2.0"
+
+[[bin]]
+name = "provenance"
+path = "src/main.rs"
