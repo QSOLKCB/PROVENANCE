@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from provenance_mcp import ProvenanceMCPServer
-from provenance_verify import verify_bundle
+from provenance_verify import verify_bundle, verify_forensic_package
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +67,7 @@ class ProvenanceCliTests(unittest.TestCase):
             store = root / "store"
             custody = root / "custody"
             export = root / "exported"
+            package_root = root / "forensic-package"
             source = root / "evidence.txt"
             source_bytes = b"Phase 8 terminal evidence\n"
             source.write_bytes(source_bytes)
@@ -183,6 +184,37 @@ class ProvenanceCliTests(unittest.TestCase):
             )
             self.assertEqual(
                 exported_report.manifest_identity,
+                finalized["manifest_identity"],
+            )
+
+            package = _json_result(
+                _run(
+                    "package",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                    "--destination",
+                    str(package_root),
+                )
+            )
+            self.assertEqual(
+                package["manifest_identity"],
+                finalized["manifest_identity"],
+            )
+            self.assertTrue(package["integrity_verified"])
+            self.assertTrue(package["custody_verified"])
+            package_report = verify_forensic_package(package_root)
+            self.assertTrue(
+                package_report.integrity_verified,
+                package_report.errors,
+            )
+            self.assertEqual(
+                package_report.package_identity,
+                package["package_identity"],
+            )
+            self.assertEqual(
+                package_report.evidence_manifest_identity,
                 finalized["manifest_identity"],
             )
 
