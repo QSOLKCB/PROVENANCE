@@ -135,6 +135,58 @@ def _reservation_call(
     return result
 
 
+@contextmanager
+def _observation_helper_fork_window(
+    reservation: _ObservationReservationLease,
+) -> Iterator[None]:
+    reservation.require_current_process()
+    origin_pid = os.getpid()
+    previous_active_depth = getattr(
+        _OBSERVATION_THREAD_STATE,
+        "active_depth",
+        0,
+    )
+    _OBSERVATION_THREAD_STATE.active_depth = 0
+    try:
+        yield
+    finally:
+        if os.getpid() == origin_pid:
+            _OBSERVATION_THREAD_STATE.active_depth = previous_active_depth
+        reservation.require_current_process()
+
+
+def _reservation_clock(
+    reservation: _ObservationReservationLease,
+) -> ClockObservation:
+    with _observation_helper_fork_window(reservation):
+        return observe_clock()
+
+
+def _reservation_custody_append(
+    reservation: _ObservationReservationLease,
+    custody: LocalCustodyLedger,
+    subject_identity: str,
+    action: CustodyAction,
+    *,
+    actor: str | None = None,
+    source: str | None = None,
+    related_identity: str | None = None,
+    clock: ClockObservation | None = None,
+):
+    if clock is None:
+        clock = _reservation_clock(reservation)
+    return _reservation_call(
+        reservation,
+        custody.append,
+        subject_identity,
+        action,
+        actor=actor,
+        source=source,
+        related_identity=related_identity,
+        clock=clock,
+    )
+
+
 def _json_bytes(value: object) -> bytes:
     return json.dumps(
         value,
@@ -567,9 +619,9 @@ class OllamaAdapter:
         reservation: _ObservationReservationLease,
     ) -> None:
         for subject in (*subjects, snapshot.manifest_identity):
-            _reservation_call(
+            _reservation_custody_append(
                 reservation,
-                custody.append,
+                custody,
                 subject,
                 CustodyAction.VERIFIED,
                 actor="provenance-verify",
@@ -617,9 +669,9 @@ class OllamaAdapter:
             media_type="application/octet-stream",
             retain_content=True,
         )
-        _reservation_call(
+        _reservation_custody_append(
             reservation,
-            custody.append,
+            custody,
             failure_detail.content_identity,
             CustodyAction.STORED,
             actor="provenance-store:local",
@@ -737,7 +789,7 @@ class OllamaAdapter:
             payload["options"] = dict(options)
         request_bytes = _json_bytes(payload)
 
-        request_clock: ClockObservation = observe_clock()
+        request_clock = _reservation_clock(reservation)
         request_record = _reservation_call(
             reservation,
             store.put_artifact,
@@ -745,18 +797,18 @@ class OllamaAdapter:
             media_type="application/octet-stream",
             retain_content=True,
         )
-        _reservation_call(
+        _reservation_custody_append(
             reservation,
-            custody.append,
+            custody,
             request_record.content_identity,
             CustodyAction.CAPTURED,
             actor=ADAPTER_ID,
             source="adapter-prepared:/api/generate request body",
             clock=request_clock,
         )
-        _reservation_call(
+        _reservation_custody_append(
             reservation,
-            custody.append,
+            custody,
             request_record.content_identity,
             CustodyAction.STORED,
             actor="provenance-store:local",
@@ -791,17 +843,17 @@ class OllamaAdapter:
                     media_type="application/octet-stream",
                     retain_content=True,
                 )
-                _reservation_call(
+                _reservation_custody_append(
                     reservation,
-                    custody.append,
+                    custody,
                     response_record.content_identity,
                     CustodyAction.CAPTURED,
                     actor=ADAPTER_ID,
                     source="ollama:/api/generate error response bytes",
                 )
-                _reservation_call(
+                _reservation_custody_append(
                     reservation,
-                    custody.append,
+                    custody,
                     response_record.content_identity,
                     CustodyAction.STORED,
                     actor="provenance-store:local",
@@ -822,7 +874,7 @@ class OllamaAdapter:
             raise AssertionError("unreachable")
 
         reservation.require_current_process()
-        response_clock: ClockObservation = observe_clock()
+        response_clock = _reservation_clock(reservation)
 
         # Retain exactly what was observed before parsing or deriving claims.
         response_record = _reservation_call(
@@ -832,18 +884,18 @@ class OllamaAdapter:
             media_type="application/octet-stream",
             retain_content=True,
         )
-        _reservation_call(
+        _reservation_custody_append(
             reservation,
-            custody.append,
+            custody,
             response_record.content_identity,
             CustodyAction.CAPTURED,
             actor=ADAPTER_ID,
             source="ollama:/api/generate response bytes",
             clock=response_clock,
         )
-        _reservation_call(
+        _reservation_custody_append(
             reservation,
-            custody.append,
+            custody,
             response_record.content_identity,
             CustodyAction.STORED,
             actor="provenance-store:local",
