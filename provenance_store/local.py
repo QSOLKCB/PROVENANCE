@@ -170,16 +170,11 @@ class LocalEvidenceStore:
         return self._artifacts.get(content_identity)
 
     def refresh_from_disk(self) -> None:
-        # Reuse the original store binding. _root_fd() rejects a pathname
-        # replacement before any state is reconstructed from disk.
-        with self._root_fd():
-            pass
-
-        self._artifacts = {}
-        self._events = set()
-        self._current_manifest_identity = None
-        self._session_changed_artifacts.clear()
-        self._load_head()
+        # Hold the already-bound root descriptor throughout reconstruction.
+        # _load_head(root_fd=...) reads authoritative HEAD from that descriptor
+        # and does not accept rebuilt state until the bound path checks pass.
+        with self._root_fd() as root_fd:
+            self._load_head(root_fd=root_fd)
 
     def _initialize(self) -> None:
         self._ensure_root_directory_durable()
@@ -1406,23 +1401,22 @@ class LocalEvidenceStore:
             label="current snapshot",
         )
 
-    def _read_head(self) -> str | None:
-        with self._root_fd() as root_fd:
+    def _read_head_from_root_fd(self, root_fd: int) -> str | None:
+        try:
+            fd = os.open(_HEAD, _file_read_flags(), dir_fd=root_fd)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise StoreError(f"HEAD cannot be opened safely: {exc}") from exc
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise StoreError("HEAD must be a regular file")
             try:
-                fd = os.open(_HEAD, _file_read_flags(), dir_fd=root_fd)
-            except FileNotFoundError:
-                return None
+                raw = _read_all(fd)
             except OSError as exc:
-                raise StoreError(f"HEAD cannot be opened safely: {exc}") from exc
-            try:
-                if not stat.S_ISREG(os.fstat(fd).st_mode):
-                    raise StoreError("HEAD must be a regular file")
-                try:
-                    raw = _read_all(fd)
-                except OSError as exc:
-                    raise StoreError(f"HEAD cannot be read: {exc}") from exc
-            finally:
-                os.close(fd)
+                raise StoreError(f"HEAD cannot be read: {exc}") from exc
+        finally:
+            os.close(fd)
 
         try:
             text = raw.decode("ascii")
@@ -1433,6 +1427,10 @@ class LocalEvidenceStore:
         identity = text[:-1]
         _digest(identity, label="HEAD manifest identity")
         return identity
+
+    def _read_head(self) -> str | None:
+        with self._root_fd() as root_fd:
+            return self._read_head_from_root_fd(root_fd)
 
     def _read_snapshot_manifest(
         self,
@@ -1731,9 +1729,30 @@ class LocalEvidenceStore:
             finally:
                 os.close(snapshot_fd)
 
-    def _load_head(self) -> None:
-        identity = self._read_head()
+    def _load_head(self, *, root_fd: int | None = None) -> None:
+        if root_fd is None:
+            identity = self._read_head()
+        else:
+            bound_identity = (
+                os.fstat(root_fd).st_dev,
+                os.fstat(root_fd).st_ino,
+            )
+            if self._root_identity is not None and (
+                bound_identity != self._root_identity
+            ):
+                raise StoreError(
+                    "store root filesystem identity changed before HEAD load"
+                )
+            identity = self._read_head_from_root_fd(root_fd)
+
         if identity is None:
+            if root_fd is not None:
+                with self._root_fd():
+                    pass
+            self._artifacts = {}
+            self._events = set()
+            self._current_manifest_identity = None
+            self._session_changed_artifacts.clear()
             return
         digest = _digest(identity, label="HEAD manifest identity")
         snapshot = self.root.joinpath(*_SNAPSHOTS, digest)
@@ -1791,6 +1810,13 @@ class LocalEvidenceStore:
             identity,
             label="HEAD snapshot after reconstruction checks",
         )
+
+        if root_fd is not None:
+            # Reject a rename/replacement that happened at any point while
+            # reconstruction was in progress. State is only accepted after
+            # the configured path resolves to the originally bound inode.
+            with self._root_fd():
+                pass
 
         self._artifacts = loaded_artifacts
         self._events = loaded_events
