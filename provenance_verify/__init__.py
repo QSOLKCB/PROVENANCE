@@ -31,6 +31,15 @@ __all__ = [
     "expected_verification_metadata",
     "forensic_package_identity",
     "verify_forensic_package",
+    "ANCHOR_VERIFICATION_REPORT_SCHEMA",
+    "ASSURANCE_VERIFICATION_REPORT_SCHEMA",
+    "SIGNATURE_VERIFICATION_REPORT_SCHEMA",
+    "AnchorVerificationReport",
+    "AssuranceVerificationReport",
+    "SignatureVerificationReport",
+    "verify_assurance",
+    "verify_git_anchor_record",
+    "verify_signature_record",
 ]
 
 from .package import (
@@ -43,4 +52,16 @@ from .package import (
     expected_verification_metadata,
     forensic_package_identity,
     verify_forensic_package,
+)
+
+from .trust import (
+    ANCHOR_VERIFICATION_REPORT_SCHEMA,
+    ASSURANCE_VERIFICATION_REPORT_SCHEMA,
+    SIGNATURE_VERIFICATION_REPORT_SCHEMA,
+    AnchorVerificationReport,
+    AssuranceVerificationReport,
+    SignatureVerificationReport,
+    verify_assurance,
+    verify_git_anchor_record,
+    verify_signature_record,
 )

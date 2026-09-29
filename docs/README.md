@@ -20,6 +20,7 @@ The repository root is intentionally small. Detailed contracts, subsystem notes,
 | [STORE.md](STORE.md) | Local content-addressed store |
 | [CUSTODY.md](CUSTODY.md) | Append-only custody |
 | [PACKAGE.md](PACKAGE.md) | Phase 11 portable forensic package |
+| [TRUST.md](TRUST.md) | Phase 12 detached signatures and external anchoring |
 
 ## Interfaces and integrations
 

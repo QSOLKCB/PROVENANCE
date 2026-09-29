@@ -301,3 +301,58 @@ This creates and independently verifies a `provenance.forensic-package.v1` direc
 After successful publication, the live custody ledger receives an `EXPORTED` record for the evidence manifest whose `related_identity` is the package identity. The already-finalized package is not rewritten to include that later export record.
 
 See `PACKAGE.md`.
+
+---
+
+# Phase 12 extension — signatures and anchors
+
+Detached trust operations act on finalized Phase 11 packages and do not require `--store` / `--custody`.
+
+~~~text
+provenance sign-package
+provenance anchor-payload
+provenance anchor-git
+provenance verify-assurance
+~~~
+
+These commands are standalone backend commands rather than TUI palette actions because they operate on detached packages/records rather than the active mutable store session.
+
+Sign:
+
+~~~bash
+provenance sign-package \
+  --package /path/to/package \
+  --key /path/to/ed25519-key \
+  --output ./package.signature.json
+~~~
+
+Create bytes to commit as a Git anchor:
+
+~~~bash
+provenance anchor-payload \
+  --package /path/to/package \
+  --output /path/to/git-repo/package.provenance
+~~~
+
+After committing that exact file, create the detached anchor record:
+
+~~~bash
+provenance anchor-git \
+  --package /path/to/package \
+  --git-repo /path/to/git-repo \
+  --commit HEAD \
+  --path package.provenance \
+  --output ./package.git-anchor.json
+~~~
+
+Verify dimensions independently:
+
+~~~bash
+provenance verify-assurance \
+  --package /path/to/package \
+  --signature ./package.signature.json \
+  --anchor ./package.git-anchor.json \
+  --git-repo /path/to/git-repo
+~~~
+
+See `TRUST.md` for the exact proof boundary.

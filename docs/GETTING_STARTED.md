@@ -71,7 +71,24 @@ Verification independently recomputes bundle integrity and custody-chain integri
 
 The Phase 11 package includes the finalized evidence bundle, custody snapshot, schema metadata, verification metadata, and declared gaps. It can be moved to another machine and independently verified.
 
-## 6. Optional: read-only viewer
+## 6. Optional: sign the package
+
+```bash
+ssh-keygen -t ed25519 -f .demo/signing-key
+
+./provenance-cli/target/debug/provenance sign-package \
+  --package .demo/forensic-package \
+  --key .demo/signing-key \
+  --output .demo/package.signature.json
+
+./provenance-cli/target/debug/provenance verify-assurance \
+  --package .demo/forensic-package \
+  --signature .demo/package.signature.json
+```
+
+This verifies key-to-bytes authenticity separately from package integrity. See [TRUST.md](TRUST.md) for Git commit anchoring and the proof boundary.
+
+## 7. Optional: read-only viewer
 
 ```bash
 python3 -m provenance_ui \

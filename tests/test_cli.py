@@ -218,6 +218,166 @@ class ProvenanceCliTests(unittest.TestCase):
                 finalized["manifest_identity"],
             )
 
+    def test_phase12_signature_and_git_anchor_cli_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = root / "store"
+            custody = root / "custody"
+            package = root / "package"
+            signature = root / "signature.json"
+            anchor_record = root / "anchor.json"
+            key = root / "signing-key"
+            repo = root / "anchor-repo"
+            repo.mkdir()
+
+            _json_result(
+                _run(
+                    "record",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                    "--text",
+                    "phase12 cli evidence",
+                    "--actor",
+                    "operator:phase12",
+                    "--operation",
+                    "phase12.cli",
+                )
+            )
+            _json_result(
+                _run(
+                    "finalize",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                    "--scope",
+                    "closed",
+                )
+            )
+            _json_result(
+                _run(
+                    "package",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                    "--destination",
+                    str(package),
+                )
+            )
+
+            generated = subprocess.run(
+                [
+                    "ssh-keygen",
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-f",
+                    str(key),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(generated.returncode, 0, generated.stderr)
+
+            signed = _json_result(
+                _run(
+                    "sign-package",
+                    "--package",
+                    str(package),
+                    "--key",
+                    str(key),
+                    "--output",
+                    str(signature),
+                )
+            )
+            self.assertEqual(signed["signature"]["status"], "VERIFIED")
+
+            subprocess.run(
+                ["git", "-C", str(repo), "init"],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "config", "user.name", "Phase 12 CLI"],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repo),
+                    "config",
+                    "user.email",
+                    "phase12-cli@example.invalid",
+                ],
+                check=True,
+            )
+
+            anchor_payload = repo / "package.provenance"
+            _json_result(
+                _run(
+                    "anchor-payload",
+                    "--package",
+                    str(package),
+                    "--output",
+                    str(anchor_payload),
+                )
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "package.provenance"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repo), "commit", "-m", "Anchor package"],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            anchored = _json_result(
+                _run(
+                    "anchor-git",
+                    "--package",
+                    str(package),
+                    "--git-repo",
+                    str(repo),
+                    "--commit",
+                    "HEAD",
+                    "--path",
+                    "package.provenance",
+                    "--output",
+                    str(anchor_record),
+                )
+            )
+            self.assertEqual(
+                anchored["external_anchor"]["status"],
+                "VERIFIED",
+            )
+
+            assurance = _json_result(
+                _run(
+                    "verify-assurance",
+                    "--package",
+                    str(package),
+                    "--signature",
+                    str(signature),
+                    "--anchor",
+                    str(anchor_record),
+                    "--git-repo",
+                    str(repo),
+                )
+            )
+            self.assertEqual(assurance["integrity"], "VERIFIED")
+            self.assertEqual(assurance["signature"], "VERIFIED")
+            self.assertEqual(assurance["external_anchor"], "VERIFIED")
+
     def test_relative_paths_resolve_from_caller_working_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             caller = Path(tmp)

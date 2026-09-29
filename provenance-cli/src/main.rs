@@ -3,13 +3,27 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const COMMANDS: &[&str] = &["record", "inspect", "verify", "finalize", "export", "package"];
+const BACKEND_COMMANDS: &[&str] = &[
+    "record",
+    "inspect",
+    "verify",
+    "finalize",
+    "export",
+    "package",
+    "sign-package",
+    "anchor-payload",
+    "anchor-git",
+    "verify-assurance",
+];
+
+const TUI_COMMANDS: &[&str] = &["record", "inspect", "verify", "finalize", "export", "package"];
 
 fn print_help() {
     println!("PROVENANCE Phase 8 CLI");
     println!();
     println!("Usage:");
-    println!("  provenance <command> --store <path> --custody <path> [options]");
+    println!("  provenance <store-command> --store <path> --custody <path> [options]");
+    println!("  provenance <trust-command> [options]");
     println!("  provenance tui --store <path> --custody <path>");
     println!();
     println!("Commands:");
@@ -18,14 +32,18 @@ fn print_help() {
     println!("  verify    Independently verify current bundle + custody");
     println!("  finalize  Finalize the current working evidence set");
     println!("  export    Copy and independently verify the current snapshot");
-    println!("  package   Create a portable Phase 11 forensic package");
-    println!("  tui       Keyboard-first slash-command palette");
+    println!("  package          Create a portable Phase 11 forensic package");
+    println!("  sign-package     Create a detached Ed25519 SSHSIG record");
+    println!("  anchor-payload   Write canonical bytes to commit as a Git anchor");
+    println!("  anchor-git       Bind a package identity to an existing Git commit");
+    println!("  verify-assurance Verify integrity/signature/anchor dimensions");
+    println!("  tui              Keyboard-first store/custody command palette");
     println!();
     println!("Type 'provenance <command> --help' for backend command options.");
 }
 
 fn palette_matches(prefix: &str) -> Vec<&'static str> {
-    COMMANDS
+    TUI_COMMANDS
         .iter()
         .copied()
         .filter(|command| command.starts_with(prefix))
@@ -206,7 +224,7 @@ fn run_tui(args: &[String]) -> Result<i32, String> {
             continue;
         };
 
-        if !COMMANDS.contains(&command) {
+        if !TUI_COMMANDS.contains(&command) {
             show_palette(command);
             continue;
         }
@@ -240,7 +258,7 @@ fn main() -> ExitCode {
 
     let result = if args[0] == "tui" {
         run_tui(&args[1..])
-    } else if COMMANDS.contains(&args[0].as_str()) {
+    } else if BACKEND_COMMANDS.contains(&args[0].as_str()) {
         run_backend(&args)
     } else {
         Err(format!("unknown command: {}", args[0]))
@@ -263,15 +281,26 @@ mod tests {
     #[test]
     fn palette_filters_prefixes() {
         assert_eq!(palette_matches("v"), vec!["verify"]);
-        assert_eq!(palette_matches(""), COMMANDS.to_vec());
+        assert_eq!(palette_matches(""), TUI_COMMANDS.to_vec());
         assert!(palette_matches("zzz").is_empty());
     }
 
     #[test]
     fn backend_commands_are_stable() {
         assert_eq!(
-            COMMANDS,
-            ["record", "inspect", "verify", "finalize", "export", "package"]
+            BACKEND_COMMANDS,
+            [
+                "record",
+                "inspect",
+                "verify",
+                "finalize",
+                "export",
+                "package",
+                "sign-package",
+                "anchor-payload",
+                "anchor-git",
+                "verify-assurance",
+            ]
         );
     }
 }

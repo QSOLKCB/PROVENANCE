@@ -171,3 +171,13 @@ The Phase 11 test suite creates a package under one simulated machine directory,
 ~~~bash
 python3 -m unittest discover -s tests -p 'test_package.py' -v
 ~~~
+
+---
+
+## Phase 12 detached authenticity
+
+Signatures and external anchors do not become members of the Phase 11 package.
+
+They are detached sidecars that bind the finalized `package.json` / package identity without changing package closure or package identity.
+
+See [TRUST.md](TRUST.md).

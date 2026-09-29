@@ -5,7 +5,9 @@ on:
     paths:
       - "provenance_core/**"
       - "provenance_verify/**"
+      - "provenance_trust/**"
       - "docs/BUNDLE.md"
+      - "docs/TRUST.md"
       - "tests/test_verify.py"
       - ".github/workflows/verify.yml"
   push:
@@ -13,7 +15,9 @@ on:
     paths:
       - "provenance_core/**"
       - "provenance_verify/**"
+      - "provenance_trust/**"
       - "docs/BUNDLE.md"
+      - "docs/TRUST.md"
       - "tests/test_verify.py"
       - ".github/workflows/verify.yml"
   workflow_dispatch:
