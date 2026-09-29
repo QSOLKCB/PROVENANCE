@@ -22,7 +22,7 @@ from provenance_core import (
     require_sha256_identity,
 )
 from .custody import verify_custody_records
-from .verifier import verify_bundle
+from .verifier import verify_bundle, verify_bundle_fd
 
 
 FORENSIC_PACKAGE_SCHEMA = "provenance.forensic-package.v1"
@@ -303,35 +303,34 @@ def _physical_files(
     return files, directories, unsafe
 
 
-def _manifest_and_events(evidence_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    manifest_path = evidence_root / "manifest.json"
-    raw = manifest_path.read_bytes()
-    value = parse_canonical_json_bytes(raw)
-    if not isinstance(value, dict):
-        raise ValueError("evidence manifest must be an object")
-    core = value.get("core")
+def _manifest_and_events_fd(
+    evidence_fd: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    manifest = _canonical_object(evidence_fd, "manifest.json")
+    core = manifest.get("core")
     if not isinstance(core, dict):
         raise ValueError("evidence manifest core must be an object")
 
     events: list[dict[str, Any]] = []
-    for identity in core.get("events", []):
+    identities = core.get("events")
+    if not isinstance(identities, list):
+        raise ValueError("evidence manifest events must be a list")
+    for identity in identities:
         require_sha256_identity(identity, label="package event identity")
         digest = str(identity).split(":", 1)[1]
-        event_raw = (
-            evidence_root / "events" / "sha256" / f"{digest}.json"
-        ).read_bytes()
-        event = parse_canonical_json_bytes(event_raw)
-        if not isinstance(event, dict):
-            raise ValueError("package event must be an object")
+        event = _canonical_object(
+            evidence_fd,
+            f"events/sha256/{digest}.json",
+        )
         events.append(event)
-    return value, events
+    return manifest, events
 
 
-def derive_declared_gaps(
-    evidence_root: Path,
-    custody_records: list[bytes] | tuple[bytes, ...] = (),
+def _derive_declared_gaps(
+    manifest: dict[str, Any],
+    events: list[dict[str, Any]],
+    custody_records: list[bytes] | tuple[bytes, ...],
 ) -> dict[str, object]:
-    manifest, events = _manifest_and_events(evidence_root)
     core = manifest["core"]
     manifest_identity = manifest.get("manifest_identity")
     gaps: list[dict[str, object]] = []
@@ -427,6 +426,30 @@ def derive_declared_gaps(
 
     gaps.sort(key=canonical_json_bytes)
     return {"schema": PACKAGE_GAPS_SCHEMA, "gaps": gaps}
+
+
+def derive_declared_gaps_fd(
+    evidence_fd: int,
+    custody_records: list[bytes] | tuple[bytes, ...] = (),
+) -> dict[str, object]:
+    manifest, events = _manifest_and_events_fd(evidence_fd)
+    return _derive_declared_gaps(manifest, events, custody_records)
+
+
+def derive_declared_gaps(
+    evidence_root: Path,
+    custody_records: list[bytes] | tuple[bytes, ...] = (),
+) -> dict[str, object]:
+    try:
+        evidence_fd = os.open(evidence_root, _directory_flags())
+    except OSError as exc:
+        raise ValueError(
+            f"evidence root cannot be opened safely for gap derivation: {exc}"
+        ) from exc
+    try:
+        return derive_declared_gaps_fd(evidence_fd, custody_records)
+    finally:
+        os.close(evidence_fd)
 
 
 def _custody_records(
@@ -698,8 +721,11 @@ def verify_forensic_package(
         if member_ok:
             checks.append("all package member hashes and byte counts verified")
 
-        evidence_root = package / "evidence"
-        bundle_report = verify_bundle(evidence_root)
+        evidence_fd = _open_directory_at(root_fd, ("evidence",))
+        try:
+            bundle_report = verify_bundle_fd(evidence_fd)
+        finally:
+            os.close(evidence_fd)
         if not bundle_report.integrity_verified:
             errors.append(
                 "embedded evidence bundle failed verification: "
@@ -745,10 +771,14 @@ def verify_forensic_package(
         if bundle_report.integrity_verified:
             try:
                 gaps = _canonical_object(root_fd, "gaps.json")
-                expected_gaps = derive_declared_gaps(
-                    evidence_root,
-                    custody_raws,
-                )
+                evidence_fd = _open_directory_at(root_fd, ("evidence",))
+                try:
+                    expected_gaps = derive_declared_gaps_fd(
+                        evidence_fd,
+                        custody_raws,
+                    )
+                finally:
+                    os.close(evidence_fd)
                 if gaps != expected_gaps:
                     errors.append(
                         "gaps.json does not match recomputed evidence gaps"
