@@ -138,6 +138,62 @@ class LocalEvidenceStoreTests(unittest.TestCase):
             self.assertIn(store_module.fcntl.LOCK_EX, commands)
             self.assertIn(store_module.fcntl.LOCK_UN, commands)
 
+    def test_refresh_rejects_root_swap_after_bound_head_read(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "store"
+            moved_root = base / "store-original"
+            replacement_staging = base / "store-replacement"
+
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"refresh root binding")
+            store.put_event(
+                _event_for(
+                    artifact.content_identity,
+                    operation="refresh-root-binding",
+                )
+            )
+            snapshot = store.finalize()
+            original_identity = snapshot.manifest_identity
+
+            shutil.copytree(root, replacement_staging)
+            original_read = store._read_head_from_root_fd
+            swapped = False
+
+            def read_then_swap(root_fd: int) -> str | None:
+                nonlocal swapped
+                identity = original_read(root_fd)
+                if not swapped:
+                    swapped = True
+                    root.rename(moved_root)
+                    replacement_staging.rename(root)
+                return identity
+
+            with mock.patch.object(
+                store,
+                "_read_head_from_root_fd",
+                side_effect=read_then_swap,
+            ):
+                with self.assertRaisesRegex(
+                    StoreError,
+                    "root filesystem identity changed",
+                ):
+                    store.refresh_from_disk()
+
+            self.assertTrue(swapped)
+            self.assertEqual(
+                store.current_manifest_identity,
+                original_identity,
+            )
+            self.assertEqual(
+                LocalEvidenceStore(moved_root).current_manifest_identity,
+                original_identity,
+            )
+            self.assertEqual(
+                LocalEvidenceStore(root).current_manifest_identity,
+                original_identity,
+            )
+
     def test_same_process_instances_serialize_finalize(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "store"
