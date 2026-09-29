@@ -11,7 +11,7 @@ import shutil
 import stat
 import threading
 import uuid
-from typing import Iterator
+from typing import Iterable, Iterator
 
 from provenance_core import (
     ArtifactRecord,
@@ -161,6 +161,13 @@ class LocalEvidenceStore:
     @property
     def event_count(self) -> int:
         return len(self._events)
+
+    def current_artifact_entry(
+        self,
+        content_identity: str,
+    ) -> ManifestArtifact | None:
+        _digest(content_identity, label="artifact content identity")
+        return self._artifacts.get(content_identity)
 
     def _initialize(self) -> None:
         self._ensure_root_directory_durable()
@@ -639,6 +646,170 @@ class LocalEvidenceStore:
         self._artifacts[record.content_identity] = entry
         self._session_changed_artifacts.add(record.content_identity)
         return record
+
+    def _validated_artifact_for_restore(
+        self,
+        entry: ManifestArtifact,
+    ) -> ArtifactRecord:
+        if entry.retention is RetentionState.MISSING:
+            raise StoreError(
+                "unfinalized working membership cannot restore a MISSING artifact"
+            )
+        if entry.record_identity is None:
+            raise StoreError(
+                "unfinalized working artifact lacks record identity"
+            )
+
+        value = self._read_artifact_record_object(entry.record_identity)
+        try:
+            retention = RetentionState(value.get("retention"))
+            record = ArtifactRecord(
+                content_identity=value.get("content_identity"),
+                byte_count=value.get("byte_count"),
+                media_type=value.get("media_type"),
+                retention=retention,
+            )
+        except (TypeError, ValueError) as exc:
+            raise StoreError(
+                f"unfinalized artifact record cannot be reconstructed: {exc}"
+            ) from exc
+
+        if (
+            record.record_identity != entry.record_identity
+            or ManifestArtifact.from_record(record) != entry
+        ):
+            raise StoreError(
+                "unfinalized artifact membership does not match its record"
+            )
+
+        if entry.retention is RetentionState.CONTENT_RETAINED:
+            digest = _digest(
+                entry.content_identity,
+                label="artifact content identity",
+            )
+            with self._root_fd() as root_fd:
+                parent_fd = self._open_dir_chain(
+                    root_fd,
+                    _OBJECT_ARTIFACTS,
+                    create=False,
+                )
+                try:
+                    fd = self._open_regular_member(
+                        parent_fd,
+                        digest,
+                        label=f"artifact content {entry.content_identity}",
+                    )
+                    try:
+                        hasher = hashlib.sha256()
+                        byte_count = 0
+                        while True:
+                            chunk = os.read(fd, _CHUNK_SIZE)
+                            if not chunk:
+                                break
+                            byte_count += len(chunk)
+                            hasher.update(chunk)
+                    finally:
+                        os.close(fd)
+                finally:
+                    os.close(parent_fd)
+            observed_identity = f"sha256:{hasher.hexdigest()}"
+            if (
+                observed_identity != entry.content_identity
+                or byte_count != record.byte_count
+            ):
+                raise StoreError(
+                    "unfinalized retained artifact content does not match its record"
+                )
+
+        return record
+
+    def _validate_event_for_restore(self, identity: str) -> None:
+        digest = _digest(identity, label="event identity")
+        with self._root_fd() as root_fd:
+            parent_fd = self._open_dir_chain(
+                root_fd,
+                _OBJECT_EVENTS,
+                create=False,
+            )
+            try:
+                fd = self._open_regular_member(
+                    parent_fd,
+                    digest + ".json",
+                    label=f"event {identity}",
+                )
+                try:
+                    raw = _read_all(fd)
+                finally:
+                    os.close(fd)
+            finally:
+                os.close(parent_fd)
+
+        try:
+            value = parse_canonical_json_bytes(raw)
+        except (CanonicalizationError, RecursionError) as exc:
+            raise StoreError(
+                f"unfinalized event {identity} is not canonical: {exc}"
+            ) from exc
+        if not isinstance(value, dict) or set(value) != {
+            "core",
+            "event_identity",
+            "self_hash_exclusion",
+        }:
+            raise StoreError(
+                f"unfinalized event {identity} envelope is malformed"
+            )
+        core = value.get("core")
+        if (
+            not isinstance(core, dict)
+            or value.get("self_hash_exclusion") != "event_identity"
+            or value.get("event_identity") != identity
+            or event_identity(core) != identity
+        ):
+            raise StoreError(
+                f"unfinalized event {identity} does not match its identity"
+            )
+
+    def restore_unfinalized_membership(
+        self,
+        *,
+        artifacts: Iterable[ManifestArtifact],
+        events: Iterable[str],
+        expected_head: str | None,
+    ) -> None:
+        if self._read_head() != expected_head:
+            raise StoreError(
+                "store HEAD changed before unfinalized membership recovery"
+            )
+        if self._current_manifest_identity != expected_head:
+            raise StoreError(
+                "loaded store HEAD does not match recovery base"
+            )
+
+        validated_artifacts: list[
+            tuple[ManifestArtifact, ArtifactRecord]
+        ] = []
+        for entry in artifacts:
+            if not isinstance(entry, ManifestArtifact):
+                raise TypeError(
+                    "restored artifacts must contain ManifestArtifact values"
+                )
+            record = self._validated_artifact_for_restore(entry)
+            self._check_artifact_rebinding(entry, new_record=record)
+            validated_artifacts.append((entry, record))
+
+        validated_events: list[str] = []
+        for identity in events:
+            if not isinstance(identity, str):
+                raise TypeError("restored event identities must be strings")
+            self._validate_event_for_restore(identity)
+            validated_events.append(identity)
+
+        for entry, _record in validated_artifacts:
+            prior = self._artifacts.get(entry.content_identity)
+            self._artifacts[entry.content_identity] = entry
+            if prior != entry:
+                self._session_changed_artifacts.add(entry.content_identity)
+        self._events.update(validated_events)
 
     def _check_artifact_rebinding(
         self,
