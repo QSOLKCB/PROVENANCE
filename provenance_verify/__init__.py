@@ -10,6 +10,7 @@ from .verifier import (
     VerificationError,
     VerificationReport,
     verify_bundle,
+    verify_bundle_fd,
 )
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "VerificationError",
     "VerificationReport",
     "verify_bundle",
+    "verify_bundle_fd",
     "verify_custody_records",
     "FORENSIC_PACKAGE_REPORT_SCHEMA",
     "FORENSIC_PACKAGE_SCHEMA",
