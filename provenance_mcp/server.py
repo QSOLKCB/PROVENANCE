@@ -547,7 +547,6 @@ class ProvenanceMCPServer:
 
     def __init__(self, store_root: Path | str, custody_root: Path | str):
         self.store = LocalEvidenceStore(store_root)
-        self.custody = LocalCustodyLedger(custody_root)
         self._era: str | None = None
         self._legacy_initialized = False
         self._pending_artifacts: set[str] = set()
@@ -556,6 +555,7 @@ class ProvenanceMCPServer:
             self.store.current_manifest_identity
         )
         with self._working_state_lock():
+            self.custody = LocalCustodyLedger(custody_root)
             self._synchronize_working_state_locked()
 
     def _working_state_path(self) -> Path:
