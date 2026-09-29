@@ -100,11 +100,11 @@ SUBSTANTIALLY COMPLETE
 - `README.md`
 - `README4AIs.md`
 - `AGENTS.md`
-- `INVARIANTS.md`
-- `ARCHITECTURE.md`
-- `DONORS.md`
-- `LINEAGE.md`
-- `ROADMAP.md`
+- `docs/INVARIANTS.md`
+- `docs/ARCHITECTURE.md`
+- `docs/DONORS.md`
+- `docs/LINEAGE.md`
+- `docs/ROADMAP.md`
 
 ## Exit Gate
 
