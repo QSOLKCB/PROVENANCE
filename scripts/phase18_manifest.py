@@ -7,10 +7,8 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
-import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET_PATH = ROOT / "formal" / "TARGET.json"
 
 EXPECTED_TAG = "v1.0.0"
 EXPECTED_COMMIT = "0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742"
@@ -18,6 +16,7 @@ EXPECTED_DOI = "10.5281/zenodo.23043860"
 EXPECTED_TOOLCHAIN = "leanprover/lean4:v4.34.1"
 
 ARCHIVE_FILES = (
+    "formal/.gitignore",
     "formal/TARGET.json",
     "formal/lean-toolchain",
     "formal/lakefile.toml",
@@ -25,6 +24,7 @@ ARCHIVE_FILES = (
     "docs/FORMAL_VERIFICATION.md",
     "docs/ARCHIVAL_RELEASE.md",
     "CITATION.cff",
+    "scripts/phase18_attestation.py",
     "scripts/phase18_manifest.py",
     ".github/workflows/formal.yml",
 )
@@ -43,19 +43,9 @@ def _canonical_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def _load_json(path: Path) -> object:
-    raw = path.read_bytes()
-    value = json.loads(raw.decode("utf-8"))
-    if raw != _canonical_json(value):
-        raise SystemExit(f"{path.relative_to(ROOT)} must be canonical JSON")
-    return value
-
-
-def _git(*args: str) -> str:
+def _git_bytes(*args: str) -> bytes:
     completed = subprocess.run(
         ["git", "-C", str(ROOT), *args],
-        text=True,
-        encoding="utf-8",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
@@ -65,12 +55,24 @@ def _git(*args: str) -> str:
             "git command failed: "
             + " ".join(args)
             + "\n"
-            + completed.stderr.strip()
+            + completed.stderr.decode("utf-8", errors="replace").strip()
         )
-    return completed.stdout.strip()
+    return completed.stdout
 
 
-def _sha256(path: Path) -> str:
+def _git_text(*args: str) -> str:
+    return _git_bytes(*args).decode("utf-8").strip()
+
+
+def _blob_bytes(commit: str, relative: str) -> bytes:
+    return _git_bytes("show", f"{commit}:{relative}")
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         while True:
@@ -79,6 +81,13 @@ def _sha256(path: Path) -> str:
                 break
             digest.update(chunk)
     return "sha256:" + digest.hexdigest()
+
+
+def _load_canonical_json_bytes(raw: bytes, *, label: str) -> object:
+    value = json.loads(raw.decode("utf-8"))
+    if raw != _canonical_json(value):
+        raise SystemExit(f"{label} must be canonical JSON")
+    return value
 
 
 def _validate_target(target: object) -> dict[str, object]:
@@ -111,28 +120,30 @@ def _validate_target(target: object) -> dict[str, object]:
 
 
 def _validate_frozen_ref() -> None:
-    actual = _git("rev-parse", f"{EXPECTED_TAG}^{{commit}}")
+    actual = _git_text("rev-parse", f"{EXPECTED_TAG}^{{commit}}")
     if actual != EXPECTED_COMMIT:
         raise SystemExit(
             f"{EXPECTED_TAG} resolves to {actual}, expected {EXPECTED_COMMIT}"
         )
-    _git("cat-file", "-e", f"{EXPECTED_COMMIT}^{{commit}}")
+    _git_text("cat-file", "-e", f"{EXPECTED_COMMIT}^{{commit}}")
 
 
-def _validate_toolchain() -> None:
-    value = (ROOT / "formal" / "lean-toolchain").read_text(
-        encoding="utf-8"
-    ).strip()
+def _validate_toolchain(proof_commit: str) -> None:
+    value = _blob_bytes(
+        proof_commit,
+        "formal/lean-toolchain",
+    ).decode("utf-8").strip()
     if value != EXPECTED_TOOLCHAIN:
         raise SystemExit(
             f"formal/lean-toolchain is {value!r}, expected {EXPECTED_TOOLCHAIN!r}"
         )
 
 
-def _reject_placeholders() -> None:
-    proof = (ROOT / "formal" / "ProvenanceFormal.lean").read_text(
-        encoding="utf-8"
-    )
+def _reject_placeholders(proof_commit: str) -> None:
+    proof = _blob_bytes(
+        proof_commit,
+        "formal/ProvenanceFormal.lean",
+    ).decode("utf-8")
     for token in ("sorry", "admit", "axiom "):
         if token in proof:
             raise SystemExit(
@@ -140,24 +151,78 @@ def _reject_placeholders() -> None:
             )
 
 
-def build_manifest() -> dict[str, object]:
-    target = _validate_target(_load_json(TARGET_PATH))
-    _validate_frozen_ref()
-    _validate_toolchain()
-    _reject_placeholders()
+def _validate_attestation(
+    path: Path,
+    *,
+    proof_commit: str,
+) -> dict[str, object]:
+    raw = path.read_bytes()
+    value = _load_canonical_json_bytes(
+        raw,
+        label=path.name,
+    )
+    if not isinstance(value, dict):
+        raise SystemExit("verification attestation must contain an object")
+    if value.get("schema") != "provenance.phase18-verification-attestation.v1":
+        raise SystemExit("verification attestation schema changed")
+    if value.get("status") != "PASSED":
+        raise SystemExit("verification attestation did not report PASSED")
+    if value.get("proof_commit") != proof_commit:
+        raise SystemExit("verification attestation proof commit changed")
+    if value.get("frozen_tag") != EXPECTED_TAG:
+        raise SystemExit("verification attestation frozen tag changed")
+    if value.get("frozen_commit") != EXPECTED_COMMIT:
+        raise SystemExit("verification attestation frozen commit changed")
+    if value.get("doi") != EXPECTED_DOI:
+        raise SystemExit("verification attestation DOI changed")
+    return value
 
-    proof_commit = _git("rev-parse", "HEAD")
+
+def build_manifest(
+    verification_evidence: tuple[Path, ...],
+) -> dict[str, object]:
+    proof_commit = _git_text("rev-parse", "HEAD")
+    target = _validate_target(
+        _load_canonical_json_bytes(
+            _blob_bytes(proof_commit, "formal/TARGET.json"),
+            label="formal/TARGET.json at proof_commit",
+        )
+    )
+    _validate_frozen_ref()
+    _validate_toolchain(proof_commit)
+    _reject_placeholders(proof_commit)
+
     files: list[dict[str, object]] = []
     for relative in ARCHIVE_FILES:
-        path = ROOT / relative
-        if not path.is_file():
-            raise SystemExit(f"required Phase 18 archive file is missing: {relative}")
+        raw = _blob_bytes(proof_commit, relative)
         files.append(
             {
-                "byte_count": path.stat().st_size,
+                "byte_count": len(raw),
                 "path": relative,
-                "sha256": _sha256(path),
+                "sha256": _sha256_bytes(raw),
             }
+        )
+
+    evidence: list[dict[str, object]] = []
+    attestation_seen = False
+    for path in verification_evidence:
+        if not path.is_file():
+            raise SystemExit(
+                f"verification evidence file is missing: {path}"
+            )
+        if path.name == "verification-attestation.json":
+            _validate_attestation(path, proof_commit=proof_commit)
+            attestation_seen = True
+        evidence.append(
+            {
+                "byte_count": path.stat().st_size,
+                "name": path.name,
+                "sha256": _sha256_file(path),
+            }
+        )
+    if not attestation_seen:
+        raise SystemExit(
+            "verification-attestation.json is required as executed proof evidence"
         )
 
     return {
@@ -174,16 +239,25 @@ def build_manifest() -> dict[str, object]:
             "leanchecker": True,
             "placeholder_scan": True,
         },
+        "verification_evidence": evidence,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--verification-evidence",
+        action="append",
+        default=[],
+        help="Executed verification evidence file to bind into the manifest.",
+    )
     args = parser.parse_args()
 
     output = Path(args.output)
-    manifest = build_manifest()
+    manifest = build_manifest(
+        tuple(Path(item) for item in args.verification_evidence)
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(_canonical_json(manifest))
     print(output)
