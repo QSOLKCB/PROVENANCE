@@ -277,7 +277,6 @@ class GenericHTTPAdapter:
                         label=(
                             "response_prefix"
                             if read_failure is not None
-                            and read_failure.category == "response_too_large"
                             else "response_body"
                         ),
                         data=response_body,
