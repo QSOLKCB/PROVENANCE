@@ -120,6 +120,19 @@ class _ObservationReservationLease:
             )
 
 
+def _reservation_call(
+    reservation: _ObservationReservationLease,
+    operation,
+    /,
+    *args,
+    **kwargs,
+):
+    reservation.require_current_process()
+    result = operation(*args, **kwargs)
+    reservation.require_current_process()
+    return result
+
+
 def _json_bytes(value: object) -> bytes:
     return json.dumps(
         value,
@@ -534,9 +547,12 @@ class OllamaAdapter:
         custody: LocalCustodyLedger,
         snapshot: StoredSnapshot,
         subjects: tuple[str, ...],
+        reservation: _ObservationReservationLease,
     ) -> None:
         for subject in (*subjects, snapshot.manifest_identity):
-            custody.append(
+            _reservation_call(
+                reservation,
+                custody.append,
                 subject,
                 CustodyAction.VERIFIED,
                 actor="provenance-verify",
@@ -548,7 +564,10 @@ class OllamaAdapter:
                 ),
             )
 
-        report = custody.verify()
+        report = _reservation_call(
+            reservation,
+            custody.verify,
+        )
         if not report.integrity_verified:
             raise OllamaAdapterError(
                 "Ollama observation custody chain failed verification: "
@@ -570,7 +589,9 @@ class OllamaAdapter:
         reservation: _ObservationReservationLease,
     ) -> None:
         reservation.require_current_process()
-        failure_detail = store.put_artifact(
+        failure_detail = _reservation_call(
+            reservation,
+            store.put_artifact,
             _failure_detail_bytes(
                 category=failure_category,
                 status=failure_status,
@@ -579,7 +600,9 @@ class OllamaAdapter:
             media_type="application/octet-stream",
             retain_content=True,
         )
-        custody.append(
+        _reservation_call(
+            reservation,
+            custody.append,
             failure_detail.content_identity,
             CustodyAction.STORED,
             actor="provenance-store:local",
@@ -607,18 +630,24 @@ class OllamaAdapter:
                 collection_status=CollectionStatus.COLLECTION_FAILED,
             )
         )
-        reservation.require_current_process()
-        store.put_event(failure_event)
+        _reservation_call(
+            reservation,
+            store.put_event,
+            failure_event,
+        )
 
         try:
-            reservation.require_current_process()
-            snapshot = store.finalize(scope="closed")
-            reservation.require_current_process()
+            snapshot = _reservation_call(
+                reservation,
+                store.finalize,
+                scope="closed",
+            )
             subjects = (request_record.content_identity,) + outputs
             self._append_verified_custody(
                 custody=custody,
                 snapshot=snapshot,
                 subjects=subjects,
+                reservation=reservation,
             )
             reservation.require_current_process()
         except Exception as evidence_error:
@@ -692,19 +721,25 @@ class OllamaAdapter:
         request_bytes = _json_bytes(payload)
 
         request_clock: ClockObservation = observe_clock()
-        request_record = store.put_artifact(
+        request_record = _reservation_call(
+            reservation,
+            store.put_artifact,
             request_bytes,
             media_type="application/octet-stream",
             retain_content=True,
         )
-        custody.append(
+        _reservation_call(
+            reservation,
+            custody.append,
             request_record.content_identity,
             CustodyAction.CAPTURED,
             actor=ADAPTER_ID,
             source="adapter-prepared:/api/generate request body",
             clock=request_clock,
         )
-        custody.append(
+        _reservation_call(
+            reservation,
+            custody.append,
             request_record.content_identity,
             CustodyAction.STORED,
             actor="provenance-store:local",
@@ -719,7 +754,11 @@ class OllamaAdapter:
                 outputs=(request_record.content_identity,),
             )
         )
-        store.put_event(request_event)
+        _reservation_call(
+            reservation,
+            store.put_event,
+            request_event,
+        )
 
         reservation.require_current_process()
         try:
@@ -728,18 +767,24 @@ class OllamaAdapter:
             reservation.require_current_process()
             response_record: ArtifactRecord | None = None
             if exc.response_bytes is not None:
-                response_record = store.put_artifact(
+                response_record = _reservation_call(
+                    reservation,
+                    store.put_artifact,
                     exc.response_bytes,
                     media_type="application/octet-stream",
                     retain_content=True,
                 )
-                custody.append(
+                _reservation_call(
+                    reservation,
+                    custody.append,
                     response_record.content_identity,
                     CustodyAction.CAPTURED,
                     actor=ADAPTER_ID,
                     source="ollama:/api/generate error response bytes",
                 )
-                custody.append(
+                _reservation_call(
+                    reservation,
+                    custody.append,
                     response_record.content_identity,
                     CustodyAction.STORED,
                     actor="provenance-store:local",
@@ -763,19 +808,25 @@ class OllamaAdapter:
         response_clock: ClockObservation = observe_clock()
 
         # Retain exactly what was observed before parsing or deriving claims.
-        response_record = store.put_artifact(
+        response_record = _reservation_call(
+            reservation,
+            store.put_artifact,
             response_bytes,
             media_type="application/octet-stream",
             retain_content=True,
         )
-        custody.append(
+        _reservation_call(
+            reservation,
+            custody.append,
             response_record.content_identity,
             CustodyAction.CAPTURED,
             actor=ADAPTER_ID,
             source="ollama:/api/generate response bytes",
             clock=response_clock,
         )
-        custody.append(
+        _reservation_call(
+            reservation,
+            custody.append,
             response_record.content_identity,
             CustodyAction.STORED,
             actor="provenance-store:local",
@@ -820,7 +871,11 @@ class OllamaAdapter:
                 ),
             )
         )
-        store.put_event(response_event)
+        _reservation_call(
+            reservation,
+            store.put_event,
+            response_event,
+        )
 
         declaration_event = EventEnvelope.seal(
             EventCore(
@@ -836,12 +891,17 @@ class OllamaAdapter:
                 ),
             )
         )
-        reservation.require_current_process()
-        store.put_event(declaration_event)
+        _reservation_call(
+            reservation,
+            store.put_event,
+            declaration_event,
+        )
 
-        reservation.require_current_process()
-        snapshot = store.finalize(scope="closed")
-        reservation.require_current_process()
+        snapshot = _reservation_call(
+            reservation,
+            store.finalize,
+            scope="closed",
+        )
         if not snapshot.verification.integrity_verified:
             raise OllamaAdapterError(
                 "Ollama observation snapshot failed independent verification"
@@ -855,6 +915,7 @@ class OllamaAdapter:
                 request_record.content_identity,
                 response_record.content_identity,
             ),
+            reservation=reservation,
         )
 
         reservation.require_current_process()
