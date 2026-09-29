@@ -1,0 +1,40 @@
+name: UI
+
+on:
+  push:
+    paths:
+      - "provenance_ui/**"
+      - "provenance_core/**"
+      - "provenance_store/**"
+      - "provenance_custody/**"
+      - "provenance_verify/**"
+      - "tests/test_ui.py"
+      - "UI.md"
+      - "ROADMAP.md"
+      - ".github/workflows/ui.yml"
+  pull_request:
+    paths:
+      - "provenance_ui/**"
+      - "provenance_core/**"
+      - "provenance_store/**"
+      - "provenance_custody/**"
+      - "provenance_verify/**"
+      - "tests/test_ui.py"
+      - "UI.md"
+      - "ROADMAP.md"
+      - ".github/workflows/ui.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Phase 9 read-only UI tests
+        run: python -m unittest discover -s tests -p 'test_ui.py' -v
