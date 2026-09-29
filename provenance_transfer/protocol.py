@@ -78,6 +78,14 @@ def _write_all(fd: int, data: bytes) -> None:
         offset += written
 
 
+def _paths_overlap(left: Path, right: Path) -> bool:
+    return (
+        left == right
+        or left in right.parents
+        or right in left.parents
+    )
+
+
 def _path_identity(path: Path) -> tuple[int, int]:
     fd = os.open(path, _directory_flags())
     try:
@@ -547,33 +555,38 @@ def receive_transfer(
 
     package_dest = Path(package_destination).expanduser()
     receipt_dest = Path(receipt_destination).expanduser()
+    custody_dest = Path(receiver_custody_root).expanduser()
     transfer_resolved = transfer_path.resolve(strict=True)
 
     package_parent = package_dest.parent.resolve(strict=True)
     receipt_parent = receipt_dest.parent.resolve(strict=True)
-    if (
-        package_parent == transfer_resolved
-        or transfer_resolved in package_parent.parents
+    custody_parent = custody_dest.parent.resolve(strict=True)
+    package_candidate = package_parent / package_dest.name
+    receipt_candidate = receipt_parent / receipt_dest.name
+    custody_candidate = custody_parent / custody_dest.name
+
+    for label, candidate in (
+        ("received package", package_candidate),
+        ("receipt", receipt_candidate),
+        ("receiver custody", custody_candidate),
     ):
-        raise TransferError(
-            "received package destination must be outside the transfer bundle"
-        )
-    if (
-        receipt_parent == transfer_resolved
-        or transfer_resolved in receipt_parent.parents
-    ):
-        raise TransferError(
-            "receipt destination must be outside the transfer bundle"
-        )
-    if package_dest.exists() and package_dest.is_dir():
-        package_resolved = package_dest.resolve(strict=True)
-        if (
-            receipt_parent == package_resolved
-            or package_resolved in receipt_parent.parents
-        ):
+        if _paths_overlap(candidate, transfer_resolved):
             raise TransferError(
-                "receipt destination must be outside the received package"
+                f"{label} destination must be outside the transfer bundle"
             )
+
+    if _paths_overlap(package_candidate, receipt_candidate):
+        raise TransferError(
+            "received package and receipt destinations must be disjoint"
+        )
+    if _paths_overlap(package_candidate, custody_candidate):
+        raise TransferError(
+            "received package and receiver custody destinations must be disjoint"
+        )
+    if _paths_overlap(receipt_candidate, custody_candidate):
+        raise TransferError(
+            "receipt and receiver custody destinations must be disjoint"
+        )
 
     if receipt_dest.exists() or receipt_dest.is_symlink():
         existing = verify_transfer_receipt(
