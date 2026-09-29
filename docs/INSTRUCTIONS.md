@@ -1,6 +1,6 @@
 # Usage Instructions
 
-This guide covers the current PROVENANCE reference implementation through **Phase 16**.
+This guide covers the current PROVENANCE reference implementation through **Phase 16**. The immutable implementation baseline is **`v1.0.0`**, fixed at **`0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742`**.
 
 Deep semantics remain in the subsystem specifications. This document focuses on operating the implemented interfaces without weakening the evidence contract.
 
@@ -543,28 +543,25 @@ Do not substitute a collection of green focused workflows for the final `release
 
 ---
 
-# Phase 17: tagging the immutable candidate
+# Phase 17: immutable implementation baseline
 
-The next roadmap step is the candidate freeze.
+The immutable implementation baseline has been established as:
 
-For the exact commit you intend to tag:
-
-1. merge all intended implementation and documentation changes;
-2. update local `main` and record the exact SHA;
-3. run or confirm the `full` workflow against that exact SHA;
-4. require `release-suite`, both real Ollama jobs, and `release-gate` to succeed;
-5. record the workflow run and commit SHA;
-6. create the tag on that exact SHA.
-
-Local SHA check:
-
-```bash
-git checkout main
-git pull --ff-only
-git rev-parse HEAD
+```text
+tag:    v1.0.0
+commit: 0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
 ```
 
-If the tag is being used as the Phase 17 freeze target, the following become frozen:
+The published GitHub release is immutable and the tag points directly to that commit.
+
+For all later formal-verification and archival claims, cite both:
+
+```text
+v1.0.0
+0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
+```
+
+The frozen baseline covers:
 
 ```text
 implementation
@@ -573,9 +570,33 @@ verifier semantics
 evidence-contract semantics
 ```
 
-A defect requiring implementation change invalidates that freeze target. Return to Phase 16, fix it, run the release lane again, and create a new candidate tag.
+Later changes on `main` may add or refine:
 
-Phase 17 itself does not prove correctness. It identifies the immutable implementation that Phase 18 formalization will target.
+```text
+documentation
+formal proof sources
+archival metadata
+release-support material
+```
+
+provided they do not retroactively redefine the implementation represented by `v1.0.0`.
+
+To verify the tag locally:
+
+```bash
+git fetch --tags
+git rev-list -n 1 v1.0.0
+```
+
+Expected result:
+
+```text
+0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
+```
+
+If a future defect requires changing implementation, schema semantics, verifier semantics, or evidence-contract semantics, do not reinterpret the frozen tag. Return to the release-candidate process and establish a new candidate baseline.
+
+Phase 18 formalization and archival work must target this exact frozen implementation unless a new candidate is explicitly declared.
 
 ---
 
