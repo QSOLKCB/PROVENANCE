@@ -60,6 +60,50 @@ class _FakeOllamaHandler(BaseHTTPRequestHandler):
         return
 
 
+def _fork_held_process_lock_worker(result_queue) -> None:
+    key = (987654321, 123456789)
+    try:
+        lock = ollama_module._process_observation_lock(key)
+        if not lock.acquire(timeout=1):
+            result_queue.put(("error", "parent process lock acquisition failed"))
+            return
+
+        read_fd, write_fd = os.pipe()
+        pid = os.fork()
+        if pid == 0:
+            os.close(read_fd)
+            signal.alarm(3)
+            exit_code = 1
+            try:
+                child_lock = ollama_module._process_observation_lock(key)
+                acquired = child_lock.acquire(timeout=1)
+                if acquired:
+                    child_lock.release()
+                os.write(write_fd, b"1" if acquired else b"0")
+                exit_code = 0 if acquired else 2
+            finally:
+                signal.alarm(0)
+                os.close(write_fd)
+                os._exit(exit_code)
+
+        os.close(write_fd)
+        lock.release()
+        try:
+            child_result = os.read(read_fd, 16)
+        finally:
+            os.close(read_fd)
+        _, child_status = os.waitpid(pid, 0)
+        result_queue.put(
+            (
+                "ok",
+                child_result.decode("ascii", "replace"),
+                child_status,
+            )
+        )
+    except BaseException as exc:
+        result_queue.put(("error", f"{type(exc).__name__}: {exc}"))
+
+
 def _multiprocess_observe_worker(
     store_root: str,
     custody_root: str,
@@ -509,6 +553,31 @@ class OllamaAdapterTests(unittest.TestCase):
                 failure_status=200,
             )
             self.assertEqual(store.artifact_count, 2)
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
+    def test_forking_thread_can_hold_process_observation_lock(self) -> None:
+        ctx = multiprocessing.get_context("spawn")
+        result_queue = ctx.Queue()
+        worker = ctx.Process(
+            target=_fork_held_process_lock_worker,
+            args=(result_queue,),
+        )
+        worker.start()
+        worker.join(timeout=8)
+
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(timeout=5)
+            self.fail(
+                "forking thread deadlocked while holding observation mutex"
+            )
+
+        self.assertEqual(worker.exitcode, 0)
+        result = result_queue.get(timeout=3)
+        self.assertEqual(result[0], "ok", result)
+        self.assertEqual(result[1], "1", result)
+        self.assertTrue(os.WIFEXITED(result[2]), result)
+        self.assertEqual(os.WEXITSTATUS(result[2]), 0, result)
 
     @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
     def test_fork_during_observation_reservation_resets_child_mutexes(self) -> None:
