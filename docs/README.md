@@ -25,6 +25,8 @@ The repository root is intentionally small. Detailed contracts, subsystem notes,
 | [PRIVACY.md](PRIVACY.md) | Phase 14 redaction, retention boundaries, and selective disclosure |
 | [TRANSFER.md](TRANSFER.md) | Phase 15 signed offline distributed-custody handoff |
 | [RELEASE.md](RELEASE.md) | Phase 16 release-grade trust lane and freeze boundary |
+| [FORMAL_VERIFICATION.md](FORMAL_VERIFICATION.md) | Phase 18 Lean proof scope, runtime bridge, and proof boundary |
+| [ARCHIVAL_RELEASE.md](ARCHIVAL_RELEASE.md) | Phase 18 DOI/archive contents and publication protocol |
 
 ## Interfaces and integrations
 
