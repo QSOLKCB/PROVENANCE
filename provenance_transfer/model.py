@@ -1,0 +1,158 @@
+"""Phase 15 distributed-custody transfer records and identities."""
+from __future__ import annotations
+
+import hashlib
+from typing import Any
+
+from provenance_core import (
+    CANONICALIZATION_ID,
+    ClockAssurance,
+    canonical_json_bytes,
+    require_sha256_identity,
+)
+from provenance_custody import ClockObservation
+
+
+TRANSFER_PROTOCOL = "provenance.transfer.v1"
+TRANSFER_OFFER_SCHEMA = "provenance.transfer-offer.v1"
+TRANSFER_RECEIPT_SCHEMA = "provenance.transfer-receipt.v1"
+TRANSFER_BUNDLE_SCHEMA = "provenance.transfer-bundle.v1"
+TRANSFER_SIGNATURE_SCHEMA = "provenance.transfer-signature.v1"
+
+OFFER_DOMAIN = b"PROVENANCE/TRANSFER-OFFER/v1\0"
+RECEIPT_DOMAIN = b"PROVENANCE/TRANSFER-RECEIPT/v1\0"
+BUNDLE_DOMAIN = b"PROVENANCE/TRANSFER-BUNDLE/v1\0"
+SIGNATURE_DOMAIN = b"PROVENANCE/TRANSFER-SIGNATURE/v1\0"
+SIGNATURE_NAMESPACE = "provenance-transfer"
+
+
+def _identity(domain: bytes, core: object) -> str:
+    digest = hashlib.sha256(domain + canonical_json_bytes(core)).hexdigest()
+    return f"sha256:{digest}"
+
+
+def offer_identity(core: object) -> str:
+    return _identity(OFFER_DOMAIN, core)
+
+
+def receipt_identity(core: object) -> str:
+    return _identity(RECEIPT_DOMAIN, core)
+
+
+def transfer_bundle_identity(core: object) -> str:
+    return _identity(BUNDLE_DOMAIN, core)
+
+
+def transfer_signature_identity(core: object) -> str:
+    return _identity(SIGNATURE_DOMAIN, core)
+
+
+def clock_dict(clock: ClockObservation) -> dict[str, str]:
+    if not isinstance(clock, ClockObservation):
+        raise TypeError("clock must be a ClockObservation")
+    return {
+        "recorded_at": clock.recorded_at,
+        "clock_source": clock.clock_source,
+        "clock_assurance": clock.clock_assurance.value,
+    }
+
+
+def parse_clock(value: object) -> ClockObservation:
+    if not isinstance(value, dict) or set(value) != {
+        "recorded_at",
+        "clock_source",
+        "clock_assurance",
+    }:
+        raise ValueError("transfer clock object keys changed")
+    try:
+        assurance = ClockAssurance(value["clock_assurance"])
+    except Exception as exc:
+        raise ValueError("transfer clock assurance is invalid") from exc
+    return ClockObservation(
+        recorded_at=value["recorded_at"],
+        clock_source=value["clock_source"],
+        clock_assurance=assurance,
+    )
+
+
+def _system(value: object, *, label: str) -> str:
+    if not isinstance(value, str) or not value or value.strip() != value:
+        raise ValueError(f"{label} must be non-empty canonical text")
+    if any(ch in value for ch in "\r\n\x00"):
+        raise ValueError(f"{label} contains forbidden control characters")
+    return value
+
+
+def offer_core(
+    *,
+    package_identity: str,
+    evidence_manifest_identity: str,
+    source_system: str,
+    destination_system: str,
+    offered_at: ClockObservation,
+) -> dict[str, Any]:
+    require_sha256_identity(package_identity, label="transfer package identity")
+    require_sha256_identity(
+        evidence_manifest_identity,
+        label="transfer evidence manifest identity",
+    )
+    source = _system(source_system, label="source_system")
+    destination = _system(destination_system, label="destination_system")
+    if source == destination:
+        raise ValueError("source_system and destination_system must differ")
+    return {
+        "schema": TRANSFER_OFFER_SCHEMA,
+        "canonicalization": CANONICALIZATION_ID,
+        "protocol": TRANSFER_PROTOCOL,
+        "subject_kind": "forensic_package",
+        "subject_identity": package_identity,
+        "evidence_manifest_identity": evidence_manifest_identity,
+        "source_system": source,
+        "destination_system": destination,
+        "offered_at": clock_dict(offered_at),
+    }
+
+
+def receipt_core(
+    *,
+    transfer_bundle_identity_value: str,
+    offer_identity_value: str,
+    package_identity: str,
+    source_system: str,
+    destination_system: str,
+    accepted_at: ClockObservation,
+    receiver_custody_identities: list[str] | tuple[str, ...],
+) -> dict[str, Any]:
+    require_sha256_identity(
+        transfer_bundle_identity_value,
+        label="transfer bundle identity",
+    )
+    require_sha256_identity(offer_identity_value, label="offer identity")
+    require_sha256_identity(package_identity, label="package identity")
+    source = _system(source_system, label="source_system")
+    destination = _system(destination_system, label="destination_system")
+    identities = tuple(receiver_custody_identities)
+    if not identities:
+        raise ValueError("receipt requires receiver custody acknowledgements")
+    for index, value in enumerate(identities):
+        require_sha256_identity(
+            value,
+            label=f"receiver custody identity[{index}]",
+        )
+    if len(set(identities)) != len(identities):
+        raise ValueError("receiver custody identities must be unique")
+    return {
+        "schema": TRANSFER_RECEIPT_SCHEMA,
+        "canonicalization": CANONICALIZATION_ID,
+        "protocol": TRANSFER_PROTOCOL,
+        "transfer_bundle_identity": transfer_bundle_identity_value,
+        "offer_identity": offer_identity_value,
+        "subject_kind": "forensic_package",
+        "subject_identity": package_identity,
+        "source_system": source,
+        "destination_system": destination,
+        "receipt_status": "ACCEPTED",
+        "accepted_at": clock_dict(accepted_at),
+        "receiver_custody_identities": list(identities),
+        "ordering": "PARTIAL",
+    }
