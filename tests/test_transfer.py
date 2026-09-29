@@ -141,7 +141,7 @@ class DistributedCustodyTests(unittest.TestCase):
             self.assertEqual(bundle_report.ordering, "PARTIAL")
             self.assertEqual(bundle_report.sender_signature, "VERIFIED")
             self.assertEqual(
-                bundle_report.source_package_custody,
+                bundle_report.source_package_verification,
                 "VERIFIED",
             )
 
