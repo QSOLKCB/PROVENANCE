@@ -7,9 +7,11 @@ on:
       - "provenance_verify/**"
       - "provenance_trust/**"
       - "provenance_privacy/**"
+      - "provenance_transfer/**"
       - "docs/BUNDLE.md"
       - "docs/TRUST.md"
       - "docs/PRIVACY.md"
+      - "docs/TRANSFER.md"
       - "tests/test_verify.py"
       - ".github/workflows/verify.yml"
   push:
