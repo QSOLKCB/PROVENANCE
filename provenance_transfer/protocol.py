@@ -618,7 +618,20 @@ def receive_transfer(
             f"transfer bundle cannot be opened safely: {exc}"
         ) from exc
 
+    embedded_package_fd: int | None = None
+    received_package_fd: int | None = None
     try:
+        try:
+            embedded_package_fd = os.open(
+                "package",
+                _directory_flags(),
+                dir_fd=transfer_fd,
+            )
+        except OSError as exc:
+            raise TransferError(
+                f"embedded transfer package cannot be opened safely: {exc}"
+            ) from exc
+
         transfer_report = verify_transfer_bundle_fd(
             transfer_fd,
             expected_sender_fingerprint=expected_sender_fingerprint,
@@ -640,6 +653,16 @@ def receive_transfer(
         assert transfer_report.offer_identity is not None
         assert transfer_report.package_identity is not None
         assert transfer_report.source_system is not None
+
+        embedded_report = verify_forensic_package_fd(embedded_package_fd)
+        if (
+            not embedded_report.integrity_verified
+            or embedded_report.package_identity
+            != transfer_report.package_identity
+        ):
+            raise TransferError(
+                "verified embedded package descriptor does not match transfer subject"
+            )
 
         package_dest = Path(package_destination).expanduser()
         receipt_dest = Path(receipt_destination).expanduser()
@@ -683,6 +706,7 @@ def receive_transfer(
                 received_package=package_dest,
                 expected_sender_fingerprint=expected_sender_fingerprint,
                 _transfer_fd=transfer_fd,
+                _received_package_fd=received_package_fd,
             )
             if not existing.integrity_verified:
                 raise TransferError(
@@ -733,48 +757,42 @@ def receive_transfer(
                 duplicate_delivery=True,
             )
 
+        def _pin_existing_received_package() -> int:
+            try:
+                package_fd = os.open(package_dest, _directory_flags())
+            except OSError as exc:
+                raise TransferError(
+                    f"received package cannot be opened safely: {exc}"
+                ) from exc
+            try:
+                existing_package = verify_forensic_package_fd(package_fd)
+                if (
+                    not existing_package.integrity_verified
+                    or existing_package.package_identity
+                    != transfer_report.package_identity
+                ):
+                    raise TransferError(
+                        "existing received package destination conflicts with transfer"
+                    )
+                return package_fd
+            except Exception:
+                os.close(package_fd)
+                raise
+
         if receipt_dest.exists() or receipt_dest.is_symlink():
+            received_package_fd = _pin_existing_received_package()
             return _verified_duplicate_receipt()
 
         embedded_package = transfer_path / "package"
         if package_dest.exists() or package_dest.is_symlink():
-            existing_package = verify_forensic_package(package_dest)
-            if (
-                not existing_package.integrity_verified
-                or existing_package.package_identity
-                != transfer_report.package_identity
-            ):
-                raise TransferError(
-                    "existing received package destination conflicts with transfer"
-                )
+            received_package_fd = _pin_existing_received_package()
         else:
-            try:
-                embedded_package_fd = os.open(
-                    "package",
-                    _directory_flags(),
-                    dir_fd=transfer_fd,
-                )
-            except OSError as exc:
-                raise TransferError(
-                    f"embedded transfer package cannot be opened safely: {exc}"
-                ) from exc
-            try:
-                copied, _identity = _copy_package_directory(
-                    embedded_package,
-                    package_dest,
-                    source_package_fd=embedded_package_fd,
-                )
-            finally:
-                os.close(embedded_package_fd)
-            copied_report = verify_forensic_package(copied)
-            if (
-                not copied_report.integrity_verified
-                or copied_report.package_identity
-                != transfer_report.package_identity
-            ):
-                raise TransferError(
-                    "received package copy does not match transfer subject"
-                )
+            copied, _identity, received_package_fd = _copy_package_directory(
+                embedded_package,
+                package_dest,
+                expected_package_identity=transfer_report.package_identity,
+                source_package_fd=embedded_package_fd,
+            )
 
         ledger = LocalCustodyLedger(receiver_custody_root)
         requested_clock = accepted_at or observe_clock()
@@ -926,6 +944,7 @@ def receive_transfer(
                 received_package=package_dest,
                 expected_sender_fingerprint=expected_sender_fingerprint,
                 _transfer_fd=transfer_fd,
+                _received_package_fd=received_package_fd,
             )
             if (
                 not staged_report.integrity_verified
@@ -964,6 +983,7 @@ def receive_transfer(
                 received_package=package_dest,
                 expected_sender_fingerprint=expected_sender_fingerprint,
                 _transfer_fd=transfer_fd,
+                _received_package_fd=received_package_fd,
             )
             if (
                 not final_report.integrity_verified
@@ -995,4 +1015,8 @@ def receive_transfer(
         finally:
             os.close(parent_fd)
     finally:
+        if received_package_fd is not None:
+            os.close(received_package_fd)
+        if embedded_package_fd is not None:
+            os.close(embedded_package_fd)
         os.close(transfer_fd)
