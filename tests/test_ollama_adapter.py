@@ -4,7 +4,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import http.client as http_client
 import json
 import multiprocessing
+import os
 from pathlib import Path
+import signal
 import tempfile
 import threading
 import unittest
@@ -507,6 +509,93 @@ class OllamaAdapterTests(unittest.TestCase):
                 failure_status=200,
             )
             self.assertEqual(store.artifact_count, 2)
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
+    def test_fork_during_observation_reservation_resets_child_mutexes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+            store = LocalEvidenceStore(store_root)
+            custody = LocalCustodyLedger(custody_root)
+
+            reservation_entered = threading.Event()
+            release_reservation = threading.Event()
+            holder_errors: list[BaseException] = []
+
+            def hold_reservation() -> None:
+                try:
+                    with ollama_module._observation_reservation(store, custody):
+                        reservation_entered.set()
+                        if not release_reservation.wait(timeout=5):
+                            raise AssertionError(
+                                "fork regression reservation release timed out"
+                            )
+                except BaseException as exc:
+                    holder_errors.append(exc)
+
+            holder = threading.Thread(target=hold_reservation)
+            holder.start()
+            self.assertTrue(
+                reservation_entered.wait(timeout=5),
+                "holder thread never acquired observation reservation",
+            )
+
+            read_fd, write_fd = os.pipe()
+            release_timer = threading.Timer(0.2, release_reservation.set)
+            release_timer.start()
+
+            pid = os.fork()
+            if pid == 0:
+                os.close(read_fd)
+                signal.alarm(3)
+                exit_code = 1
+                try:
+                    child_store = LocalEvidenceStore(store_root)
+                    child_custody = LocalCustodyLedger(custody_root)
+                    with ollama_module._observation_reservation(
+                        child_store,
+                        child_custody,
+                    ):
+                        os.write(write_fd, b"acquired")
+                    exit_code = 0
+                except BaseException as exc:
+                    try:
+                        os.write(
+                            write_fd,
+                            (
+                                f"error:{type(exc).__name__}:{exc}"
+                            ).encode("utf-8", "replace"),
+                        )
+                    except OSError:
+                        pass
+                finally:
+                    signal.alarm(0)
+                    os.close(write_fd)
+                    os._exit(exit_code)
+
+            os.close(write_fd)
+            try:
+                child_result = os.read(read_fd, 4096)
+            finally:
+                os.close(read_fd)
+
+            _, child_status = os.waitpid(pid, 0)
+            release_timer.join(timeout=5)
+            holder.join(timeout=5)
+
+            self.assertFalse(holder.is_alive(), "reservation holder did not exit")
+            self.assertEqual(holder_errors, [])
+            self.assertTrue(
+                os.WIFEXITED(child_status),
+                f"forked child did not exit normally: status={child_status}",
+            )
+            self.assertEqual(os.WEXITSTATUS(child_status), 0, child_result)
+            self.assertEqual(child_result, b"acquired")
+
+            # The parent registry remains usable after its after-fork handler.
+            with ollama_module._observation_reservation(store, custody):
+                pass
 
     def test_multiprocess_observations_reserve_fresh_pair_before_transport(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
