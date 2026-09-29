@@ -16,6 +16,10 @@ const BACKEND_COMMANDS: &[&str] = &[
     "verify-assurance",
     "redact-disclosure",
     "verify-disclosure",
+    "transfer-create",
+    "transfer-receive",
+    "verify-transfer",
+    "verify-receipt",
 ];
 
 const TUI_COMMANDS: &[&str] = &["record", "inspect", "verify", "finalize", "export", "package"];
@@ -41,7 +45,11 @@ fn print_help() {
     println!("  verify-assurance Verify integrity/signature/anchor dimensions");
     println!("  redact-disclosure Create a redacted DERIVED disclosure");
     println!("  verify-disclosure Verify disclosure lineage and optional source");
-    println!("  tui              Keyboard-first store/custody command palette");
+    println!("  transfer-create   Create a signed offline transfer bundle");
+    println!("  transfer-receive  Accept a transfer and create signed receipt");
+    println!("  verify-transfer   Verify sender offer/package handoff");
+    println!("  verify-receipt    Verify receiver acknowledgement/custody");
+    println!("  tui               Keyboard-first store/custody command palette");
     println!();
     println!("Type 'provenance <command> --help' for backend command options.");
 }
@@ -306,6 +314,10 @@ mod tests {
                 "verify-assurance",
                 "redact-disclosure",
                 "verify-disclosure",
+                "transfer-create",
+                "transfer-receive",
+                "verify-transfer",
+                "verify-receipt",
             ]
         );
     }
