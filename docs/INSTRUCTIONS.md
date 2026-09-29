@@ -118,6 +118,55 @@ Use `--scope open` when collection gaps must remain explicit.
 
 See [PACKAGE.md](PACKAGE.md).
 
+## Optional Phase 12 authenticity
+
+After creating a finalized Phase 11 package, you can add detached authenticity records without changing the package.
+
+Generate an Ed25519 key if needed:
+
+```bash
+ssh-keygen -t ed25519 -f ./provenance-signing-key
+```
+
+Sign the exact canonical `package.json` bytes:
+
+```bash
+./provenance-cli/target/debug/provenance sign-package \
+  --package /path/to/forensic-package \
+  --key ./provenance-signing-key \
+  --output ./package.signature.json
+```
+
+For a Git commit anchor, first write the canonical payload:
+
+```bash
+./provenance-cli/target/debug/provenance anchor-payload \
+  --package /path/to/forensic-package \
+  --output /path/to/repo/package.provenance
+```
+
+Commit that file, then create the detached anchor record:
+
+```bash
+./provenance-cli/target/debug/provenance anchor-git \
+  --package /path/to/forensic-package \
+  --git-repo /path/to/repo \
+  --commit HEAD \
+  --path package.provenance \
+  --output ./package.git-anchor.json
+```
+
+Verify integrity, signature, and anchor separately:
+
+```bash
+./provenance-cli/target/debug/provenance verify-assurance \
+  --package /path/to/forensic-package \
+  --signature ./package.signature.json \
+  --anchor ./package.git-anchor.json \
+  --git-repo /path/to/repo
+```
+
+See [TRUST.md](TRUST.md) for exactly what these mechanisms prove—and what they do not.
 ## Read-only UI
 
 ```bash
@@ -199,4 +248,4 @@ cargo test --manifest-path provenance-cli/Cargo.toml --locked
 
 ## Deep reference
 
-[Architecture](ARCHITECTURE.md) · [Invariants](INVARIANTS.md) · [Store](STORE.md) · [Custody](CUSTODY.md) · [Bundle](BUNDLE.md) · [Package](PACKAGE.md) · [CLI](CLI.md) · [MCP](MCP.md) · [UI](UI.md) · [Adapters](ADAPTERS.md) · [Roadmap](ROADMAP.md)
+[Architecture](ARCHITECTURE.md) · [Invariants](INVARIANTS.md) · [Store](STORE.md) · [Custody](CUSTODY.md) · [Bundle](BUNDLE.md) · [Package](PACKAGE.md) · [Trust](TRUST.md) · [CLI](CLI.md) · [MCP](MCP.md) · [UI](UI.md) · [Adapters](ADAPTERS.md) · [Roadmap](ROADMAP.md)
