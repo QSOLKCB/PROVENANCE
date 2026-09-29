@@ -293,6 +293,45 @@ If the original source package is available, additionally recompute the transfor
 The disclosure retains the source digest and original ArtifactRecord metadata but omits the source content bytes. The derivative is always a new DERIVED artifact.
 
 See [PRIVACY.md](PRIVACY.md) for privacy leakage limits, digest confirmation risks, and exact verification semantics.
+## Phase 15 distributed custody handoff
+
+A finalized Phase 11 package can be handed to an independently operated receiver without requiring a live network service.
+
+Create the signed sender bundle:
+
+```bash
+./provenance-cli/target/debug/provenance transfer-create \
+  --package /path/to/source-package \
+  --source-system org-a/system-1 \
+  --destination-system org-b/system-9 \
+  --sender-key /path/to/sender-key \
+  --output /path/to/transfer
+```
+
+Copy that directory through the chosen offline/store-and-forward channel.
+
+At the receiver:
+
+```bash
+./provenance-cli/target/debug/provenance transfer-receive \
+  --transfer /path/to/transfer \
+  --package-destination /receiver/package \
+  --receipt /receiver/receipt \
+  --custody /receiver/custody \
+  --receiver-system org-b/system-9 \
+  --receiver-key /path/to/receiver-key
+```
+
+Verify the end-to-end handoff:
+
+```bash
+./provenance-cli/target/debug/provenance verify-receipt \
+  --receipt /receiver/receipt \
+  --transfer /path/to/transfer \
+  --package /receiver/package
+```
+
+Do not compare sender and receiver wall clocks to infer order. The protocol exposes only evidence-backed partial-order edges. See [TRANSFER.md](TRANSFER.md).
 ## Operational rules
 
 - Do not put secrets into evidence-bearing URLs, argv, prompts, or artifacts unless retention is intentional.
@@ -303,4 +342,4 @@ See [PRIVACY.md](PRIVACY.md) for privacy leakage limits, digest confirmation ris
 
 ## Deep reference
 
-[Architecture](ARCHITECTURE.md) · [Invariants](INVARIANTS.md) · [Store](STORE.md) · [Custody](CUSTODY.md) · [Bundle](BUNDLE.md) · [Package](PACKAGE.md) · [Trust](TRUST.md) · [Performance](PERFORMANCE.md) · [Privacy](PRIVACY.md) · [CLI](CLI.md) · [MCP](MCP.md) · [UI](UI.md) · [Adapters](ADAPTERS.md) · [Roadmap](ROADMAP.md)
+[Architecture](ARCHITECTURE.md) · [Invariants](INVARIANTS.md) · [Store](STORE.md) · [Custody](CUSTODY.md) · [Bundle](BUNDLE.md) · [Package](PACKAGE.md) · [Trust](TRUST.md) · [Performance](PERFORMANCE.md) · [Privacy](PRIVACY.md) · [Transfer](TRANSFER.md) · [CLI](CLI.md) · [MCP](MCP.md) · [UI](UI.md) · [Adapters](ADAPTERS.md) · [Roadmap](ROADMAP.md)
