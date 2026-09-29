@@ -1,0 +1,40 @@
+name: package
+
+on:
+  push:
+    paths:
+      - "provenance_export/**"
+      - "provenance_verify/**"
+      - "provenance_core/**"
+      - "provenance_store/**"
+      - "provenance_custody/**"
+      - "tests/test_package.py"
+      - "BUNDLE.md"
+      - "ROADMAP.md"
+      - ".github/workflows/package.yml"
+  pull_request:
+    paths:
+      - "provenance_export/**"
+      - "provenance_verify/**"
+      - "provenance_core/**"
+      - "provenance_store/**"
+      - "provenance_custody/**"
+      - "tests/test_package.py"
+      - "BUNDLE.md"
+      - "ROADMAP.md"
+      - ".github/workflows/package.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Phase 11 forensic package tests
+        run: python -m unittest discover -s tests -p 'test_package.py' -v
