@@ -885,7 +885,7 @@ observation boundary
 extension namespace
 ```
 
-Adapter-specific execution produces exact captured byte artifacts plus ordinary `EventEnvelope` values. Transport/provider metadata is retained as a separate DECLARED artifact rather than adding fields to `EventCore`.
+Adapter-specific execution produces directly captured payload artifacts plus conservatively DECLARED request/invocation descriptors and ordinary `EventEnvelope` values. Transport/provider metadata is retained as a separate DECLARED artifact rather than adding fields to `EventCore`.
 
 The first two executable reference adapters are intentionally structurally different:
 
