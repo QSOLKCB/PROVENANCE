@@ -378,6 +378,25 @@ class ProvenanceCliTests(unittest.TestCase):
                     {"artifact", "event"},
                 )
 
+    def test_tui_returns_nonzero_if_any_backend_command_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            completed = _run(
+                "tui",
+                "--store",
+                str(root / "store"),
+                "--custody",
+                str(root / "custody"),
+                input_text="/verify\n/quit\n",
+            )
+            self.assertEqual(completed.returncode, 1)
+            self.assertIn("command exited with status 1", completed.stdout)
+            self.assertIn('"ok":false', completed.stderr)
+            self.assertIn(
+                "store has no finalized snapshot",
+                completed.stderr,
+            )
+
     def test_tui_slash_palette_filters_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
