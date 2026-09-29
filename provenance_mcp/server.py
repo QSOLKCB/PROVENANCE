@@ -1063,6 +1063,11 @@ class ProvenanceMCPServer:
         }
 
     def _verify(self, arguments: object) -> dict[str, Any]:
+        with self._working_state_lock():
+            self._synchronize_working_state_locked()
+            return self._verify_locked(arguments)
+
+    def _verify_locked(self, arguments: object) -> dict[str, Any]:
         args = _require_object(arguments, label="provenance.verify arguments")
         _require_exact_keys(args, label="provenance.verify arguments")
         verification = self.store.verify_current()
@@ -1145,6 +1150,11 @@ class ProvenanceMCPServer:
         return entry[1] if entry is not None else None
 
     def _inspect(self, arguments: object) -> dict[str, Any]:
+        with self._working_state_lock():
+            self._synchronize_working_state_locked()
+            return self._inspect_locked(arguments)
+
+    def _inspect_locked(self, arguments: object) -> dict[str, Any]:
         args = _require_object(arguments, label="provenance.inspect arguments")
         _require_exact_keys(
             args,
@@ -1215,6 +1225,11 @@ class ProvenanceMCPServer:
         raise ValueError(f"unknown evidence identity: {identity}")
 
     def _export(self, arguments: object) -> dict[str, Any]:
+        with self._working_state_lock():
+            self._synchronize_working_state_locked()
+            return self._export_locked(arguments)
+
+    def _export_locked(self, arguments: object) -> dict[str, Any]:
         args = _require_object(arguments, label="provenance.export arguments")
         _require_exact_keys(
             args,
@@ -1394,6 +1409,11 @@ class ProvenanceMCPServer:
         return identities
 
     def list_resources(self) -> list[dict[str, Any]]:
+        with self._working_state_lock():
+            self._synchronize_working_state_locked()
+            return self._list_resources_locked()
+
+    def _list_resources_locked(self) -> list[dict[str, Any]]:
         resources: list[dict[str, Any]] = []
         manifest = self._current_manifest_object()
         if manifest is not None:
@@ -1605,6 +1625,14 @@ class ProvenanceMCPServer:
         raise MCPProtocolError(-32602, f"unsupported resource kind: {kind}")
 
     def read_resource(self, uri: object) -> dict[str, Any]:
+        with self._working_state_lock():
+            self._synchronize_working_state_locked()
+            return self._read_resource_current_locked(uri)
+
+    def _read_resource_current_locked(
+        self,
+        uri: object,
+    ) -> dict[str, Any]:
         try:
             return self._read_resource(uri)
         except MCPProtocolError:
