@@ -5,9 +5,9 @@ Frozen implementation target:
   tag    v1.0.0
   commit 0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
 
-This file proves properties of the model below.  The correspondence between
+This file proves properties of the model below. The correspondence between
 this model and the frozen runtime implementation is documented separately in
-docs/FORMAL_VERIFICATION.md.  These theorems do not claim whole-program
+docs/FORMAL_VERIFICATION.md. These theorems do not claim whole-program
 verification of the Python/Rust implementation.
 -/
 
@@ -40,7 +40,8 @@ def recomputeIdentity {α : Type}
   identityFn envelope.core
 
 /-- Seal a core by computing its identity independently of the envelope field. -/
-def seal {α : Type} (identityFn : α → Identity) (core : α) : Envelope α :=
+def sealEnvelope {α : Type}
+    (identityFn : α → Identity) (core : α) : Envelope α :=
   { core := core, storedIdentity := identityFn core }
 
 /--
@@ -49,7 +50,8 @@ the stored self-identity field is outside the identity input.
 -/
 theorem selfHashExclusion {α : Type}
     (identityFn : α → Identity) (core : α) :
-    recomputeIdentity identityFn (seal identityFn core) = identityFn core := by
+    recomputeIdentity identityFn (sealEnvelope identityFn core) =
+      identityFn core := by
   rfl
 
 /--
@@ -58,8 +60,10 @@ changing only the stored envelope identity cannot change recomputation.
 -/
 theorem storedIdentityDoesNotAffectRecomputation {α : Type}
     (identityFn : α → Identity) (core : α) (left right : Identity) :
-    recomputeIdentity identityFn { core := core, storedIdentity := left } =
-      recomputeIdentity identityFn { core := core, storedIdentity := right } := by
+    recomputeIdentity identityFn
+        { core := core, storedIdentity := left } =
+      recomputeIdentity identityFn
+        { core := core, storedIdentity := right } := by
   rfl
 
 /-- Append a new custody/history record without rewriting prior records. -/
@@ -67,15 +71,15 @@ def appendRecord {α : Type} (history : List α) (record : α) : List α :=
   history ++ [record]
 
 /-- A small explicit prefix relation used by the append-only model. -/
-def Prefix {α : Type} (prefix whole : List α) : Prop :=
-  ∃ suffix, whole = prefix ++ suffix
+def IsHistoryPrefix {α : Type} (prior whole : List α) : Prop :=
+  ∃ suffix, whole = prior ++ suffix
 
 /--
 FV-02 / INV-CUS-1 / INV-EVD-3:
 appending a record preserves the complete prior history as a prefix.
 -/
 theorem appendOnlyPrefix {α : Type} (history : List α) (record : α) :
-    Prefix history (appendRecord history record) := by
+    IsHistoryPrefix history (appendRecord history record) := by
   exact ⟨[record], rfl⟩
 
 /--
@@ -116,7 +120,8 @@ the declaration path cannot silently produce OBSERVED evidence.
 theorem callerDeclarationIsNotObserved (actor operation : String) :
     (recordCallerDeclaration actor operation).evidenceClass ≠
       EvidenceClass.observed := by
-  decide
+  intro h
+  cases h
 
 /-- A transformation that changes presentation/operation text only. -/
 def changeOperation (event : EventCore) (operation : String) : EventCore :=
@@ -140,7 +145,7 @@ structure EvidenceState where
 
 /--
 A read-only presentation returns its source unchanged alongside the rendered
-view.  The renderer receives the source but has no mutation operation.
+view. The renderer receives the source but has no mutation operation.
 -/
 def projectReadOnly {β : Type}
     (render : EvidenceState → β) (source : EvidenceState) :
