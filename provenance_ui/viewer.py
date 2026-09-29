@@ -373,6 +373,21 @@ def build_view(store_root: Path | str, custody_root: Path | str) -> dict[str, An
     else:
         custody_status = "VERIFIED"
 
+    for artifact in artifacts:
+        artifact_custody = artifact["custody"]
+        if not custody_records:
+            artifact_custody_status = "NOT_PRESENT"
+        elif not custody_report.integrity_verified:
+            artifact_custody_status = "INVALID"
+        elif artifact_custody:
+            artifact_custody_status = "VERIFIED"
+        else:
+            artifact_custody_status = "NOT_PRESENT"
+        artifact["verification"] = {
+            "integrity": integrity_status,
+            "custody": artifact_custody_status,
+        }
+
     gaps: list[dict[str, Any]] = []
     if manifest is None:
         gaps.append({"kind": "NO_FINALIZED_SNAPSHOT", "detail": "Store has no finalized HEAD snapshot."})
