@@ -316,6 +316,20 @@ class LocalEvidenceStore:
 
     def _ensure_store_format(self, root_fd: int) -> None:
         expected = (STORE_FORMAT + "\n").encode("ascii")
+        temp_prefix = f".{_FORMAT}."
+        temp_suffix = ".tmp"
+
+        def is_format_temp(name: str) -> bool:
+            if not (
+                name.startswith(temp_prefix)
+                and name.endswith(temp_suffix)
+            ):
+                return False
+            token = name[len(temp_prefix) : -len(temp_suffix)]
+            return (
+                len(token) == 32
+                and all(char in "0123456789abcdef" for char in token)
+            )
 
         def open_existing() -> int:
             try:
@@ -329,6 +343,32 @@ class LocalEvidenceStore:
                     f"STORE_FORMAT marker cannot be opened safely: {exc}"
                 ) from exc
 
+        def validate_existing(fd: int) -> None:
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise StoreError(
+                        "STORE_FORMAT marker must be a regular file"
+                    )
+                raw = _read_all(fd)
+                if raw != expected:
+                    raise StoreError(
+                        "unsupported or corrupt STORE_FORMAT marker: "
+                        + raw.decode(
+                            "ascii",
+                            errors="replace",
+                        ).rstrip("\n")
+                    )
+                try:
+                    os.fsync(fd)
+                except OSError as exc:
+                    raise StoreError(
+                        "existing STORE_FORMAT marker cannot be synced "
+                        f"durably: {exc}"
+                    ) from exc
+            finally:
+                os.close(fd)
+            _fsync_directory(root_fd)
+
         try:
             fd = os.open(
                 _FORMAT,
@@ -340,72 +380,99 @@ class LocalEvidenceStore:
                 raise StoreError(
                     "store format initialization requires scandir(fd) support"
                 )
+
             with os.scandir(root_fd) as entries:
                 existing = [entry.name for entry in entries]
 
-            if existing:
-                if _FORMAT not in existing:
-                    raise StoreError(
-                        "existing store root has no STORE_FORMAT marker; "
-                        "refusing to assume a layout version"
-                    )
-                # A concurrent initializer published the marker after our first
-                # open failed. Reopen it and validate exact contents below.
-                fd = open_existing()
-            else:
+            unexpected = [
+                name
+                for name in existing
+                if name != _FORMAT and not is_format_temp(name)
+            ]
+            if unexpected:
+                raise StoreError(
+                    "existing store root has no STORE_FORMAT marker; "
+                    "refusing to assume a layout version"
+                )
+
+            # Publish through a private, fully written temporary file. The
+            # authoritative marker name is never visible with partial bytes.
+            temp_name = (
+                f"{temp_prefix}{uuid.uuid4().hex}{temp_suffix}"
+            )
+            temp_fd: int | None = None
+            try:
                 try:
-                    fd = os.open(
-                        _FORMAT,
+                    temp_fd = os.open(
+                        temp_name,
                         _file_create_flags(),
                         0o600,
                         dir_fd=root_fd,
                     )
-                except FileExistsError:
-                    # Another process won the create race after our empty scan.
-                    fd = open_existing()
                 except OSError as exc:
                     raise StoreError(
-                        f"STORE_FORMAT marker cannot be created: {exc}"
+                        "STORE_FORMAT temporary marker cannot be created: "
+                        f"{exc}"
                     ) from exc
-                else:
-                    try:
-                        _write_all(fd, expected)
-                        os.fsync(fd)
-                    except OSError as exc:
-                        raise StoreError(
-                            "STORE_FORMAT marker cannot be written durably: "
-                            f"{exc}"
-                        ) from exc
-                    finally:
-                        os.close(fd)
-                    _fsync_directory(root_fd)
+
+                try:
+                    _write_all(temp_fd, expected)
+                    os.fsync(temp_fd)
+                except OSError as exc:
+                    raise StoreError(
+                        "STORE_FORMAT temporary marker cannot be written "
+                        f"durably: {exc}"
+                    ) from exc
+                finally:
+                    os.close(temp_fd)
+                    temp_fd = None
+
+                try:
+                    os.link(
+                        temp_name,
+                        _FORMAT,
+                        src_dir_fd=root_fd,
+                        dst_dir_fd=root_fd,
+                        follow_symlinks=False,
+                    )
+                    published = True
+                except FileExistsError:
+                    # Another fully-written temporary marker won the atomic
+                    # publication race. Validate that winner below.
+                    published = False
+                except OSError as exc:
+                    raise StoreError(
+                        f"STORE_FORMAT marker cannot be published: {exc}"
+                    ) from exc
+
+                try:
+                    os.unlink(temp_name, dir_fd=root_fd)
+                except FileNotFoundError:
+                    pass
+
+                _fsync_directory(root_fd)
+
+                if published:
+                    fd = open_existing()
+                    validate_existing(fd)
                     return
+
+                fd = open_existing()
+                validate_existing(fd)
+                return
+            finally:
+                if temp_fd is not None:
+                    os.close(temp_fd)
+                try:
+                    os.unlink(temp_name, dir_fd=root_fd)
+                except FileNotFoundError:
+                    pass
         except OSError as exc:
             raise StoreError(
                 f"STORE_FORMAT marker cannot be opened safely: {exc}"
             ) from exc
 
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                raise StoreError("STORE_FORMAT marker must be a regular file")
-            raw = _read_all(fd)
-            if raw != expected:
-                raise StoreError(
-                    "unsupported or corrupt STORE_FORMAT marker: "
-                    + raw.decode("ascii", errors="replace").rstrip("\n")
-                )
-            try:
-                os.fsync(fd)
-            except OSError as exc:
-                raise StoreError(
-                    f"existing STORE_FORMAT marker cannot be synced durably: {exc}"
-                ) from exc
-        finally:
-            os.close(fd)
-
-        # A concurrently published marker may have reached us through either
-        # race path above. Re-establish the root directory durability barrier.
-        _fsync_directory(root_fd)
+        validate_existing(fd)
 
     def _ensure_lock_file(self, root_fd: int) -> None:
         process_lock = _process_lock_for_root(root_fd)
