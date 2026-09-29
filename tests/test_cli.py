@@ -638,6 +638,8 @@ class ProvenanceCliTests(unittest.TestCase):
                     "org-b/system-9",
                     "--receiver-key",
                     str(receiver_key),
+                    "--expected-sender-fingerprint",
+                    verified_transfer["sender_key_fingerprint"],
                 )
             )
             self.assertFalse(received["duplicate_delivery"])
@@ -686,6 +688,8 @@ class ProvenanceCliTests(unittest.TestCase):
                     "org-b/system-9",
                     "--receiver-key",
                     str(receiver_key),
+                    "--expected-sender-fingerprint",
+                    verified_transfer["sender_key_fingerprint"],
                 )
             )
             self.assertTrue(duplicate["duplicate_delivery"])
