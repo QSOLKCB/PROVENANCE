@@ -9,6 +9,7 @@ import threading
 import unittest
 
 from provenance_adapters import (
+    ADAPTER_ARTIFACT_MEDIA_TYPE,
     AdapterContract,
     AdapterContractError,
     GenericHTTPAdapter,
@@ -108,8 +109,7 @@ class GenericAdapterTests(unittest.TestCase):
             process_observation.contract.adapter_id,
         )
         self.assertEqual(
-            {event.core.schema if hasattr(event.core, "schema") else event.core.to_dict()["schema"]
-             for event in http_observation.events},
+            {event.core.to_dict()["schema"] for event in http_observation.events},
             {"provenance.event.v1"},
         )
         self.assertEqual(
@@ -118,11 +118,47 @@ class GenericAdapterTests(unittest.TestCase):
         )
         self.assertEqual(http_observation.outputs[0].data, b"HELLO HTTP")
         self.assertEqual(
+            http_observation.input_events[0].core.evidence_class.value,
+            "DECLARED",
+        )
+        self.assertEqual(
+            http_observation.input_events[1].core.evidence_class.value,
+            "OBSERVED",
+        )
+        self.assertEqual(
+            http_observation.completion_event.core.evidence_class.value,
+            "DERIVED",
+        )
+        self.assertTrue(
+            all(
+                item.media_type == ADAPTER_ARTIFACT_MEDIA_TYPE
+                for item in http_observation.artifacts
+            )
+        )
+        self.assertEqual(
             {item.label for item in process_observation.outputs},
             {"stdout", "stderr"},
         )
         self.assertEqual(process_observation.outputs[0].data, b"ssecorp olleh")
         self.assertEqual(process_observation.outputs[1].data, b"process-stderr")
+        self.assertEqual(
+            process_observation.input_events[0].core.evidence_class.value,
+            "DECLARED",
+        )
+        self.assertEqual(
+            process_observation.input_events[1].core.evidence_class.value,
+            "OBSERVED",
+        )
+        self.assertEqual(
+            process_observation.completion_event.core.evidence_class.value,
+            "DERIVED",
+        )
+        self.assertTrue(
+            all(
+                item.media_type == ADAPTER_ARTIFACT_MEDIA_TYPE
+                for item in process_observation.artifacts
+            )
+        )
 
         http_evidence_bytes = b"\n".join(
             item.data for item in http_observation.artifacts
