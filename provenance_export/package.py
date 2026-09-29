@@ -643,7 +643,10 @@ def create_forensic_package(
                 staging_fd,
                 "gaps.json",
                 canonical_json_bytes(
-                    derive_declared_gaps(staging_path / "evidence")
+                    derive_declared_gaps(
+                        staging_path / "evidence",
+                        [raw for _name, raw in custody_records],
+                    )
                 ),
                 members,
             )
