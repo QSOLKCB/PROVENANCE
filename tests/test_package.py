@@ -276,6 +276,27 @@ class ForensicPackageTests(unittest.TestCase):
                 report.errors,
             )
 
+    def test_undeclared_empty_directory_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store, custody, _manifest = _closed_fixture(root)
+            package = create_forensic_package(
+                store,
+                custody,
+                root / "package",
+            )
+            (package.path / "surprise").mkdir()
+
+            report = verify_forensic_package(package.path)
+            self.assertFalse(report.integrity_verified)
+            self.assertTrue(
+                any(
+                    "undeclared directories" in error
+                    for error in report.errors
+                ),
+                report.errors,
+            )
+
     def test_symlink_member_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
