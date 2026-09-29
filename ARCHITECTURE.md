@@ -854,6 +854,12 @@ The transport boundary is enforced by an adapter-owned urllib opener with enviro
 
 Prepared request evidence does not independently prove peer receipt. Transport and parse failures are recorded with COLLECTION_FAILED events and finalized evidence rather than silently disappearing.
 
+Phase 5 uses one fresh evidence store/custody pair per exchange. This prevents deterministic event identities from collapsing repeated byte-identical calls until the core has an evidence-supported occurrence discriminator.
+
+Adapter-retained HTTP payload bytes use one role-neutral artifact media type. Transport role is represented by events/custody so identical bytes can legitimately appear as both prepared request and observed response without rebinding content identity metadata.
+
+Every finalized failure binds a canonical failure-detail artifact containing a stable adapter category, optional observed HTTP status, and diagnostic detail. Zero-length observed HTTP bodies remain distinct from no observed body.
+
 The response model field is treated as a declaration by Ollama. It is not promoted into independently verified model provenance, and it is not used as the custody actor.
 
 Capture times are expressed through custody observations rather than by adding provider-specific timestamp fields to the universal event core.
