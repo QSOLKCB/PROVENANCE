@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import http.client as http_client
 import json
 from pathlib import Path
 import tempfile
@@ -536,6 +537,41 @@ class OllamaAdapterTests(unittest.TestCase):
                 failure_category="http_error",
                 failure_status=500,
             )
+
+    def test_malformed_http_status_finalizes_protocol_failure_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalEvidenceStore(root / "store")
+            custody = LocalCustodyLedger(root / "custody")
+            adapter = OllamaAdapter(
+                f"http://127.0.0.1:{self.server.server_port}",
+                timeout_seconds=5,
+            )
+
+            with mock.patch.object(
+                adapter._opener,
+                "open",
+                side_effect=http_client.BadStatusLine("NOT HTTP"),
+            ):
+                with self.assertRaisesRegex(
+                    OllamaAdapterError,
+                    "HTTP protocol failure",
+                ):
+                    adapter.observe_generate(
+                        model="m",
+                        prompt="p",
+                        store=store,
+                        custody=custody,
+                    )
+
+            detail = self._assert_failure_evidence(
+                store=store,
+                custody=custody,
+                response_bytes=None,
+                failure_category="http_protocol_error",
+            )
+            self.assertIsNone(detail["http_status"])
+            self.assertIn("NOT HTTP", str(detail["detail"]))
 
     def test_response_capture_custody_actor_is_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
