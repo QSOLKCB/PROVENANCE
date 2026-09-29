@@ -9,6 +9,7 @@ import tempfile
 from typing import Any
 
 from provenance_core import (
+    CANONICALIZATION_ID,
     canonical_json_bytes,
     parse_canonical_json_bytes,
     require_sha256_identity,
@@ -162,6 +163,8 @@ def verify_transfer_signature(
             raise ValueError("transfer signature core keys changed")
         if core.get("schema") != TRANSFER_SIGNATURE_SCHEMA:
             raise ValueError("transfer signature schema changed")
+        if core.get("canonicalization") != CANONICALIZATION_ID:
+            raise ValueError("transfer signature canonicalization changed")
         if core.get("role") != expected_role:
             raise ValueError("transfer signature role mismatch")
         if core.get("subject_kind") != expected_subject_kind:
