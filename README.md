@@ -701,6 +701,8 @@ See [STORE.md](STORE.md) for the Phase 3 local content-addressed storage contrac
 
 See [CUSTODY.md](CUSTODY.md) for the Phase 4 append-only custody and clock-observation contract.
 
+See [OLLAMA.md](OLLAMA.md) for the Phase 5 local Ollama observation contract and Phase 6 real-model CI boundary.
+
 ---
 
 # Implementation Roadmap
@@ -785,7 +787,7 @@ That is the target.
 
 # Status
 
-**Bootstrap / Phase 4 implementation.**
+**Bootstrap / Phase 6 implementation.**
 
 The constitutional and architectural foundation is in place. The first executable module is now `provenance_core`, covering the initial Phase 1 surface:
 
@@ -807,7 +809,11 @@ The local evidence store is now implemented in `provenance_store`, with content-
 
 The minimal custody chain is now implemented through `provenance_core`, `provenance_verify`, and `provenance_custody`: domain-separated custody identities, append-only per-subject chains, explicit unknown actor/source values, clock-source assurance, independent chain verification, and a local immutable custody ledger.
 
-Adapters, Ollama integration, MCP, the Rust TUI/CLI, and the local pure-HTML/CSS/JS viewer remain later roadmap phases.
+The first real-system adapter is now implemented in `provenance_adapters` for local Ollama. It retains exact request/response bytes, distinguishes observed exchange data from Ollama-declared model identity, records custody, and finalizes through the existing independent verifier.
+
+A dedicated Ollama Actions lane launches independent small-model instances on clean runners and verifies both successful evidence capture and retained-byte tamper detection.
+
+MCP, the Rust TUI/CLI, the local pure-HTML/CSS/JS viewer, and generic/provider adapters remain later roadmap phases.
 
 Interfaces and compatibility guarantees should still be considered unstable until explicitly versioned and released.
 

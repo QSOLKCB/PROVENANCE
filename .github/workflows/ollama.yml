@@ -1,0 +1,128 @@
+name: ollama
+
+on:
+  pull_request:
+    paths:
+      - "provenance_adapters/**"
+      - "tests/test_ollama_adapter.py"
+      - "tests/test_ollama_transport.py"
+      - "scripts/ollama_smoke.py"
+      - "OLLAMA.md"
+      - ".github/workflows/ollama.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "provenance_adapters/**"
+      - "tests/test_ollama_adapter.py"
+      - "tests/test_ollama_transport.py"
+      - "scripts/ollama_smoke.py"
+      - "OLLAMA.md"
+      - ".github/workflows/ollama.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  OLLAMA_VERSION: "0.34.0"
+  OLLAMA_INSTALL_SHA256: "25f64b810b947145095956533e1bdf56eacea2673c55a7e586be4515fc882c9f"
+
+jobs:
+  adapter-unit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run Ollama adapter unit tests
+        run: >-
+          python3 -m unittest
+          tests.test_ollama_adapter
+          tests.test_ollama_transport
+          -v
+
+  ollama-smoke:
+    needs: adapter-unit
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - lane: qwen25-05b
+            model: "qwen2.5:0.5b"
+          - lane: qwen2-05b
+            model: "qwen2:0.5b"
+
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    env:
+      OLLAMA_HOST: "http://127.0.0.1:11434"
+      OLLAMA_MODEL: ${{ matrix.model }}
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Ollama
+        shell: sh
+        run: |
+          set -eu
+          curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
+          printf '%s  %s\n' "$OLLAMA_INSTALL_SHA256" /tmp/ollama-install.sh | sha256sum -c -
+          OLLAMA_NO_START=1 OLLAMA_VERSION="$OLLAMA_VERSION" sh /tmp/ollama-install.sh
+          ollama --version
+
+      - name: Start independent Ollama instance
+        shell: sh
+        run: |
+          set -eu
+          OLLAMA_HOST=127.0.0.1:11434           OLLAMA_NUM_PARALLEL=1           OLLAMA_MAX_LOADED_MODELS=1           nohup ollama serve >/tmp/ollama.log 2>&1 &
+          echo "$!" >/tmp/ollama.pid
+
+          python3 - <<'PY'
+          import time
+          import urllib.request
+
+          url = "http://127.0.0.1:11434/api/version"
+          for _ in range(120):
+              try:
+                  with urllib.request.urlopen(url, timeout=1) as response:
+                      if response.status == 200:
+                          print(response.read().decode("utf-8"))
+                          raise SystemExit(0)
+              except Exception:
+                  time.sleep(0.25)
+          raise SystemExit("Ollama server did not become ready")
+          PY
+
+      - name: Pull small reference model
+        shell: sh
+        run: |
+          set -eu
+          ollama pull "$OLLAMA_MODEL"
+
+      - name: Run real PROVENANCE observation
+        shell: sh
+        run: |
+          set -eu
+          out="$RUNNER_TEMP/provenance-ollama-${{ matrix.lane }}"
+          mkdir -p "$out"
+          python3 -m scripts.ollama_smoke --model "$OLLAMA_MODEL" --host "$OLLAMA_HOST" --output "$out"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: provenance-ollama-${{ matrix.lane }}
+          path: ${{ runner.temp }}/provenance-ollama-${{ matrix.lane }}
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Show Ollama log on failure
+        if: failure()
+        shell: sh
+        run: |
+          test ! -f /tmp/ollama.log || tail -n 200 /tmp/ollama.log

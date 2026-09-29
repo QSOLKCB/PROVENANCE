@@ -1,0 +1,418 @@
+# PROVENANCE Ollama Reference Adapter — v1
+
+## Status
+
+~~~text
+ADAPTER=provenance-adapter:ollama/v1
+TRANSPORT=LOCAL_HTTP
+ENDPOINT=/api/generate
+STREAMING=DISABLED
+AUTHENTICATION=NONE
+REMOTE_HOSTS=REJECTED
+~~~
+
+This document defines the Phase 5 local Ollama observation boundary.
+
+The adapter exists to exercise the PROVENANCE evidence architecture against a real AI system.
+
+It does not define universal AI semantics.
+
+---
+
+# Local-only boundary
+
+The Phase 5 adapter accepts only loopback HTTP endpoints:
+
+~~~text
+127.0.0.1
+localhost
+::1
+~~~
+
+Remote hosts, URL credentials, query strings, fragments, and pre-supplied API paths are rejected.
+
+The adapter owns its urllib opener:
+
+~~~text
+environment proxies = disabled
+HTTP redirects = rejected
+process-global opener = ignored
+localhost = canonicalized to literal 127.0.0.1
+~~~
+
+A local endpoint therefore cannot redirect the adapter to another destination, and proxy environment variables cannot receive the prompt.
+
+Authentication and remote provider compatibility remain later adapter work.
+
+---
+
+# Observation scope
+
+Phase 5 deliberately supports exactly one Ollama exchange per fresh LocalEvidenceStore / LocalCustodyLedger pair.
+
+A second observation against a non-empty pair is rejected before transport.
+
+Freshness is protected by two reservation layers on each unique evidence root:
+
+~~~text
+same-process mutex keyed by root filesystem identity
++
+POSIX fcntl advisory record lock on .ollama-observation.lock
+~~~
+
+Store and custody roots are locked in stable filesystem-identity order. The reservation is held from freshness validation through complete success or failure finalization.
+
+After acquiring the cross-process reservation, the adapter reopens the store and custody roots and evaluates their current on-disk state rather than trusting instances that may have been constructed before another process committed.
+
+Two threads, adapter instances, or cooperating processes sharing the same store or custody root therefore cannot both observe it as fresh and enter transport.
+
+The operational .ollama-observation.lock files are synchronization state only. They are not evidence artifacts and do not enter evidence identity.
+
+## Fork boundary
+
+An active Phase 5 observation is process-bound.
+
+If the thread currently executing an observation calls `os.fork()` while transport, evidence mutation, finalization, verification, or caller code is active, the adapter's registered `after_in_child` handler terminates that child immediately with exit status `86`, before `os.fork()` can return into that code in the child.
+
+This is intentional. A PID check around a callback cannot prevent a callback from forking and then performing an HTTP request or evidence mutation before control returns to the adapter. Immediate child termination is therefore the enforcement boundary that guarantees an inherited observation cannot emit an unrecorded second exchange or inherited custody/store writes.
+
+Clock observation is the narrow exception. The existing host clock collector may use subprocesses while probing local chrony state. The adapter therefore temporarily suspends the active-observation child-termination marker only while calling its own `observe_clock()`, then restores the marker before any evidence mutation. The reservation PID is checked when that helper window closes.
+
+Every custody append receives an explicit `ClockObservation` from this adapter-controlled path. The custody ledger therefore does not invoke its implicit `observe_clock()` fallback during an Ollama observation.
+
+This preserves stronger chrony-backed clock evidence without weakening the transport or evidence-mutation fork boundary. If a clock helper child were to return to Python instead of executing/terminating as a helper process, the reservation PID check rejects that inherited continuation before evidence mutation.
+
+The parent continues under the original reservation.
+
+A fork initiated by another thread is not treated as an inherited observation continuation. The pre-fork handler first settles the adapter's process-local reservation mutexes; the child then receives a fresh empty process-local lock registry.
+
+Code that needs child-process work must fork before starting the observation, or start a fresh child process that creates its own fresh evidence targets and observation reservation.
+
+This prevents repeated byte-identical exchanges from collapsing into the same deterministic event identities before the core has a justified occurrence discriminator.
+
+Multi-exchange sessions belong to a later contract extension.
+
+---
+
+# Exact request evidence
+
+The adapter constructs one non-streaming Ollama generate request.
+
+Conceptually:
+
+~~~json
+{
+  "model": "<requested model>",
+  "prompt": "<prompt>",
+  "stream": false,
+  "options": {}
+}
+~~~
+
+The exact UTF-8 JSON bytes prepared by the adapter are retained before transport.
+
+All HTTP payload artifacts retained by this adapter use role-neutral `application/octet-stream` metadata. Request/response/error roles are expressed by events and custody, not by rebinding identical content bytes to conflicting media types.
+
+PROVENANCE does not later regenerate the body and claim the regenerated bytes were the original request.
+
+The request evidence means:
+
+~~~text
+these are the exact bytes prepared by the adapter
+these are the exact bytes passed to the local HTTP transport on an attempt
+~~~
+
+It does not independently prove that the peer received those bytes.
+
+A failed connection therefore does not rewrite the prepared request into a successful exchange claim.
+
+---
+
+# Exact response evidence
+
+Whenever an HTTP response body is observed, the adapter retains those raw bytes before parsing or deriving claims.
+
+A zero-length observed body is evidence distinct from an unreadable/unavailable body.
+
+If HTTP framing reports a longer body than is delivered, the adapter retains the partial bytes exposed by the client and records an incomplete-read transport failure.
+
+That includes malformed successful responses and HTTP error bodies when urllib exposes them.
+
+Only after retention does the successful-response parser require:
+
+~~~text
+model = non-empty string
+response = string
+done = true
+~~~
+
+Duplicate JSON keys and non-finite JSON tokens are rejected for the fields used to derive PROVENANCE claims.
+
+Malformed UTF-8/JSON, parser recursion/nesting failures, missing required fields, duplicate keys, non-finite values, and done != true produce COLLECTION_FAILED evidence instead of discarding the observed bytes.
+
+The raw response artifact remains unchanged.
+
+---
+
+# Evidence classification
+
+Request body observed at the adapter boundary:
+
+~~~text
+OBSERVED
+~~~
+
+Response body received from the local Ollama HTTP endpoint:
+
+~~~text
+OBSERVED
+~~~
+
+The model identifier contained in the Ollama response:
+
+~~~text
+DECLARED
+~~~
+
+The response model identifier is not assumed to equal the caller's requested model string.
+
+The declaration event records the identifier Ollama actually returned.
+
+---
+
+# Events
+
+The initial event surface is:
+
+~~~text
+ollama.generate.request.prepared
+ollama.generate.response.received
+ollama.model.declared
+ollama.generate.transport.failed
+ollama.generate.response.invalid
+~~~
+
+The response event binds:
+
+~~~text
+request artifact
+→ response artifact
+~~~
+
+and links to the request event with:
+
+~~~text
+responds_to
+~~~
+
+The model declaration event links to the response event with:
+
+~~~text
+declared_by
+~~~
+
+Transport or parse failures use:
+
+~~~text
+collection_status = COLLECTION_FAILED
+actor = provenance-adapter:ollama/v1
+~~~
+
+and bind any raw response artifact that was actually observed.
+
+Every finalized failure also binds a canonical detail artifact:
+
+~~~json
+{
+  "schema": "provenance.ollama-failure.v1",
+  "category": "<stable adapter category>",
+  "http_status": 500,
+  "detail": "<observed/derived diagnostic text>"
+}
+~~~
+
+`http_status` is null when no HTTP status was observed.
+
+Stable categories currently include values such as:
+
+~~~text
+redirect_rejected
+incomplete_read
+http_protocol_error
+http_status
+http_error
+endpoint_unavailable
+transport_os_error
+response_invalid
+~~~
+
+The detail artifact distinguishes otherwise body-less failures such as a refused connection, rejected redirect, truncated response, or HTTP status failure. Diagnostic text remains evidence about the adapter's observed exception, not a universal error taxonomy.
+
+---
+
+# Capture times and custody
+
+Capture time is represented through Phase 4 custody records.
+
+Request artifact:
+
+~~~text
+CAPTURED
+STORED
+VERIFIED
+~~~
+
+Response artifact:
+
+~~~text
+CAPTURED  actor = provenance-adapter:ollama/v1
+STORED
+VERIFIED
+~~~
+
+The declared model identifier is never used as the custody actor. It remains provider-declared metadata sourced from the response artifact.
+
+Final manifest:
+
+~~~text
+VERIFIED
+~~~
+
+The timestamp means the time at which the adapter recorded that custody observation.
+
+It is not claimed to be:
+
+- model execution start;
+- model execution end;
+- GPU kernel time;
+- provider-internal scheduling time;
+- a global distributed timestamp.
+
+---
+
+# Observation boundary
+
+The adapter directly observes:
+
+- the exact request bytes it sends;
+- the exact response bytes it receives;
+- local HTTP success/failure at its endpoint;
+- response fields exposed by Ollama.
+
+It does not observe:
+
+- hidden model state;
+- hidden chain-of-thought;
+- actual model weights loaded in memory;
+- actual GPU/CPU kernel execution;
+- immutable upstream training provenance;
+- whether a response metadata field is truthful beyond observing that Ollama returned it.
+
+If Ollama exposes a field named thinking or similar in raw response bytes, those bytes remain observed response evidence. Their presence does not prove access to hidden internal reasoning.
+
+---
+
+# Storage and verification
+
+Successful observation follows:
+
+~~~text
+construct exact request bytes
+→ retain prepared request artifact
+→ record prepared-request custody/event
+→ pass exact bytes to local HTTP transport
+→ receive response bytes
+→ retain raw response before parsing
+→ parse supported response fields
+→ record response custody/event
+→ record declared model event
+→ finalize store snapshot
+→ independently verify snapshot
+→ append VERIFIED custody
+→ independently verify custody ledger
+~~~
+
+Failure observation follows:
+
+~~~text
+retain prepared request
+→ attempt local transport
+→ retain any response bytes actually observed, including b""
+→ retain provenance.ollama-failure.v1 detail artifact
+→ record COLLECTION_FAILED event
+→ finalize and independently verify failure evidence
+→ verify custody
+→ raise OllamaAdapterError with evidence manifest identity
+~~~
+
+The adapter does not implement separate evidence semantics.
+
+It uses the existing core, store, custody, and verifier modules.
+
+---
+
+# Phase 6 real-model CI
+
+The dedicated Ollama workflow runs separately from fast core CI.
+
+It contains:
+
+~~~text
+adapter-unit
++
+ollama-smoke matrix
+~~~
+
+The smoke matrix launches independent GitHub-hosted Ubuntu runners for:
+
+~~~text
+qwen2.5:0.5b
+qwen2:0.5b
+~~~
+
+Each runner:
+
+~~~text
+installs pinned Ollama
+starts one local Ollama server
+pulls one small reference model
+performs one real inference
+records PROVENANCE evidence
+verifies the finalized snapshot
+verifies custody
+copies the snapshot
+changes one retained response byte
+requires independent verification to fail
+removes the tamper copy in a finally block
+uploads only the untampered evidence/store/custody result
+~~~
+
+Model language is not a golden fixture.
+
+The test validates PROVENANCE, not model intelligence.
+
+---
+
+# CI installation boundary
+
+The Phase 6 workflow pins:
+
+~~~text
+OLLAMA_VERSION=0.34.0
+~~~
+
+and verifies the downloaded official installer script against its published SHA-256 before execution.
+
+Model weights are intentionally not cached in the initial trust lane.
+
+A clean runner must demonstrate that the complete integration can be reconstructed.
+
+---
+
+# Core rule
+
+~~~text
+CAPTURE THE BYTES ACTUALLY EXCHANGED.
+CLASSIFY ONLY WHAT THE BOUNDARY SUPPORTS.
+VERIFY THE EVIDENCE, NOT THE MODEL'S WORDING.
+~~~

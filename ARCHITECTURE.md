@@ -824,7 +824,7 @@ Presentation may use RFC3339/base-60 clock notation, but custody time calculatio
 
 # 17. Ollama Reference Adapter
 
-The first AI adapter should be Ollama.
+The first AI adapter is Ollama.
 
 Reasons:
 
@@ -837,13 +837,53 @@ easy request/response capture
 small models available
 ```
 
+The Phase 5 reference implementation is:
+
+```text
+provenance_adapters.OllamaAdapter
+adapter id = provenance-adapter:ollama/v1
+transport = loopback HTTP only
+endpoint = /api/generate
+stream = false
+dependencies = Python standard library + existing PROVENANCE modules
+```
+
+It retains the exact request bytes prepared by the adapter before transport and retains any HTTP response body bytes before parsing.
+
+The transport boundary is enforced by an adapter-owned urllib opener with environment proxies disabled and redirects rejected. The documented localhost spelling is canonicalized to a literal loopback address to avoid DNS.
+
+Prepared request evidence does not independently prove peer receipt. Transport and parse failures are recorded with COLLECTION_FAILED events and finalized evidence rather than silently disappearing.
+
+Phase 5 uses one fresh evidence store/custody pair per exchange. Each unique evidence root is reserved with a same-process mutex plus a POSIX fcntl advisory record lock on an operational .ollama-observation.lock file. Roots are acquired in stable filesystem-identity order, and the reservation is held across freshness validation through complete observation/failure finalization. Freshness is re-read from disk after acquiring the reservation. This prevents concurrent threads, adapter instances, or cooperating processes that share either evidence root from both passing the freshness gate, and prevents deterministic event identities from collapsing repeated byte-identical calls until the core has an evidence-supported occurrence discriminator.
+
+Adapter-retained HTTP payload bytes use one role-neutral artifact media type. Transport role is represented by events/custody so identical bytes can legitimately appear as both prepared request and observed response without rebinding content identity metadata.
+
+Every finalized failure binds a canonical failure-detail artifact containing a stable adapter category, optional observed HTTP status, and diagnostic detail. Zero-length observed HTTP bodies remain distinct from no observed body.
+
+The response model field is treated as a declaration by Ollama. It is not promoted into independently verified model provenance, and it is not used as the custody actor.
+
+Capture times are expressed through custody observations rather than by adding provider-specific timestamp fields to the universal event core.
+
 The Ollama adapter exists primarily to test the evidence architecture.
 
 It must not define AI provenance semantics for every other provider.
 
+Ollama's OpenAI-compatible endpoints are intentionally not used to redefine Phase 5. OpenAI-compatible HTTP remains a later generic interoperability surface behind the adapter boundary.
+
 ---
 
 # 18. Ollama CI Contract
+
+The initial real-model lane uses a GitHub Actions matrix with separate clean runners. Each matrix job starts its own Ollama server and pulls one small reference model.
+
+Current reference matrix:
+
+```text
+qwen2.5:0.5b
+qwen2:0.5b
+```
+
+The Ollama runtime is version-pinned in the workflow and its downloaded installer script is checksum-verified before execution.
 
 A real inference test should verify the chain rather than exact generated language.
 
@@ -870,8 +910,9 @@ VERIFY
 Assertions should cover:
 
 ```text
-request retained or intentionally omitted
-response retained
+prepared request retained
+successful or error response bytes retained when observed
+failure evidence finalized on transport/parse failure
 request identity recomputes
 response identity recomputes
 adapter identity recorded
