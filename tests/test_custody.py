@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import os
 from pathlib import Path
 import subprocess
@@ -377,6 +378,71 @@ class ClockObservationTests(unittest.TestCase):
 
 
 class LocalCustodyLedgerTests(unittest.TestCase):
+    def test_concurrent_first_construction_atomically_publishes_format(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "custody"
+            barrier = threading.Barrier(2)
+            counter_lock = threading.Lock()
+            missing_reads = 0
+            real_open = os.open
+            format_read_flags = ledger_module._file_read_flags()
+
+            def synchronized_open(
+                path,
+                flags,
+                mode=0o777,
+                *,
+                dir_fd=None,
+            ):
+                nonlocal missing_reads
+                force_missing = False
+                if path == ledger_module._FORMAT and flags == format_read_flags:
+                    with counter_lock:
+                        if missing_reads < 2:
+                            missing_reads += 1
+                            force_missing = True
+                if force_missing:
+                    barrier.wait(timeout=10)
+                    raise FileNotFoundError(
+                        2,
+                        "No such file or directory",
+                        ledger_module._FORMAT,
+                    )
+                if dir_fd is None:
+                    return real_open(path, flags, mode)
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            with mock.patch.object(
+                ledger_module.os,
+                "open",
+                side_effect=synchronized_open,
+            ):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    ledgers = list(
+                        pool.map(
+                            lambda _index: LocalCustodyLedger(root),
+                            (0, 1),
+                        )
+                    )
+
+            self.assertEqual(missing_reads, 2)
+            self.assertEqual(len(ledgers), 2)
+            self.assertEqual(
+                (root / ledger_module._FORMAT).read_text(encoding="ascii"),
+                CUSTODY_LEDGER_FORMAT + "\n",
+            )
+            self.assertFalse(
+                any(
+                    path.name.startswith(
+                        f".{ledger_module._FORMAT}."
+                    )
+                    for path in root.iterdir()
+                )
+            )
+            for ledger in ledgers:
+                report = ledger.verify()
+                self.assertTrue(report.integrity_verified, report.errors)
+
     def test_append_reopen_and_verify_chain(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "custody"
