@@ -37,6 +37,8 @@ _OBSERVATION_LOCKS: dict[
     threading.RLock,
 ] = {}
 _OBSERVATION_LOCKS_HELD_FOR_FORK: tuple[threading.RLock, ...] = ()
+_OBSERVATION_THREAD_STATE = threading.local()
+_OBSERVATION_FORK_CHILD_EXIT_CODE = 86
 _OBSERVATION_AT_FORK_REGISTERED = globals().get(
     "_OBSERVATION_AT_FORK_REGISTERED",
     False,
@@ -267,7 +269,13 @@ def _after_observation_fork_child() -> None:
     global _OBSERVATION_LOCKS_GUARD
     global _OBSERVATION_LOCKS_HELD_FOR_FORK
 
-    # The child has only the forking thread. Discard every inherited
+    # If the forking thread is inside an active observation, no inherited
+    # continuation is valid. Exit before os.fork() can return into transport,
+    # custody, store, or caller code in the child.
+    if getattr(_OBSERVATION_THREAD_STATE, "active_depth", 0) > 0:
+        os._exit(_OBSERVATION_FORK_CHILD_EXIT_CODE)
+
+    # Otherwise the child has only the forking thread. Discard every inherited
     # process-local mutex rather than attempting to reuse copied lock state.
     _OBSERVATION_LOCKS = {}
     _OBSERVATION_LOCKS_GUARD = threading.RLock()
@@ -290,6 +298,12 @@ def _observation_reservation(
 ) -> Iterator[_ObservationReservationLease]:
     reservation_pid = os.getpid()
     lease = _ObservationReservationLease(pid=reservation_pid)
+    previous_active_depth = getattr(
+        _OBSERVATION_THREAD_STATE,
+        "active_depth",
+        0,
+    )
+    _OBSERVATION_THREAD_STATE.active_depth = previous_active_depth + 1
     directory_flags = (
         os.O_RDONLY
         | os.O_DIRECTORY
@@ -386,6 +400,9 @@ def _observation_reservation(
 
         for root_fd in root_fds.values():
             os.close(root_fd)
+
+        if os.getpid() == reservation_pid:
+            _OBSERVATION_THREAD_STATE.active_depth = previous_active_depth
 
 
 class OllamaAdapter:
