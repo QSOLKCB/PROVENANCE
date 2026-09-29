@@ -72,9 +72,15 @@ The operational .ollama-observation.lock files are synchronization state only. T
 
 An active Phase 5 observation is process-bound.
 
-If the thread currently executing an observation calls `os.fork()`, the adapter's registered `after_in_child` handler terminates that child immediately with exit status `86`, before `os.fork()` can return into transport, custody, store, or caller code in the child.
+If the thread currently executing an observation calls `os.fork()` while transport, evidence mutation, finalization, verification, or caller code is active, the adapter's registered `after_in_child` handler terminates that child immediately with exit status `86`, before `os.fork()` can return into that code in the child.
 
 This is intentional. A PID check around a callback cannot prevent a callback from forking and then performing an HTTP request or evidence mutation before control returns to the adapter. Immediate child termination is therefore the enforcement boundary that guarantees an inherited observation cannot emit an unrecorded second exchange or inherited custody/store writes.
+
+Clock observation is the narrow exception. The existing host clock collector may use subprocesses while probing local chrony state. The adapter therefore temporarily suspends the active-observation child-termination marker only while calling its own `observe_clock()`, then restores the marker before any evidence mutation. The reservation PID is checked when that helper window closes.
+
+Every custody append receives an explicit `ClockObservation` from this adapter-controlled path. The custody ledger therefore does not invoke its implicit `observe_clock()` fallback during an Ollama observation.
+
+This preserves stronger chrony-backed clock evidence without weakening the transport or evidence-mutation fork boundary. If a clock helper child were to return to Python instead of executing/terminating as a helper process, the reservation PID check rejects that inherited continuation before evidence mutation.
 
 The parent continues under the original reservation.
 
