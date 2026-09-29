@@ -27,6 +27,7 @@ from provenance_core import (
 )
 from provenance_custody import LocalCustodyLedger, observe_clock
 from provenance_export import create_forensic_package
+from provenance_privacy.disclosure import create_redacted_disclosure
 from provenance_store import LocalEvidenceStore
 from provenance_trust.records import (
     create_git_anchor_record,
@@ -39,6 +40,7 @@ from provenance_verify import (
     verify_bundle,
     verify_forensic_package,
     verify_git_anchor_record,
+    verify_selective_disclosure,
     verify_signature_record,
 )
 
@@ -1163,7 +1165,43 @@ def _parser() -> argparse.ArgumentParser:
     verify_assurance_parser.add_argument("--anchor")
     verify_assurance_parser.add_argument("--git-repo")
 
+    redact = subparsers.add_parser("redact-disclosure")
+    redact.add_argument("--package", required=True)
+    redact.add_argument("--source", required=True)
+    redact.add_argument(
+        "--range",
+        dest="ranges",
+        action="append",
+        required=True,
+        help="Byte range START:END; may be supplied multiple times.",
+    )
+    redact.add_argument("--mask-byte", type=int, default=42)
+    redact.add_argument("--output", required=True)
+
+    verify_disclosure = subparsers.add_parser("verify-disclosure")
+    verify_disclosure.add_argument("--disclosure", required=True)
+    verify_disclosure.add_argument("--source-package")
+
     return parser
+
+
+def _parse_redaction_ranges(values: list[str]) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, str) or value.count(":") != 1:
+            raise CliError(
+                f"--range[{index}] must use START:END"
+            )
+        start_text, end_text = value.split(":", 1)
+        try:
+            start = int(start_text, 10)
+            end = int(end_text, 10)
+        except ValueError as exc:
+            raise CliError(
+                f"--range[{index}] bounds must be decimal integers"
+            ) from exc
+        ranges.append((start, end))
+    return ranges
 
 
 def _load_record_source(args: argparse.Namespace) -> tuple[bytes, str, str]:
@@ -1187,7 +1225,48 @@ def _load_record_source(args: argparse.Namespace) -> tuple[bytes, str, str]:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        if args.command == "sign-package":
+        if args.command == "redact-disclosure":
+            ranges = _parse_redaction_ranges(args.ranges)
+            disclosure = create_redacted_disclosure(
+                args.package,
+                args.source,
+                ranges,
+                args.output,
+                mask_byte=args.mask_byte,
+            )
+            verification = verify_selective_disclosure(
+                disclosure.path,
+                source_package=args.package,
+            )
+            if (
+                not verification.integrity_verified
+                or verification.lineage != "VERIFIED"
+                or verification.transformation != "VERIFIED"
+            ):
+                raise CliError(
+                    "new selective disclosure failed verification: "
+                    + "; ".join(verification.errors)
+                )
+            result = {
+                "output": str(disclosure.path),
+                "disclosure_identity": disclosure.disclosure_identity,
+                "source_content_identity": (
+                    disclosure.source_content_identity
+                ),
+                "derivative_content_identity": (
+                    disclosure.derivative_content_identity
+                ),
+                "derivation_event_identity": (
+                    disclosure.derivation_event_identity
+                ),
+                "verification": verification.to_dict(),
+            }
+        elif args.command == "verify-disclosure":
+            result = verify_selective_disclosure(
+                args.disclosure,
+                source_package=args.source_package,
+            ).to_dict()
+        elif args.command == "sign-package":
             record = create_signature_record(args.package, args.key)
             output = write_trust_record(args.output, record)
             verification = verify_signature_record(args.package, output)
