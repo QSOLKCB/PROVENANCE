@@ -234,6 +234,8 @@ Exact commands execute keyboard-first:
 
 /quit exits.
 
+The TUI preserves a machine-detectable failure result across the session. If any executed slash command returns a non-zero backend status, the TUI remembers the first failure status and returns it when the session exits or stdin closes. A later successful command does not erase that failure status.
+
 This first terminal UI is intentionally line-mode rather than a full-screen terminal framework. It establishes the interaction contract without introducing curses, a rendering framework, or external Rust crates.
 
 ---
@@ -259,6 +261,8 @@ independent verify_bundle(export)
 A second integration test launches two independent Rust CLI processes concurrently against the same empty roots and requires both acknowledged records to appear in the same finalized verified bundle.
 
 The palette is also driven through stdin to prove slash-command discovery works without a graphical UI.
+
+The CLI workflow is triggered by changes to the Rust surface, the Python CLI backend, and its transitive PROVENANCE contracts: core, store, custody, verifier, and MCP interoperability. This prevents a lower-layer change from bypassing terminal lifecycle coverage merely because no CLI-owned file changed.
 
 ---
 
