@@ -4,11 +4,11 @@
 
 PROVENANCE records **who did what, when, where, why, and how — backed by evidence**. It captures actions, binds artifacts and events to cryptographic identities, preserves append-only custody, supports signed offline handoff between systems, and independently verifies the resulting record.
 
-The project is implemented through **Phase 16**. The immutable implementation baseline is now **`v1.0.0`**, which points exactly to **`0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742`**. That tag is the fixed implementation target for subsequent formal-verification and archival work.
+PROVENANCE has completed the frozen implementation and formal-verification work through **Phase 18**, with final archival publication now pending on Zenodo. **`v1.0.0`** (`0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742`) remains the immutable implementation target of the Lean model, while **`v1.1.1`** (`c24a7c14f162b19df9ad0b674f5d28ae0cf4029f`) is the final formal/archive release.
 
 **Start here:** [Getting Started](docs/GETTING_STARTED.md) · [Usage Instructions](docs/INSTRUCTIONS.md) · [Release Trust Lane](docs/RELEASE.md) · [Documentation](docs/README.md) · [Roadmap](docs/ROADMAP.md)
 
-[![Version](https://img.shields.io/badge/version-v1.0.0-4c1.svg)](https://github.com/QSOLKCB/PROVENANCE/releases/tag/v1.0.0)
+[![Version](https://img.shields.io/badge/version-v1.1.1-4c1.svg)](https://github.com/QSOLKCB/PROVENANCE/releases/tag/v1.1.1)
 [![Phase](https://img.shields.io/badge/roadmap-Phase%2018%20in%20progress-f59e0b.svg)](docs/ROADMAP.md)
 [![Core CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml)
 [![Verify CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml)
@@ -24,6 +24,7 @@ The project is implemented through **Phase 16**. The immutable implementation ba
 [![Custody](https://img.shields.io/badge/custody-append--only-b60205.svg)](docs/CUSTODY.md)
 [![Platform](https://img.shields.io/badge/platform-POSIX--first-555.svg)](docs/ARCHITECTURE.md)
 [![License](https://img.shields.io/badge/license-MPL--2.0-blue.svg)](LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23043860.svg)](https://doi.org/10.5281/zenodo.23043860)
 
 ## What it provides
 
@@ -105,7 +106,7 @@ The core remains provider- and interface-neutral. Verification consumes finalize
 
 ## Status
 
-Implemented through **Phase 16**:
+Implementation is frozen at **v1.0.0**, and the formal/archive release is finalized at **v1.1.1**. Phase 18 remains open only for Zenodo publication:
 
 ```text
 canonical evidence core
