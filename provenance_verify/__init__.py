@@ -55,6 +55,7 @@ __all__ = [
     "TransferBundleVerificationReport",
     "TransferReceiptVerificationReport",
     "verify_transfer_bundle",
+    "verify_transfer_bundle_fd",
     "verify_transfer_receipt",
 ]
 
@@ -97,5 +98,6 @@ from .transfer import (
     TransferBundleVerificationReport,
     TransferReceiptVerificationReport,
     verify_transfer_bundle,
+    verify_transfer_bundle_fd,
     verify_transfer_receipt,
 )
