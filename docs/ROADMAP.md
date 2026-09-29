@@ -1842,6 +1842,8 @@ checksum-verifies the official Lean 4.34.1 release bundle
 builds the Lean proof set
 runs bundled leanchecker
 rejects proof placeholders
+emits a machine-readable success attestation
+retains Lean/Lake versions and build/checker logs
 generates a proof-source evidence manifest
 archives the frozen v1.0.0 source
 archives the formal proof sources
