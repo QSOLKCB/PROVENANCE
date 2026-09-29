@@ -118,6 +118,8 @@ replay    = NOT_ATTEMPTED
 
 `custody = PARTIAL` means the custody ledger verifies cryptographically but does not contain a custody subject for every finalized artifact/event/manifest identity.
 
+Phase 9's live store/custody viewer does not accept detached Phase 12 package-signature or external-anchor sidecars. Its `signature = NOT_PRESENT` value therefore means **no signature is present in the viewer input model**, not that no detached signature exists elsewhere. Phase 12 authenticity is verified with `verify-assurance`; see [TRUST.md](TRUST.md).
+
 ## Evidence gaps
 
 The initial viewer surfaces, at minimum:
