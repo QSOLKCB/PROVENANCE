@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 
-from provenance_core import parse_canonical_json_bytes
+from provenance_core import canonical_json_bytes, parse_canonical_json_bytes
 from provenance_verify import verify_bundle
 
 
@@ -398,6 +398,12 @@ class ProvenanceMCPTests(unittest.TestCase):
                 )
                 self.assertIn("tools", listed["result"])
                 self.assertNotIn("resultType", listed["result"])
+                ping = client.request(
+                    "ping",
+                    {},
+                    modern=False,
+                )
+                self.assertEqual(ping["result"], {})
             finally:
                 returncode, stderr = client.close()
             self.assertEqual(returncode, 0, stderr)
@@ -418,6 +424,143 @@ class ProvenanceMCPTests(unittest.TestCase):
                     "before initialize",
                     response["error"]["message"],
                 )
+            finally:
+                returncode, stderr = client.close()
+            self.assertEqual(returncode, 0, stderr)
+            self.assertEqual(stderr, "")
+
+    def test_stdio_rejects_duplicate_json_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = _StdioClient(root / "store", root / "custody")
+            try:
+                client.process.stdin.write(
+                    '{"jsonrpc":"2.0","id":1,'
+                    '"method":"server/discover",'
+                    '"method":"tools/list","params":{}}\n'
+                )
+                client.process.stdin.flush()
+                response = json.loads(client.process.stdout.readline())
+                self.assertIsNone(response["id"])
+                self.assertEqual(response["error"]["code"], -32700)
+                self.assertIn(
+                    "duplicate JSON key",
+                    response["error"]["message"],
+                )
+            finally:
+                returncode, stderr = client.close()
+            self.assertEqual(returncode, 0, stderr)
+            self.assertEqual(stderr, "")
+
+    def test_resource_reads_recompute_bound_identities(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            client = _StdioClient(store_root, root / "custody")
+            try:
+                client.request("server/discover")
+                recorded = _tool_payload(
+                    client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.record",
+                            "arguments": {
+                                "actor": "tamper-test",
+                                "operation": "tamper.resource",
+                                "value": {"message": "original"},
+                            },
+                        },
+                    )
+                )
+                _tool_payload(
+                    client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.finalize",
+                            "arguments": {"scope": "closed"},
+                        },
+                    )
+                )
+
+                event_identity = recorded["receipt_event_identity"]
+                event_digest = event_identity.split(":", 1)[1]
+                event_path = (
+                    store_root
+                    / "objects"
+                    / "events"
+                    / "sha256"
+                    / f"{event_digest}.json"
+                )
+                original_event = event_path.read_bytes()
+                event_value = parse_canonical_json_bytes(original_event)
+                event_value["core"]["operation"] = "tampered.operation"
+                event_path.write_bytes(canonical_json_bytes(event_value))
+
+                event_response = client.request(
+                    "resources/read",
+                    {
+                        "uri": (
+                            "provenance://event/"
+                            + event_identity
+                        )
+                    },
+                )
+                self.assertEqual(
+                    event_response["error"]["code"],
+                    -32603,
+                )
+                self.assertIn(
+                    "does not match resource identity",
+                    event_response["error"]["data"]["detail"],
+                )
+                event_path.write_bytes(original_event)
+
+                artifact_identity = recorded["declaration_artifact_identity"]
+                artifact_digest = artifact_identity.split(":", 1)[1]
+                artifact_path = (
+                    store_root
+                    / "objects"
+                    / "artifacts"
+                    / "sha256"
+                    / artifact_digest
+                )
+                original_artifact = artifact_path.read_bytes()
+                self.assertGreater(len(original_artifact), 0)
+                tampered_artifact = (
+                    bytes([original_artifact[0] ^ 1])
+                    + original_artifact[1:]
+                )
+                artifact_path.write_bytes(tampered_artifact)
+
+                artifact_response = client.request(
+                    "resources/read",
+                    {
+                        "uri": (
+                            "provenance://artifact/"
+                            + artifact_identity
+                        )
+                    },
+                )
+                self.assertEqual(
+                    artifact_response["error"]["code"],
+                    -32603,
+                )
+                self.assertIn(
+                    "content does not match resource identity",
+                    artifact_response["error"]["data"]["detail"],
+                )
+                artifact_path.write_bytes(original_artifact)
+
+                verified = _tool_payload(
+                    client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.verify",
+                            "arguments": {},
+                        },
+                    )
+                )
+                self.assertTrue(verified["bundle"]["integrity_verified"])
             finally:
                 returncode, stderr = client.close()
             self.assertEqual(returncode, 0, stderr)
