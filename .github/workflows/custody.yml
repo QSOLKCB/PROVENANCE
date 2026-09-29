@@ -6,8 +6,11 @@ on:
       - "provenance_core/**"
       - "provenance_verify/custody.py"
       - "provenance_custody/**"
+      - "provenance_transfer/**"
       - "docs/CUSTODY.md"
+      - "docs/TRANSFER.md"
       - "tests/test_custody.py"
+      - "tests/test_transfer.py"
       - ".github/workflows/custody.yml"
   push:
     branches: ["main"]
