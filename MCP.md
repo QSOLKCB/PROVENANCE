@@ -75,6 +75,10 @@ SAME DECLARATION
 SAME OCCURRENCE
 ~~~
 
+A successful record call is also durably represented in the MCP operational working-state journal before the tool returns. The journal contains identities and working membership, not a second evidence schema, and is excluded from finalized evidence identity.
+
+After process restart, the server revalidates the journaled artifact records, retained bytes, and event identities against the object pool before reattaching them to the working snapshot. If the store HEAD advanced because finalization committed immediately before a crash, restart requires the journaled members to be present in that verified HEAD and completes fresh VERIFIED custody before clearing the journal.
+
 The caller cannot supply an `evidenceClass` override.
 
 ## provenance.inspect
@@ -97,6 +101,8 @@ Copies the current immutable verified snapshot to a new destination directory, i
 
 The destination must not already exist and must be outside the live evidence store, custody ledger, and source snapshot tree. This prevents an export from recursively copying into itself or contaminating the evidence roots it is meant to preserve.
 
+Export publication is descriptor-bound. The destination parent is opened as a non-symlink directory descriptor, ancestry is checked against the protected evidence roots, and the snapshot is copied through that held descriptor rather than by reopening the checked pathname. The parent pathname/identity and protected-root ancestry are checked again before success is reported. A parent rename/symlink substitution during export therefore fails and the descriptor-bound partial copy is removed.
+
 This Phase 7 export is a snapshot-copy interface only. It does not claim to complete the later Phase 11 portable forensic-package contract, which may additionally package custody, schemas, verification metadata, and declared gaps.
 
 ---
@@ -115,6 +121,8 @@ provenance://custody/<identity>
 Event, manifest, and custody resources return canonical JSON.
 
 Retained artifact resources return exact bytes through MCP blob content. DIGEST_ONLY artifacts return explicit retention metadata rather than fabricated content.
+
+Artifact reads use the **current working store binding**, not merely the most recently finalized manifest binding. A monotonic DIGEST_ONLY → CONTENT_RETAINED upgrade is therefore visible immediately, before the next finalization.
 
 Resource reads use identity-derived paths and descriptor-safe non-symlink file opens.
 
