@@ -28,7 +28,19 @@ from provenance_core import (
 from provenance_custody import LocalCustodyLedger, observe_clock
 from provenance_export import create_forensic_package
 from provenance_store import LocalEvidenceStore
-from provenance_verify import verify_bundle
+from provenance_trust.records import (
+    create_git_anchor_record,
+    create_signature_record,
+    write_git_anchor_payload,
+    write_trust_record,
+)
+from provenance_verify import (
+    verify_assurance,
+    verify_bundle,
+    verify_forensic_package,
+    verify_git_anchor_record,
+    verify_signature_record,
+)
 
 
 CLI_INTERFACE_ID = "provenance-cli:rust/v1"
@@ -1128,6 +1140,29 @@ def _parser() -> argparse.ArgumentParser:
     _add_common(package)
     package.add_argument("--destination", required=True)
 
+    sign_package = subparsers.add_parser("sign-package")
+    sign_package.add_argument("--package", required=True)
+    sign_package.add_argument("--key", required=True)
+    sign_package.add_argument("--output", required=True)
+
+    anchor_payload = subparsers.add_parser("anchor-payload")
+    anchor_payload.add_argument("--package", required=True)
+    anchor_payload.add_argument("--output", required=True)
+
+    anchor_git = subparsers.add_parser("anchor-git")
+    anchor_git.add_argument("--package", required=True)
+    anchor_git.add_argument("--git-repo", required=True)
+    anchor_git.add_argument("--commit", required=True)
+    anchor_git.add_argument("--path", required=True)
+    anchor_git.add_argument("--output", required=True)
+    anchor_git.add_argument("--repository-hint")
+
+    verify_assurance_parser = subparsers.add_parser("verify-assurance")
+    verify_assurance_parser.add_argument("--package", required=True)
+    verify_assurance_parser.add_argument("--signature")
+    verify_assurance_parser.add_argument("--anchor")
+    verify_assurance_parser.add_argument("--git-repo")
+
     return parser
 
 
@@ -1152,29 +1187,89 @@ def _load_record_source(args: argparse.Namespace) -> tuple[bytes, str, str]:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        session = CliSession(args.store, args.custody)
-        if args.command == "record":
-            data, media_type, source_label = _load_record_source(args)
-            result = session.record(
-                actor=args.actor,
-                operation=args.operation,
-                data=data,
-                media_type=media_type,
-                retain_content=not args.digest_only,
-                source_label=source_label,
+        if args.command == "sign-package":
+            record = create_signature_record(args.package, args.key)
+            output = write_trust_record(args.output, record)
+            verification = verify_signature_record(args.package, output)
+            if verification.status != "VERIFIED":
+                raise CliError(
+                    "new signature record failed verification: "
+                    + "; ".join(verification.errors)
+                )
+            result = {
+                "output": str(output),
+                "signature_identity": record["signature_identity"],
+                "subject_identity": record["core"]["subject_identity"],
+                "key_fingerprint": record["core"]["key_fingerprint"],
+                "signature": verification.to_dict(),
+            }
+        elif args.command == "anchor-payload":
+            output = write_git_anchor_payload(args.package, args.output)
+            package_report = verify_forensic_package(args.package)
+            if not package_report.integrity_verified:
+                raise CliError("package failed verification before anchor payload")
+            result = {
+                "output": str(output),
+                "subject_identity": package_report.package_identity,
+            }
+        elif args.command == "anchor-git":
+            record = create_git_anchor_record(
+                args.package,
+                args.git_repo,
+                args.commit,
+                args.path,
+                repository_hint=args.repository_hint,
             )
-        elif args.command == "inspect":
-            result = session.inspect(args.identity)
-        elif args.command == "verify":
-            result = session.verify()
-        elif args.command == "finalize":
-            result = session.finalize(scope=args.scope)
-        elif args.command == "export":
-            result = session.export(args.destination)
-        elif args.command == "package":
-            result = session.package(args.destination)
+            output = write_trust_record(args.output, record)
+            verification = verify_git_anchor_record(
+                args.package,
+                output,
+                git_repo=args.git_repo,
+            )
+            if verification.status != "VERIFIED":
+                raise CliError(
+                    "new Git anchor record failed verification: "
+                    + "; ".join(verification.errors)
+                )
+            result = {
+                "output": str(output),
+                "anchor_identity": record["anchor_identity"],
+                "subject_identity": record["core"]["subject_identity"],
+                "commit_oid": record["core"]["commit_oid"],
+                "path": record["core"]["path"],
+                "external_anchor": verification.to_dict(),
+            }
+        elif args.command == "verify-assurance":
+            result = verify_assurance(
+                args.package,
+                signature_record=args.signature,
+                anchor_record=args.anchor,
+                git_repo=args.git_repo,
+            ).to_dict()
         else:
-            raise CliError(f"unsupported command: {args.command}")
+            session = CliSession(args.store, args.custody)
+            if args.command == "record":
+                data, media_type, source_label = _load_record_source(args)
+                result = session.record(
+                    actor=args.actor,
+                    operation=args.operation,
+                    data=data,
+                    media_type=media_type,
+                    retain_content=not args.digest_only,
+                    source_label=source_label,
+                )
+            elif args.command == "inspect":
+                result = session.inspect(args.identity)
+            elif args.command == "verify":
+                result = session.verify()
+            elif args.command == "finalize":
+                result = session.finalize(scope=args.scope)
+            elif args.command == "export":
+                result = session.export(args.destination)
+            elif args.command == "package":
+                result = session.package(args.destination)
+            else:
+                raise CliError(f"unsupported command: {args.command}")
     except Exception as exc:
         print(
             _json_text(
