@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
+import socket
 from queue import Queue
 import threading
 from typing import Iterator
@@ -11,6 +12,7 @@ import unittest
 from unittest import mock
 from urllib import request as urllib_request
 
+import provenance_adapters.ollama as ollama_module
 from provenance_adapters import OllamaAdapter, OllamaAdapterError
 
 
@@ -44,6 +46,7 @@ def _serve(
     status: int = 200,
     body: bytes = _RESPONSE_BYTES,
     location: str | None = None,
+    content_length_override: int | None = None,
 ) -> Iterator[_Endpoint]:
     received: Queue[_ReceivedRequest] = Queue()
 
@@ -62,7 +65,12 @@ def _serve(
             )
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
+            advertised = (
+                content_length_override
+                if content_length_override is not None
+                else len(body)
+            )
+            self.send_header("Content-Length", str(advertised))
             if location is not None:
                 self.send_header("Location", location)
             self.end_headers()
@@ -93,6 +101,43 @@ def _serve(
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+@contextmanager
+def _serve_raw(response_bytes: bytes) -> Iterator[str]:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    errors: list[BaseException] = []
+
+    def worker() -> None:
+        try:
+            connection, _ = listener.accept()
+            with connection:
+                connection.settimeout(2)
+                received = b""
+                while b"\r\n\r\n" not in received:
+                    chunk = connection.recv(4096)
+                    if not chunk:
+                        break
+                    received += chunk
+                connection.sendall(response_bytes)
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        listener.close()
+        thread.join(timeout=5)
+        if thread.is_alive():
+            raise AssertionError("raw HTTP server thread did not exit")
+        if errors:
+            raise errors[0]
 
 
 class OllamaTransportTests(unittest.TestCase):
@@ -156,22 +201,31 @@ class OllamaTransportTests(unittest.TestCase):
     def test_redirects_are_rejected_without_contacting_destination(self) -> None:
         for status in (301, 302, 303, 307, 308):
             with self.subTest(status=status):
+                redirect_body = f"redirect-{status}".encode("ascii")
                 with _serve() as destination:
                     with _serve(
                         status=status,
-                        body=b"",
+                        body=redirect_body,
                         location=destination.url + "/redirect-target",
                     ) as endpoint:
                         adapter = OllamaAdapter(
                             endpoint.url,
                             timeout_seconds=2,
                         )
-                        with self.assertRaisesRegex(
-                            OllamaAdapterError,
-                            rf"forbidden HTTP redirect {status}",
-                        ):
+                        with self.assertRaises(
+                            ollama_module._TransportFailure,
+                        ) as raised:
                             adapter._post_generate(_REQUEST_BYTES)
 
+                        self.assertEqual(
+                            raised.exception.category,
+                            "redirect_rejected",
+                        )
+                        self.assertEqual(raised.exception.status, status)
+                        self.assertEqual(
+                            raised.exception.response_bytes,
+                            redirect_body,
+                        )
                         self._assert_exact_request(endpoint)
                         self.assertTrue(
                             destination.received.empty(),
@@ -210,6 +264,45 @@ class OllamaTransportTests(unittest.TestCase):
                 adapter._post_generate(_REQUEST_BYTES)
 
             self._assert_exact_request(endpoint)
+
+    def test_truncated_http_error_is_incomplete_read_with_partial_bytes(self) -> None:
+        partial = b"{}"
+        with _serve(
+            status=500,
+            body=partial,
+            content_length_override=10,
+        ) as endpoint:
+            adapter = OllamaAdapter(endpoint.url, timeout_seconds=2)
+
+            with self.assertRaises(
+                ollama_module._TransportFailure,
+            ) as raised:
+                adapter._post_generate(_REQUEST_BYTES)
+
+            self.assertEqual(raised.exception.category, "incomplete_read")
+            self.assertEqual(raised.exception.status, 500)
+            self.assertEqual(raised.exception.response_bytes, partial)
+            self._assert_exact_request(endpoint)
+
+    def test_malformed_http_status_line_is_normalized_transport_failure(self) -> None:
+        with _serve_raw(b"THIS IS NOT HTTP\r\n\r\n") as url:
+            adapter = OllamaAdapter(url, timeout_seconds=2)
+
+            with self.assertRaises(
+                ollama_module._TransportFailure,
+            ) as raised:
+                adapter._post_generate(_REQUEST_BYTES)
+
+            self.assertEqual(
+                raised.exception.category,
+                "http_protocol_error",
+            )
+            self.assertIsNone(raised.exception.status)
+            self.assertIsNone(raised.exception.response_bytes)
+            self.assertIn(
+                "HTTP protocol failure",
+                str(raised.exception),
+            )
 
     def test_localhost_is_canonicalized_to_literal_loopback(self) -> None:
         adapter = OllamaAdapter("http://localhost:11434")
