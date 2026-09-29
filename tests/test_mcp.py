@@ -150,6 +150,14 @@ class ProvenanceMCPTests(unittest.TestCase):
                         "provenance.export",
                     ],
                 )
+                finalize_tool = next(
+                    item
+                    for item in tools
+                    if item["name"] == "provenance.finalize"
+                )
+                self.assertFalse(
+                    finalize_tool["annotations"]["idempotentHint"]
+                )
 
                 arguments = {
                     "actor": "test-client:declared-actor",
@@ -308,6 +316,23 @@ class ProvenanceMCPTests(unittest.TestCase):
                     verified["bundle"]["manifest_identity"],
                     manifest_identity,
                 )
+
+                forbidden_export = store_root / "nested-export"
+                forbidden = client.request(
+                    "tools/call",
+                    {
+                        "name": "provenance.export",
+                        "arguments": {
+                            "destination": str(forbidden_export),
+                        },
+                    },
+                )
+                self.assertTrue(forbidden["result"]["isError"])
+                self.assertIn(
+                    "outside the live store",
+                    forbidden["result"]["content"][0]["text"],
+                )
+                self.assertFalse(forbidden_export.exists())
 
                 exported = _tool_payload(
                     client.request(
