@@ -1905,6 +1905,36 @@ Self-observation must still preserve evidence classification boundaries.
 
 ---
 
+# 46A. Optional Trust Records
+
+Phase 12 adds `provenance_trust` as an optional producer of detached authenticity records.
+
+```text
+finalized forensic package
+        ↓
+optional provenance-trust producer
+        ↓
+signature / external-anchor sidecars
+
+package + sidecars
+        ↓
+provenance-verify
+        ↓
+integrity / signature / external-anchor dimensions
+```
+
+The package identity does not change when trust records are added.
+
+Reference mechanisms are OpenSSH Ed25519 SSHSIG signatures over exact `package.json` bytes and Git commit anchors containing an exact canonical package-identity payload.
+
+Private signing keys are producer inputs only. They do not enter the evidence core, package, verifier, or MCP protocol.
+
+External-anchor mechanisms are replaceable and optional. Phase 12 performs no automatic network access and does not require blockchain infrastructure.
+
+See [TRUST.md](TRUST.md).
+
+---
+
 # 47. Deployment Model
 
 The same modules should support several deployment sizes.
