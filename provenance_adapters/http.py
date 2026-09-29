@@ -103,6 +103,13 @@ class GenericHTTPAdapter:
             raise ValueError("max_response_bytes must be a positive integer")
 
         normalized_headers: dict[str, str] = {}
+        seen_headers: set[str] = set()
+        reserved_headers = {
+            "content-length",
+            "content-type",
+            "host",
+            "transfer-encoding",
+        }
         for key, value in dict(headers or {}).items():
             if not isinstance(key, str) or not key:
                 raise ValueError("HTTP header names must be non-empty strings")
@@ -110,6 +117,15 @@ class GenericHTTPAdapter:
                 raise ValueError("HTTP header values must be strings")
             if "\r" in key or "\n" in key or "\r" in value or "\n" in value:
                 raise ValueError("HTTP headers must not contain CR or LF")
+            lowered = key.lower()
+            if lowered in reserved_headers:
+                raise ValueError(
+                    f"HTTP header {key!r} is adapter-controlled; "
+                    "use the URL/body/media_type arguments instead"
+                )
+            if lowered in seen_headers:
+                raise ValueError("HTTP header names must be unique case-insensitively")
+            seen_headers.add(lowered)
             normalized_headers[key] = value
 
         self.url = url
@@ -139,7 +155,10 @@ class GenericHTTPAdapter:
         descriptor = {
             "method": method,
             "url": self.url,
-            "header_names": sorted(self.headers),
+            "header_names": sorted(
+                [*self.headers, "Content-Type"],
+                key=str.lower,
+            ),
             "header_values_retained": False,
         }
         return (
