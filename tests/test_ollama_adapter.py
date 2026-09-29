@@ -7,21 +7,24 @@ import multiprocessing
 import os
 from pathlib import Path
 import signal
+import subprocess
 import tempfile
 import threading
 import unittest
 from unittest import mock
 
 import provenance_adapters.ollama as ollama_module
+import provenance_custody.ledger as custody_ledger_module
 from provenance_adapters import ADAPTER_ID, OllamaAdapter, OllamaAdapterError
 from provenance_core import (
+    ClockAssurance,
     CollectionStatus,
     CustodyAction,
     EvidenceClass,
     parse_canonical_json_bytes,
     sha256_identity,
 )
-from provenance_custody import LocalCustodyLedger
+from provenance_custody import ClockObservation, LocalCustodyLedger
 from provenance_store import LocalEvidenceStore
 from provenance_verify import verify_bundle
 
@@ -735,6 +738,71 @@ class OllamaAdapterTests(unittest.TestCase):
                 failure_status=200,
             )
             self.assertEqual(store.artifact_count, 2)
+
+    def test_clock_helper_subprocess_survives_active_observation_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalEvidenceStore(root / "store")
+            custody = LocalCustodyLedger(root / "custody")
+            adapter = OllamaAdapter(
+                "http://127.0.0.1:11434",
+                timeout_seconds=5,
+            )
+            response_bytes = (
+                b'{"model":"qwen2.5:0.5b",'
+                b'"response":"clock helper regression","done":true}'
+            )
+            adapter._post_generate = (  # type: ignore[method-assign]
+                lambda request_bytes: response_bytes
+            )
+
+            clock_calls = 0
+
+            def subprocess_clock(*, timeout: int = 3) -> ClockObservation:
+                nonlocal clock_calls
+                clock_calls += 1
+                completed = subprocess.run(
+                    ["/bin/true"],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    preexec_fn=lambda: None,
+                    timeout=timeout,
+                )
+                if completed.returncode != 0:
+                    raise RuntimeError(
+                        f"clock helper exited {completed.returncode}"
+                    )
+                return ClockObservation(
+                    recorded_at="2026-09-29T03:30:00.000000Z",
+                    clock_source="test-subprocess-clock",
+                    clock_assurance=ClockAssurance.LOCAL,
+                )
+
+            with (
+                mock.patch.object(
+                    ollama_module,
+                    "observe_clock",
+                    side_effect=subprocess_clock,
+                ),
+                mock.patch.object(
+                    custody_ledger_module,
+                    "observe_clock",
+                    side_effect=subprocess_clock,
+                ),
+            ):
+                observation = adapter.observe_generate(
+                    model="qwen2.5:0.5b",
+                    prompt="clock helper fork",
+                    store=store,
+                    custody=custody,
+                )
+
+            self.assertTrue(observation.snapshot.verification.integrity_verified)
+            report = custody.verify()
+            self.assertTrue(report.integrity_verified, report.errors)
+            self.assertEqual(report.record_count, 7)
+            self.assertEqual(clock_calls, 7)
 
     @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX fork")
     def test_fork_during_verified_custody_exits_child_immediately(self) -> None:
