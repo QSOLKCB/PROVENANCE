@@ -16,6 +16,7 @@ import provenance_adapters.ollama as ollama_module
 from provenance_adapters import ADAPTER_ID, OllamaAdapter, OllamaAdapterError
 from provenance_core import (
     CollectionStatus,
+    CustodyAction,
     EvidenceClass,
     parse_canonical_json_bytes,
     sha256_identity,
