@@ -551,6 +551,7 @@ class ProvenanceMCPServer:
             self._bound_store_root_identity = _directory_identity(
                 bound_root_fd
             )
+        self._working_lock_state = threading.local()
         self._era: str | None = None
         self._legacy_initialized = False
         self._pending_artifacts: set[str] = set()
@@ -565,6 +566,30 @@ class ProvenanceMCPServer:
     def _working_state_path(self) -> Path:
         return self.store.root / _MCP_WORKING_STATE
 
+    def _assert_bound_store_path(self) -> None:
+        try:
+            fd = os.open(self.store.root, _directory_flags())
+        except OSError as exc:
+            raise RuntimeError(
+                f"MCP store root cannot be reopened safely: {exc}"
+            ) from exc
+        try:
+            if _directory_identity(fd) != self._bound_store_root_identity:
+                raise RuntimeError(
+                    "MCP store root filesystem identity changed since server "
+                    "construction"
+                )
+        finally:
+            os.close(fd)
+
+    def _active_working_root_fd(self) -> int:
+        root_fd = getattr(self._working_lock_state, "root_fd", None)
+        if not isinstance(root_fd, int):
+            raise RuntimeError(
+                "MCP working-state operation requires the active store lock"
+            )
+        return root_fd
+
     @contextmanager
     def _working_state_lock(self) -> Iterator[None]:
         root_fd = os.open(self.store.root, _directory_flags())
@@ -578,6 +603,7 @@ class ProvenanceMCPServer:
         process_lock = _process_working_lock(root_fd)
         process_lock.acquire()
         lock_fd: int | None = None
+        self._working_lock_state.root_fd = root_fd
         try:
             try:
                 lock_fd = os.open(
@@ -606,24 +632,51 @@ class ProvenanceMCPServer:
                 ) from exc
             try:
                 yield
+                # A tool may only return successfully while the configured
+                # pathname still resolves to this same bound store inode.
+                self._assert_bound_store_path()
             finally:
                 fcntl.lockf(lock_fd, fcntl.LOCK_UN)
         finally:
+            if hasattr(self._working_lock_state, "root_fd"):
+                del self._working_lock_state.root_fd
             if lock_fd is not None:
                 os.close(lock_fd)
             os.close(root_fd)
             process_lock.release()
 
     def _read_working_state(self) -> dict[str, Any] | None:
+        root_fd = self._active_working_root_fd()
         try:
-            data = _read_regular(
-                self.store.root,
-                (_MCP_WORKING_STATE,),
-                label="MCP working state",
+            fd = os.open(
+                _MCP_WORKING_STATE,
+                _file_flags(),
+                dir_fd=root_fd,
             )
-        except ResourceNotFoundError:
+        except FileNotFoundError:
             return None
-        value = _canonical_object(data, label="MCP working state")
+        except OSError as exc:
+            raise RuntimeError(
+                f"MCP working state cannot be opened safely: {exc}"
+            ) from exc
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise RuntimeError(
+                    "MCP working state must be a regular file"
+                )
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(fd, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        finally:
+            os.close(fd)
+
+        value = _canonical_object(
+            b"".join(chunks),
+            label="MCP working state",
+        )
         expected = {
             "schema",
             "phase",
@@ -667,7 +720,7 @@ class ProvenanceMCPServer:
         }
         data = canonical_json_bytes(value)
 
-        root_fd = os.open(self.store.root, _directory_flags())
+        root_fd = self._active_working_root_fd()
         temp_name = f".{_MCP_WORKING_STATE}.{uuid.uuid4().hex}.tmp"
         fd: int | None = None
         try:
@@ -695,10 +748,9 @@ class ProvenanceMCPServer:
                 os.unlink(temp_name, dir_fd=root_fd)
             except FileNotFoundError:
                 pass
-            os.close(root_fd)
 
     def _clear_working_state(self) -> None:
-        root_fd = os.open(self.store.root, _directory_flags())
+        root_fd = self._active_working_root_fd()
         try:
             try:
                 os.unlink(_MCP_WORKING_STATE, dir_fd=root_fd)
@@ -706,7 +758,7 @@ class ProvenanceMCPServer:
                 return
             os.fsync(root_fd)
         finally:
-            os.close(root_fd)
+            pass
 
     def _decode_working_artifacts(
         self,
