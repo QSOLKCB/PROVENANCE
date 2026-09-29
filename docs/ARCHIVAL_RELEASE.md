@@ -27,6 +27,11 @@ The Phase 18 `formal` workflow produces an artifact containing:
 PROVENANCE-v1.0.0-source.tar.gz
 PROVENANCE-phase18-formal-sources.tar.gz
 formal-evidence.json
+verification-attestation.json
+lean-version.txt
+lake-version.txt
+lake-build.log
+leanchecker.log
 SHA256SUMS
 ```
 
@@ -47,6 +52,7 @@ The formal-source archive contains the Phase 18 proof and archive material neede
 - formal-verification bridge;
 - archival protocol;
 - citation metadata;
+- proof execution attestation generator;
 - formal evidence generator;
 - formal CI definition.
 
@@ -61,11 +67,20 @@ The formal-source archive contains the Phase 18 proof and archive material neede
 - Lean toolchain;
 - claim identifiers;
 - proof/archive source identities;
-- proof verification contract.
+- proof verification contract;
+- retained proof-execution evidence identities.
+
+### Executed verification evidence
+
+`verification-attestation.json` is emitted only after the Lean build and independent `leanchecker` return success in the same fail-closed shell step.
+
+It records the proof commit, frozen target, DOI, toolchain, official Lean bundle digest, GitHub workflow-run identity, exact Lean/Lake versions, and hashes of the retained build/checker logs.
+
+The accompanying `lean-version.txt`, `lake-version.txt`, `lake-build.log`, and `leanchecker.log` preserve the actual executed checker evidence beyond GitHub's normal log-retention window.
 
 ### SHA256SUMS
 
-The checksum file identifies the generated archive members independently of filenames alone.
+The checksum file identifies both generated archives and all retained proof-execution evidence independently of filenames alone.
 
 ---
 
@@ -98,9 +113,9 @@ After this Phase 18 implementation PR is merged:
 3. create the final archival repository tag on that proof/archive commit;
 4. run/confirm the formal workflow on the final archival tag;
 5. download the generated artifact;
-6. upload the frozen source archive, formal-source archive, formal evidence manifest, and checksum file to the Zenodo record;
+6. upload the frozen source archive, formal-source archive, formal evidence manifest, verification attestation, Lean/Lake version files, build/checker logs, and checksum file to the Zenodo record;
 7. publish DOI `10.5281/zenodo.23043860`;
-8. record the final archival tag and proof commit in the Zenodo metadata/description.
+8. record the final archival tag, proof commit, formal workflow run ID, and proof scope in the Zenodo metadata/description.
 
 Do not move or reinterpret `v1.0.0`.
 
