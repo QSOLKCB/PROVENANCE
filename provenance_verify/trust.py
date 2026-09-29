@@ -310,6 +310,10 @@ def verify_signature_record(
             or not signature.rstrip().endswith("-----END SSH SIGNATURE-----")
         ):
             raise ValueError("signature armor is invalid")
+        try:
+            signature.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise ValueError("signature armor must be ASCII") from exc
         claimed = record.get("signature_identity")
         require_sha256_identity(claimed, label="signature identity")
         if record.get("self_hash_exclusion") != "signature_identity":
@@ -421,6 +425,7 @@ def _git(
 ) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["GIT_OPTIONAL_LOCKS"] = "0"
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
     return subprocess.run(
         [git, "-C", str(repo), *args],
         stdin=subprocess.DEVNULL,
