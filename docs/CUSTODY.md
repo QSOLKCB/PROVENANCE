@@ -380,3 +380,37 @@ TIME SOURCE ASSURANCE IS EXPLICIT.
 UNKNOWN HANDLERS REMAIN UNKNOWN.
 CUSTODY RECORDS ARE APPEND-ONLY.
 ~~~
+
+---
+
+# Phase 15 — distributed custody boundary
+
+Local custody remains a single append-only predecessor chain per subject.
+
+Phase 15 does **not** splice two organizations' local custody ledgers into one synthetic chain.
+
+Instead:
+
+~~~text
+sender Phase 11 package custody
+        ↓
+signed transfer offer
+        ↓
+signed receiver receipt
+        ↓
+receiver-local custody chain
+~~~
+
+The cross-system relation is a partial causal graph. Sender and receiver clock observations retain their own sources and assurance levels and are not globally sorted.
+
+Receiver acceptance for the transferred package identity uses:
+
+~~~text
+CAPTURED → STORED → VERIFIED
+~~~
+
+with the sender offer identity recorded as `related_identity`.
+
+A completed duplicate delivery is idempotent only while the live receiver custody ledger still contains the acknowledgements bound by the signed receipt.
+
+See [TRANSFER.md](TRANSFER.md).
