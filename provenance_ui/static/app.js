@@ -56,7 +56,7 @@ function renderArtifacts(view) {
   const artifacts=view.artifacts.filter((item)=>!query || [item.identity,item.media_type,item.retention].some((v)=>String(v||"").toLowerCase().includes(query)));
   for (const item of artifacts) {
     const details=el("details"), summary=el("summary"); summary.append(el("strong",item.media_type||"unknown media"),document.createTextNode(" · "),el("code",shortId(item.identity))); details.append(summary);
-    const dl=el("dl",null,"meta"); metaRow(dl,"identity",item.identity); metaRow(dl,"record identity",item.record_identity); metaRow(dl,"media type",item.media_type); metaRow(dl,"byte count",item.byte_count); metaRow(dl,"retention",item.retention); metaRow(dl,"source",item.sources); metaRow(dl,"events",item.events); metaRow(dl,"custody records",item.custody.map((r)=>r.identity)); details.append(dl); root.append(details);
+    const dl=el("dl",null,"meta"); metaRow(dl,"identity",item.identity); metaRow(dl,"record identity",item.record_identity); metaRow(dl,"media type",item.media_type); metaRow(dl,"byte count",item.byte_count); metaRow(dl,"retention",item.retention); metaRow(dl,"integrity",item.verification.integrity); metaRow(dl,"custody",item.verification.custody); metaRow(dl,"source",item.sources); metaRow(dl,"events",item.events); metaRow(dl,"custody records",item.custody.map((r)=>r.identity)); details.append(dl); root.append(details);
   }
   if (!artifacts.length) root.append(el("p","No matching artifacts.","hint"));
 }
