@@ -547,6 +547,10 @@ class ProvenanceMCPServer:
 
     def __init__(self, store_root: Path | str, custody_root: Path | str):
         self.store = LocalEvidenceStore(store_root)
+        with self.store._root_fd() as bound_root_fd:
+            self._bound_store_root_identity = _directory_identity(
+                bound_root_fd
+            )
         self._era: str | None = None
         self._legacy_initialized = False
         self._pending_artifacts: set[str] = set()
@@ -564,6 +568,13 @@ class ProvenanceMCPServer:
     @contextmanager
     def _working_state_lock(self) -> Iterator[None]:
         root_fd = os.open(self.store.root, _directory_flags())
+        observed_root_identity = _directory_identity(root_fd)
+        if observed_root_identity != self._bound_store_root_identity:
+            os.close(root_fd)
+            raise RuntimeError(
+                "MCP store root filesystem identity changed since server "
+                "construction"
+            )
         process_lock = _process_working_lock(root_fd)
         process_lock.acquire()
         lock_fd: int | None = None
@@ -793,8 +804,7 @@ class ProvenanceMCPServer:
         self._working_base_manifest_identity = manifest_identity_value
 
     def _synchronize_working_state_locked(self) -> None:
-        store_root = self.store.root
-        self.store = LocalEvidenceStore(store_root)
+        self.store.refresh_from_disk()
         self._pending_artifacts.clear()
         self._pending_events.clear()
         self._working_base_manifest_identity = (
@@ -817,7 +827,21 @@ class ProvenanceMCPServer:
         ):
             raise RuntimeError("MCP pending verification set is malformed")
         events = tuple(events_raw)
-        self._pending_artifacts = set(pending_raw)
+        artifact_identities = {
+            entry.content_identity
+            for entry in artifacts
+        }
+        pending_identities = set(pending_raw)
+        if len(pending_identities) != len(pending_raw):
+            raise RuntimeError(
+                "MCP pending verification set contains duplicates"
+            )
+        if pending_identities != artifact_identities:
+            raise RuntimeError(
+                "MCP pending verification subjects must exactly match "
+                "journaled artifact membership"
+            )
+        self._pending_artifacts = pending_identities
         self._pending_events = set(events)
 
         base = state.get("base_manifest_identity")
