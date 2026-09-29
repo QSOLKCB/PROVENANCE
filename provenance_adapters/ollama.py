@@ -421,16 +421,24 @@ class OllamaAdapter:
         store: LocalEvidenceStore,
         custody: LocalCustodyLedger,
     ) -> None:
-        custody_report = custody.verify()
+        try:
+            disk_store = LocalEvidenceStore(store.root)
+            disk_custody = LocalCustodyLedger(custody.root)
+        except Exception as exc:
+            raise OllamaAdapterError(
+                f"evidence targets could not be refreshed safely: {exc}"
+            ) from exc
+
+        custody_report = disk_custody.verify()
         if not custody_report.integrity_verified:
             raise OllamaAdapterError(
                 "custody target failed verification before observation: "
                 + "; ".join(custody_report.errors)
             )
         if (
-            store.artifact_count != 0
-            or store.event_count != 0
-            or store.current_manifest_identity is not None
+            disk_store.artifact_count != 0
+            or disk_store.event_count != 0
+            or disk_store.current_manifest_identity is not None
             or custody_report.record_count != 0
         ):
             raise OllamaAdapterError(
