@@ -50,6 +50,12 @@ __all__ = [
     "DisclosureVerificationReport",
     "verify_selective_disclosure",
     "verify_selective_disclosure_fd",
+    "TRANSFER_BUNDLE_REPORT_SCHEMA",
+    "TRANSFER_RECEIPT_REPORT_SCHEMA",
+    "TransferBundleVerificationReport",
+    "TransferReceiptVerificationReport",
+    "verify_transfer_bundle",
+    "verify_transfer_receipt",
 ]
 
 from .package import (
@@ -83,4 +89,13 @@ from .privacy import (
     DisclosureVerificationReport,
     verify_selective_disclosure,
     verify_selective_disclosure_fd,
+)
+
+from .transfer import (
+    TRANSFER_BUNDLE_REPORT_SCHEMA,
+    TRANSFER_RECEIPT_REPORT_SCHEMA,
+    TransferBundleVerificationReport,
+    TransferReceiptVerificationReport,
+    verify_transfer_bundle,
+    verify_transfer_receipt,
 )
