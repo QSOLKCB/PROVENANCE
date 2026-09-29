@@ -904,6 +904,12 @@ A user can create and independently verify a basic evidence bundle from a termin
 
 # Phase 9 — Read-Only UI
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Make provenance understandable to humans.
@@ -999,6 +1005,36 @@ replay = NOT_ATTEMPTED
 ### Evidence gaps
 
 Make missing observation visually obvious.
+
+## Reference implementation
+
+The Phase 9 reference viewer is a dependency-free Python localhost service with pure HTML, pure CSS, and minimal vanilla JavaScript.
+
+It consumes only finalized immutable store snapshots and immutable custody records. It deliberately avoids constructing the mutable store and custody-ledger reference objects merely to display evidence.
+
+The viewer independently runs:
+
+```text
+verify_bundle()
+verify_custody_records()
+```
+
+and presents separate verification dimensions rather than a generic trust score.
+
+The HTTP surface accepts only:
+
+```text
+GET
+HEAD
+```
+
+Mutation methods return HTTP 405.
+
+Default binding is `127.0.0.1`. Non-loopback binding requires the explicit `--allow-non-loopback` operator flag.
+
+Phase 9 tests fingerprint the evidence roots before and after direct projection and HTTP requests so accidental UI mutation is detectable.
+
+See `UI.md`.
 
 ## Exit Gate
 
@@ -1278,52 +1314,13 @@ Evidence can cross independently operated systems without silently losing origin
 
 ---
 
-# Phase 16 — Formal Verification
-
-## Goal
-
-Formalize only stable, high-value invariants.
-
-Do not formalize architecture still changing weekly.
-
-## Candidate Formal Targets
-
-Potential later targets include:
-
-```text
-self-hash exclusion
-append-only correction semantics
-classification preservation
-manifest sealing
-verification purity
-non-authority of presentation
-event/artifact identity separation
-```
-
-## Rule
-
-Formal verification proves the model encoded.
-
-It does not automatically prove:
-
-```text
-runtime implementation
-source data truth
-adapter honesty
-external system behavior
-```
-
-## Exit Gate
-
-Formal claims are explicitly connected to corresponding runtime invariants and tests.
-
----
-
-# Phase 17 — Release-Grade Trust Lane
+# Phase 16 — Release-Grade Trust Lane
 
 ## Goal
 
 Create a high-assurance release process distinct from routine fast CI.
+
+Formal verification does **not** run as a normal development dependency in this phase. The implementation remains free to evolve until the release candidate is actually frozen.
 
 ## Routine Lane
 
@@ -1351,21 +1348,170 @@ full tamper suite
 canonical fixture verification
 real Ollama integration
 MCP integration
+CLI integration
+read-only UI integration
 bundle export
 independent verification
 ```
 
-If formal verification exists:
+## Exit Gate
+
+The implementation intended for the archival release passes the complete release-grade trust lane and is ready to be frozen as the formalization target.
+
+---
+
+# Phase 17 — Immutable Candidate Freeze
+
+## Goal
+
+Create the **penultimate project tag** that freezes the final implementation before formal verification begins.
+
+This tag is the immutable target that Lean proofs and archival claims refer to.
+
+## Required Sequence
 
 ```text
-cold/reconstructed formal trust lane
+all implementation phases complete
+    ↓
+full release-grade trust lane green
+    ↓
+cut penultimate tag
+    ↓
+record exact commit SHA
+    ↓
+freeze implementation and evidence contracts
 ```
 
-remains distinguishable from cached verification.
+## Freeze Rule
+
+After the penultimate tag:
+
+```text
+NO implementation change
+NO schema semantic change
+NO verifier semantic change
+NO evidence-contract change
+```
+
+is permitted without invalidating the freeze and starting Phase 17 again with a new penultimate tag.
+
+The final release may add formal proof sources, archival metadata, and release documentation, but the frozen implementation being proved must remain byte-for-byte identifiable from the penultimate tag.
+
+## Why This Comes Late
+
+Formalizing a moving implementation creates drag without increasing final assurance.
+
+The project therefore waits until ordinary engineering, integration, UI, privacy, distribution, performance, and release hardening are complete before committing the stable target to Lean.
 
 ## Exit Gate
 
-A tagged release can produce a self-consistent release evidence record whose claims accurately describe what was actually executed.
+An immutable penultimate tag exists whose exact commit SHA is the declared target of final formal verification.
+
+---
+
+# Phase 18 — Formal Verification and Archival Final Release
+
+## Goal
+
+Formally verify stable, high-value invariants against the frozen Phase 17 target, then publish the final immutable tag and Zenodo archival record.
+
+## Candidate Formal Targets
+
+Potential targets include:
+
+```text
+self-hash exclusion
+append-only correction semantics
+classification preservation
+manifest sealing
+verification purity
+non-authority of presentation
+event/artifact identity separation
+read-only UI non-interference
+```
+
+Only stable claims that materially improve confidence belong in the final proof set.
+
+## Lean Boundary
+
+Lean proofs must explicitly identify:
+
+```text
+frozen target tag
+frozen target commit SHA
+modeled invariant
+runtime invariant/test it corresponds to
+Lean version/toolchain
+proof source identity
+```
+
+Formal verification proves the encoded model.
+
+It does not automatically prove:
+
+```text
+runtime implementation equivalence beyond the stated bridge
+source data truth
+adapter honesty
+external system behavior
+legal or factual truth
+```
+
+## Final Archival Sequence
+
+The intended final sequence is:
+
+```text
+penultimate immutable implementation tag
+    ↓
+Lean formalization against that exact frozen target
+    ↓
+cold/reconstructed formal verification pass
+    ↓
+prepare archival bundle and reserve Zenodo DOI
+    ↓
+final tag containing proof/archive material
+while frozen implementation remains unchanged
+    ↓
+publish Zenodo record linked to the final tag
+and the frozen target commit
+```
+
+The Zenodo record should retain enough material to identify and reconstruct:
+
+```text
+the frozen implementation target
+the final formal proof sources
+the proof toolchain
+the executed verification evidence
+the final repository tag
+the DOI/version metadata
+```
+
+## Restart Rule
+
+If a formal proof exposes an implementation defect that requires changing the frozen implementation:
+
+```text
+DO NOT patch under the freeze.
+Return to Phase 16.
+Fix and re-run the release lane.
+Cut a new penultimate tag.
+Restart formal verification.
+```
+
+## Exit Gate
+
+The project has:
+
+```text
+an immutable penultimate implementation tag
+a successful Lean verification against that exact target
+a final immutable release tag
+a Zenodo archival record binding the release and proof evidence
+```
+
+The final release claim must remain narrower than the exact invariants actually formalized and executed.
 
 ---
 
