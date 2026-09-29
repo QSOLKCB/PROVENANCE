@@ -22,7 +22,8 @@ fn print_help() {
     println!("PROVENANCE Phase 8 CLI");
     println!();
     println!("Usage:");
-    println!("  provenance <command> --store <path> --custody <path> [options]");
+    println!("  provenance <store-command> --store <path> --custody <path> [options]");
+    println!("  provenance <trust-command> [options]");
     println!("  provenance tui --store <path> --custody <path>");
     println!();
     println!("Commands:");
