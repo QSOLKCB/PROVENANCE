@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
+from unittest.mock import patch
 
 from provenance_core import (
     ClockAssurance,
@@ -27,7 +31,9 @@ from provenance_transfer.signing import (
     verify_transfer_signature,
 )
 from provenance_verify import (
+    verify_forensic_package,
     verify_transfer_bundle,
+    verify_transfer_bundle_fd,
     verify_transfer_receipt,
 )
 
@@ -59,14 +65,18 @@ def _sender_fingerprint(transfer: Path) -> str:
     return report.sender_key_fingerprint
 
 
-def _sender_package(root: Path) -> Path:
+def _sender_package(
+    root: Path,
+    *,
+    content: bytes = b"distributed custody evidence\n",
+) -> Path:
     store_root = root / "store"
     custody_root = root / "custody"
     store = LocalEvidenceStore(store_root)
     custody = LocalCustodyLedger(custody_root)
 
     artifact = store.put_artifact(
-        b"distributed custody evidence\n",
+        content,
         media_type="text/plain",
         retain_content=True,
     )
@@ -531,6 +541,250 @@ class DistributedCustodyTests(unittest.TestCase):
                     expected_sender_fingerprint=_sender_fingerprint(bundle.path),
                 )
             self.assertFalse((receiver / "custody").exists())
+
+    def test_receive_holds_verified_transfer_descriptor_during_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sender_a = root / "sender-a"
+            sender_b = root / "sender-b"
+            receiver = root / "receiver"
+            sender_a.mkdir()
+            sender_b.mkdir()
+            receiver.mkdir()
+            package_a = _sender_package(
+                sender_a,
+                content=b"descriptor-pinned package A\n",
+            )
+            package_b = _sender_package(
+                sender_b,
+                content=b"path-replacement package B\n",
+            )
+            sender_key = root / "sender-key"
+            receiver_key = receiver / "receiver-key"
+            _key(sender_key)
+            _key(receiver_key)
+
+            bundle_a = create_transfer_bundle(
+                package_a,
+                sender_a / "transfer-a",
+                source_system="sender",
+                destination_system="receiver",
+                sender_key=sender_key,
+            )
+            bundle_b = create_transfer_bundle(
+                package_b,
+                sender_b / "transfer-b",
+                source_system="sender",
+                destination_system="receiver",
+                sender_key=sender_key,
+            )
+            sender_fingerprint = _sender_fingerprint(bundle_a.path)
+            saved_a = sender_a / "verified-transfer-a"
+
+            real_verify_fd = verify_transfer_bundle_fd
+            swapped = False
+
+            def verify_then_swap(
+                transfer_fd: int,
+                *,
+                expected_sender_fingerprint: str | None = None,
+            ):
+                nonlocal swapped
+                report = real_verify_fd(
+                    transfer_fd,
+                    expected_sender_fingerprint=expected_sender_fingerprint,
+                )
+                if not swapped:
+                    os.rename(bundle_a.path, saved_a)
+                    os.rename(bundle_b.path, bundle_a.path)
+                    swapped = True
+                return report
+
+            with patch(
+                "provenance_transfer.protocol.verify_transfer_bundle_fd",
+                side_effect=verify_then_swap,
+            ):
+                receipt = receive_transfer(
+                    bundle_a.path,
+                    receiver / "package",
+                    receiver / "receipt",
+                    receiver / "custody",
+                    receiver_system="receiver",
+                    receiver_key=receiver_key,
+                    expected_sender_fingerprint=sender_fingerprint,
+                )
+
+            copied = verify_forensic_package(receiver / "package")
+            self.assertTrue(copied.integrity_verified, copied.errors)
+            self.assertEqual(
+                copied.package_identity,
+                bundle_a.package_identity,
+            )
+            self.assertNotEqual(
+                bundle_a.package_identity,
+                bundle_b.package_identity,
+            )
+            self.assertEqual(
+                receipt.package_identity,
+                bundle_a.package_identity,
+            )
+
+    def test_concurrent_first_acceptance_uses_one_custody_sequence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sender = root / "sender"
+            receiver = root / "receiver"
+            sender.mkdir()
+            receiver.mkdir()
+            package = _sender_package(sender)
+            sender_key = sender / "sender-key"
+            receiver_key = receiver / "receiver-key"
+            _key(sender_key)
+            _key(receiver_key)
+            bundle = create_transfer_bundle(
+                package,
+                sender / "transfer",
+                source_system="sender",
+                destination_system="receiver",
+                sender_key=sender_key,
+            )
+            sender_fingerprint = _sender_fingerprint(bundle.path)
+            shutil.copytree(bundle.path / "package", receiver / "package")
+
+            barrier = threading.Barrier(2)
+            real_ensure = LocalCustodyLedger.ensure_action_sequence
+
+            def synchronized_ensure(self, *args, **kwargs):
+                barrier.wait(timeout=10)
+                return real_ensure(self, *args, **kwargs)
+
+            clocks = (
+                ClockObservation(
+                    recorded_at="2026-09-30T00:00:01.000000Z",
+                    clock_source="receiver-a",
+                    clock_assurance=ClockAssurance.LOCAL,
+                ),
+                ClockObservation(
+                    recorded_at="2026-09-30T00:00:02.000000Z",
+                    clock_source="receiver-b",
+                    clock_assurance=ClockAssurance.LOCAL,
+                ),
+            )
+
+            def accept(index: int):
+                return receive_transfer(
+                    bundle.path,
+                    receiver / "package",
+                    receiver / f"receipt-{index}",
+                    receiver / "custody",
+                    receiver_system="receiver",
+                    receiver_key=receiver_key,
+                    expected_sender_fingerprint=sender_fingerprint,
+                    accepted_at=clocks[index],
+                )
+
+            with patch.object(
+                LocalCustodyLedger,
+                "ensure_action_sequence",
+                new=synchronized_ensure,
+            ):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(pool.map(accept, (0, 1)))
+
+            ledger = LocalCustodyLedger(receiver / "custody")
+            records = ledger.record_bytes_for_subject(
+                bundle.package_identity
+            )
+            self.assertEqual(len(records), 3)
+            self.assertEqual(
+                results[0].receipt_identity,
+                results[1].receipt_identity,
+            )
+            for result in results:
+                report = verify_transfer_receipt(
+                    result.path,
+                    transfer_bundle=bundle.path,
+                    received_package=receiver / "package",
+                    expected_sender_fingerprint=sender_fingerprint,
+                )
+                self.assertTrue(report.integrity_verified, report.errors)
+
+    def test_concurrent_receipt_publish_collision_is_duplicate_delivery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sender = root / "sender"
+            receiver = root / "receiver"
+            sender.mkdir()
+            receiver.mkdir()
+            package = _sender_package(sender)
+            sender_key = sender / "sender-key"
+            receiver_key = receiver / "receiver-key"
+            _key(sender_key)
+            _key(receiver_key)
+            bundle = create_transfer_bundle(
+                package,
+                sender / "transfer",
+                source_system="sender",
+                destination_system="receiver",
+                sender_key=sender_key,
+            )
+            sender_fingerprint = _sender_fingerprint(bundle.path)
+            seed = receive_transfer(
+                bundle.path,
+                receiver / "package",
+                receiver / "seed-receipt",
+                receiver / "custody",
+                receiver_system="receiver",
+                receiver_key=receiver_key,
+                expected_sender_fingerprint=sender_fingerprint,
+            )
+            shutil.rmtree(seed.path)
+
+            barrier = threading.Barrier(2)
+            from provenance_transfer import protocol as transfer_protocol
+
+            real_publish = transfer_protocol._publish_directory
+
+            def synchronized_publish(**kwargs):
+                if kwargs.get("label") == "transfer receipt":
+                    barrier.wait(timeout=10)
+                return real_publish(**kwargs)
+
+            def accept_again(_index: int):
+                return receive_transfer(
+                    bundle.path,
+                    receiver / "package",
+                    receiver / "receipt",
+                    receiver / "custody",
+                    receiver_system="receiver",
+                    receiver_key=receiver_key,
+                    expected_sender_fingerprint=sender_fingerprint,
+                )
+
+            with patch(
+                "provenance_transfer.protocol._publish_directory",
+                side_effect=synchronized_publish,
+            ):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(pool.map(accept_again, (0, 1)))
+
+            self.assertEqual(
+                {result.duplicate_delivery for result in results},
+                {False, True},
+            )
+            self.assertEqual(
+                results[0].receipt_identity,
+                results[1].receipt_identity,
+            )
+            ledger = LocalCustodyLedger(receiver / "custody")
+            self.assertEqual(
+                len(
+                    ledger.record_bytes_for_subject(
+                        bundle.package_identity
+                    )
+                ),
+                3,
+            )
 
     def test_receive_rejects_untrusted_sender_fingerprint_before_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
