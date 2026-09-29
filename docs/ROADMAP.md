@@ -1646,6 +1646,21 @@ The implementation intended for the archival release passes the complete release
 
 # Phase 17 — Immutable Candidate Freeze
 
+## Status
+
+```text
+COMPLETE
+```
+
+Frozen implementation baseline:
+
+```text
+tag:    v1.0.0
+commit: 0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742
+```
+
+The GitHub release is immutable. Later documentation, proof sources, archival metadata, and post-release maintenance on `main` do not redefine this target.
+
 ## Goal
 
 Create the **penultimate project tag** that freezes the final implementation before formal verification begins.
@@ -1694,6 +1709,37 @@ An immutable penultimate tag exists whose exact commit SHA is the declared targe
 ---
 
 # Phase 18 — Formal Verification and Archival Final Release
+
+## Status
+
+```text
+IN PROGRESS
+FORMAL PROOF SET IMPLEMENTED
+FINAL ARCHIVAL TAG / ZENODO PUBLICATION PENDING
+```
+
+Current archival identifier:
+
+```text
+DOI: 10.5281/zenodo.23043860
+```
+
+Reference formal toolchain:
+
+```text
+Lean 4.34.1
+```
+
+Implemented formal claims:
+
+```text
+FV-01 self-hash exclusion
+FV-02 append-only history extension
+FV-03 classification non-promotion
+FV-04 presentation non-interference
+```
+
+The proof set is intentionally narrower than whole-program verification and is bridged explicitly to named frozen runtime code/tests in `FORMAL_VERIFICATION.md`.
 
 ## Goal
 
@@ -1784,6 +1830,33 @@ Cut a new penultimate tag.
 Restart formal verification.
 ```
 
+## Reference implementation
+
+Phase 18 adds a self-contained Lean project under `formal/`, pinned to `leanprover/lean4:v4.34.1`.
+
+The dedicated `formal.yml` workflow:
+
+```text
+verifies v1.0.0 → frozen SHA
+checksum-verifies the official Lean 4.34.1 release bundle
+builds the Lean proof set
+runs bundled leanchecker
+rejects proof placeholders
+emits a machine-readable success attestation
+retains Lean/Lake versions and build/checker logs
+generates a proof-source evidence manifest
+archives the frozen v1.0.0 source
+archives the formal proof sources
+computes SHA-256 archive checksums
+retains the archive as a workflow artifact
+```
+
+The machine-readable target declaration is `formal/TARGET.json`.
+
+The archival evidence generator is `scripts/phase18_manifest.py`.
+
+See `FORMAL_VERIFICATION.md` and `ARCHIVAL_RELEASE.md`.
+
 ## Exit Gate
 
 The project has:
@@ -1794,6 +1867,8 @@ a successful Lean verification against that exact target
 a final immutable release tag
 a Zenodo archival record binding the release and proof evidence
 ```
+
+The first two conditions are executable within this repository. The final two remain pending until the Phase 18 archival tag is cut and DOI `10.5281/zenodo.23043860` is published with the generated archive material.
 
 The final release claim must remain narrower than the exact invariants actually formalized and executed.
 

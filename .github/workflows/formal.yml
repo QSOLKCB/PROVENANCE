@@ -1,0 +1,137 @@
+name: formal
+
+on:
+  pull_request:
+    paths:
+      - "formal/**"
+      - "scripts/phase18_manifest.py"
+      - "scripts/phase18_attestation.py"
+      - "docs/FORMAL_VERIFICATION.md"
+      - "docs/ARCHIVAL_RELEASE.md"
+      - "docs/ROADMAP.md"
+      - "docs/README.md"
+      - "README.md"
+      - "CITATION.cff"
+      - ".github/workflows/formal.yml"
+  push:
+    branches: ["main"]
+    tags: ["*"]
+    paths:
+      - "formal/**"
+      - "scripts/phase18_manifest.py"
+      - "scripts/phase18_attestation.py"
+      - "docs/FORMAL_VERIFICATION.md"
+      - "docs/ARCHIVAL_RELEASE.md"
+      - "docs/ROADMAP.md"
+      - "docs/README.md"
+      - "README.md"
+      - "CITATION.cff"
+      - ".github/workflows/formal.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FROZEN_TAG: "v1.0.0"
+  FROZEN_COMMIT: "0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742"
+  ZENODO_DOI: "10.5281/zenodo.23043860"
+  LEAN_TOOLCHAIN: "leanprover/lean4:v4.34.1"
+  LEAN_BUNDLE_URL: "https://github.com/leanprover/lean4/releases/download/v4.34.1/lean-4.34.1-linux.tar.zst"
+  LEAN_BUNDLE_SHA256: "47bf4bbd78f70c2e9670598ab7124d92b6efb7330ff33e5fbb4030f6fd72e4e4"
+
+jobs:
+  formal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Fresh checkout with tags
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify immutable implementation target
+        shell: sh
+        run: |
+          set -eu
+          actual="$(git rev-parse "$FROZEN_TAG^{commit}")"
+          test "$actual" = "$FROZEN_COMMIT"
+          git cat-file -e "$FROZEN_COMMIT^{commit}"
+          test "$(cat formal/lean-toolchain)" = "$LEAN_TOOLCHAIN"
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          target = json.loads(Path("formal/TARGET.json").read_text(encoding="utf-8"))
+          assert target["frozen_tag"] == "v1.0.0"
+          assert target["frozen_commit"] == "0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742"
+          assert target["doi"] == "10.5281/zenodo.23043860"
+          assert target["lean_toolchain"] == "leanprover/lean4:v4.34.1"
+          PY
+
+      - name: Install checksum-pinned Lean 4.34.1
+        shell: sh
+        run: |
+          set -eu
+          command -v curl
+          command -v zstd
+          archive="$RUNNER_TEMP/lean-4.34.1-linux.tar.zst"
+          root="$RUNNER_TEMP/lean-4.34.1"
+          curl -fL "$LEAN_BUNDLE_URL" -o "$archive"
+          printf '%s  %s\n' "$LEAN_BUNDLE_SHA256" "$archive" | sha256sum -c -
+          mkdir -p "$root"
+          tar --zstd -xf "$archive" -C "$root" --strip-components=1
+          printf '%s\n' "$root/bin" >> "$GITHUB_PATH"
+
+      - name: Build, independently check, and attest Lean proof set
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/phase18"
+          mkdir -p "$out"
+
+          lean --version | tee "$out/lean-version.txt"
+          lake --version | tee "$out/lake-version.txt"
+
+          (
+            cd formal
+            lake build 2>&1 | tee "$out/lake-build.log"
+            lake env leanchecker ProvenanceFormal 2>&1 | tee "$out/leanchecker.log"
+          )
+
+          python3 scripts/phase18_attestation.py             --output "$out/verification-attestation.json"             --lean-build-log "$out/lake-build.log"             --leanchecker-log "$out/leanchecker.log"             --lean-version-file "$out/lean-version.txt"             --lake-version-file "$out/lake-version.txt"
+
+          cat "$out/verification-attestation.json"
+
+      - name: Generate formal evidence manifest
+        shell: sh
+        run: |
+          set -eu
+          out="$RUNNER_TEMP/phase18"
+          python3 scripts/phase18_manifest.py             --output "$out/formal-evidence.json"             --verification-evidence "$out/verification-attestation.json"             --verification-evidence "$out/lean-version.txt"             --verification-evidence "$out/lake-version.txt"             --verification-evidence "$out/lake-build.log"             --verification-evidence "$out/leanchecker.log"
+          cat "$out/formal-evidence.json"
+
+      - name: Build archival source bundles
+        shell: sh
+        run: |
+          set -eu
+          out="$RUNNER_TEMP/phase18"
+          git archive             --format=tar.gz             --prefix=PROVENANCE-v1.0.0/             --output="$out/PROVENANCE-v1.0.0-source.tar.gz"             "$FROZEN_TAG"
+
+          git archive             --format=tar.gz             --prefix=PROVENANCE-phase18-formal/             --output="$out/PROVENANCE-phase18-formal-sources.tar.gz"             HEAD --             formal             docs/FORMAL_VERIFICATION.md             docs/ARCHIVAL_RELEASE.md             CITATION.cff             scripts/phase18_attestation.py             scripts/phase18_manifest.py             .github/workflows/formal.yml
+
+          (
+            cd "$out"
+            sha256sum               PROVENANCE-v1.0.0-source.tar.gz               PROVENANCE-phase18-formal-sources.tar.gz               formal-evidence.json               verification-attestation.json               lean-version.txt               lake-version.txt               lake-build.log               leanchecker.log               > SHA256SUMS
+            cat SHA256SUMS
+          )
+
+      - name: Upload Phase 18 archive evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: provenance-phase18-formal-archive
+          path: ${{ runner.temp }}/phase18
+          if-no-files-found: error
+          retention-days: 90

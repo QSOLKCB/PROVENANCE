@@ -1,0 +1,6 @@
+name = "provenance_formal"
+version = "1.0.0"
+defaultTargets = ["ProvenanceFormal"]
+
+[[lean_lib]]
+name = "ProvenanceFormal"

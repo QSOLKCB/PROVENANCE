@@ -9,7 +9,7 @@ The project is implemented through **Phase 16**. The immutable implementation ba
 **Start here:** [Getting Started](docs/GETTING_STARTED.md) · [Usage Instructions](docs/INSTRUCTIONS.md) · [Release Trust Lane](docs/RELEASE.md) · [Documentation](docs/README.md) · [Roadmap](docs/ROADMAP.md)
 
 [![Version](https://img.shields.io/badge/version-v1.0.0-4c1.svg)](https://github.com/QSOLKCB/PROVENANCE/releases/tag/v1.0.0)
-[![Phase](https://img.shields.io/badge/roadmap-Phase%2016%20implemented-2ea44f.svg)](docs/ROADMAP.md)
+[![Phase](https://img.shields.io/badge/roadmap-Phase%2018%20in%20progress-f59e0b.svg)](docs/ROADMAP.md)
 [![Core CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml)
 [![Verify CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml)
 [![Package CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml)
@@ -18,6 +18,7 @@ The project is implemented through **Phase 16**. The immutable implementation ba
 [![Privacy CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/privacy.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/privacy.yml)
 [![Transfer CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/transfer.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/transfer.yml)
 [![Full Release Lane](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/full.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/full.yml)
+[![Formal Verification](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/formal.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/formal.yml)
 [![Determinism](https://img.shields.io/badge/determinism-canonical%20SHA--256-0969da.svg)](docs/INVARIANTS.md)
 [![Verification](https://img.shields.io/badge/verification-independent-6f42c1.svg)](docs/BUNDLE.md)
 [![Custody](https://img.shields.io/badge/custody-append--only-b60205.svg)](docs/CUSTODY.md)
@@ -39,6 +40,7 @@ The project is implemented through **Phase 16**. The immutable implementation ba
 - **Selective disclosure** — redacted DERIVED artifacts with source digest lineage and optional source-bound transform recomputation.
 - **Distributed custody handoff** — signed offline transfer offers/receipts with receiver-local custody and explicit partial ordering.
 - **Release-grade trust lane** — fresh-checkout, pinned-toolchain full validation with complete tests and real Ollama integration.
+- **Formal proof set** — Lean 4.34.1 models four frozen invariants with an explicit runtime bridge and independent proof checks.
 - **Explicit uncertainty** — missing, digest-only, open-collection, and custody-gap states remain visible.
 
 ## Quick lifecycle
@@ -138,7 +140,20 @@ For formalization and archival claims, **`v1.0.0` / `0b1a2eea…` is the impleme
 
 Any future implementation, schema-semantic, verifier-semantic, or evidence-contract change must be treated as a new candidate rather than silently redefining `v1.0.0`.
 
-Formal verification and the final archival work proceed against this fixed baseline. See [Release Trust Lane](docs/RELEASE.md) and [Roadmap](docs/ROADMAP.md).
+Phase 17 is complete.
+
+Phase 18 is now **in progress**. The initial Lean proof set formalizes four narrow claims against the frozen baseline:
+
+```text
+FV-01 self-hash exclusion
+FV-02 append-only history extension
+FV-03 classification non-promotion
+FV-04 presentation non-interference
+```
+
+The proof toolchain is pinned to **Lean 4.34.1**, and the archival DOI is **10.5281/zenodo.23043860**.
+
+The proof does not claim whole-program verification. See [Formal Verification](docs/FORMAL_VERIFICATION.md), [Archival Release](docs/ARCHIVAL_RELEASE.md), [Release Trust Lane](docs/RELEASE.md), and [Roadmap](docs/ROADMAP.md).
 
 ## Documentation
 
@@ -159,6 +174,8 @@ Formal verification and the final archival work proceed against this fixed basel
 | Privacy & selective disclosure | [docs/PRIVACY.md](docs/PRIVACY.md) |
 | Distributed custody | [docs/TRANSFER.md](docs/TRANSFER.md) |
 | Release-grade trust lane | [docs/RELEASE.md](docs/RELEASE.md) |
+| Formal verification | [docs/FORMAL_VERIFICATION.md](docs/FORMAL_VERIFICATION.md) |
+| Archival release | [docs/ARCHIVAL_RELEASE.md](docs/ARCHIVAL_RELEASE.md) |
 | CLI/TUI | [docs/CLI.md](docs/CLI.md) |
 | MCP | [docs/MCP.md](docs/MCP.md) |
 | Read-only UI | [docs/UI.md](docs/UI.md) |
