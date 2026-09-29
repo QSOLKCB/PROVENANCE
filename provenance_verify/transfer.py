@@ -552,6 +552,7 @@ def verify_transfer_receipt(
     transfer_bundle: os.PathLike[str] | str | None = None,
     received_package: os.PathLike[str] | str | None = None,
     expected_sender_fingerprint: str | None = None,
+    _transfer_fd: int | None = None,
 ) -> TransferReceiptVerificationReport:
     checks: list[str] = []
     errors: list[str] = []
@@ -565,7 +566,9 @@ def verify_transfer_receipt(
     receiver_signature = "FAILED"
     receiver_custody = "FAILED"
     transfer_binding = (
-        "NOT_ATTEMPTED" if transfer_bundle is None else "FAILED"
+        "NOT_ATTEMPTED"
+        if transfer_bundle is None and _transfer_fd is None
+        else "FAILED"
     )
     package_binding = (
         "NOT_ATTEMPTED" if received_package is None else "FAILED"
@@ -807,12 +810,13 @@ def verify_transfer_receipt(
                 )
             )
 
-            if transfer_bundle is not None:
+            if transfer_bundle is not None or _transfer_fd is not None:
                 transfer_report = verify_transfer_bundle(
-                    transfer_bundle,
+                    transfer_bundle if transfer_bundle is not None else ".",
                     expected_sender_fingerprint=(
                         expected_sender_fingerprint
                     ),
+                    _transfer_fd=_transfer_fd,
                 )
                 if not transfer_report.integrity_verified:
                     errors.append(
