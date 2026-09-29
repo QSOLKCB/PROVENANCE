@@ -95,6 +95,8 @@ The MCP layer does not implement a second verifier.
 
 Copies the current immutable verified snapshot to a new destination directory, independently verifies the copy, and then appends EXPORTED custody for the manifest.
 
+The destination must not already exist and must be outside the live evidence store, custody ledger, and source snapshot tree. This prevents an export from recursively copying into itself or contaminating the evidence roots it is meant to preserve.
+
 This Phase 7 export is a snapshot-copy interface only. It does not claim to complete the later Phase 11 portable forensic-package contract, which may additionally package custody, schemas, verification metadata, and declared gaps.
 
 ---
