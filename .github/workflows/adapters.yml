@@ -1,0 +1,40 @@
+name: adapters
+
+on:
+  push:
+    paths:
+      - "provenance_adapters/**"
+      - "provenance_core/**"
+      - "provenance_store/**"
+      - "provenance_custody/**"
+      - "provenance_verify/**"
+      - "tests/test_generic_adapters.py"
+      - "ADAPTERS.md"
+      - "ROADMAP.md"
+      - ".github/workflows/adapters.yml"
+  pull_request:
+    paths:
+      - "provenance_adapters/**"
+      - "provenance_core/**"
+      - "provenance_store/**"
+      - "provenance_custody/**"
+      - "provenance_verify/**"
+      - "tests/test_generic_adapters.py"
+      - "ADAPTERS.md"
+      - "ROADMAP.md"
+      - ".github/workflows/adapters.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  adapters:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Phase 10 generic adapter tests
+        run: python -m unittest discover -s tests -p 'test_generic_adapters.py' -v
