@@ -12,6 +12,10 @@ import sys
 import tempfile
 import time
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from provenance_core import EvidenceClass, EventCore, EventEnvelope
 from provenance_custody import LocalCustodyLedger
 from provenance_export import create_forensic_package
