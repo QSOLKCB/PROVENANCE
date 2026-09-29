@@ -206,8 +206,6 @@ def transfer_bundle_core(
     offer_signature_identity: str,
     source_system: str,
     destination_system: str,
-    sender_transfer_custody_identity: str,
-    sender_custody_record_count: int,
     members: list[dict[str, object]],
 ) -> dict[str, Any]:
     for label, value in (
@@ -215,16 +213,10 @@ def transfer_bundle_core(
         ("evidence manifest identity", evidence_manifest_identity),
         ("offer identity", offer_identity_value),
         ("offer signature identity", offer_signature_identity),
-        ("sender transfer custody identity", sender_transfer_custody_identity),
     ):
         require_sha256_identity(value, label=label)
     source = _system(source_system, label="source_system")
     destination = _system(destination_system, label="destination_system")
-    if (
-        type(sender_custody_record_count) is not int
-        or sender_custody_record_count < 1
-    ):
-        raise ValueError("sender custody record count must be positive")
     if not isinstance(members, list):
         raise TypeError("transfer bundle members must be a list")
     return {
@@ -239,10 +231,6 @@ def transfer_bundle_core(
         "offer_signature_identity": offer_signature_identity,
         "source_system": source,
         "destination_system": destination,
-        "sender_transfer_custody_identity": (
-            sender_transfer_custody_identity
-        ),
-        "sender_custody_record_count": sender_custody_record_count,
         "members": members,
         "ordering": "PARTIAL",
     }
