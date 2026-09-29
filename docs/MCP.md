@@ -293,3 +293,15 @@ It is intentionally separate from `provenance.export`, whose Phase 7 contract re
 After successful package publication, MCP appends an `EXPORTED` custody record for the evidence manifest and binds its `related_identity` to the package identity.
 
 See `PACKAGE.md`.
+
+---
+
+# Phase 12 boundary — signing keys stay outside MCP
+
+Phase 12 does not add private-key signing tools to the MCP interface.
+
+Signing authority remains an explicit local operator capability exposed by the terminal CLI / Python producer API. Private keys are not accepted as MCP tool arguments and must not become ordinary evidence or custody payloads.
+
+The detached records themselves remain independently verifiable through the Phase 12 verifier contract.
+
+See `TRUST.md`.
