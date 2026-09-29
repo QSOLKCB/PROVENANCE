@@ -140,6 +140,21 @@ transformation         = VERIFIED
 
 Disclosure integrity remains a separate dimension. Supplying the wrong source package can make source binding/transformation fail without changing the fact that the disclosure's own hashes and lineage record are internally valid.
 
+## No-replace publication
+
+Selective disclosures are assembled in a hidden staging directory and published with a kernel-enforced no-replace rename.
+
+If another process creates the requested destination after the producer's initial absence check but before publication, publication fails with:
+
+~~~text
+disclosure destination must not already exist
+~~~
+
+The raced destination is not replaced or recursively cleaned up.
+
+After successful publication, the producer reopens the final name relative to the already-bound parent directory, requires its filesystem identity to equal the staged directory identity, and verifies through that descriptor.
+
+If the platform does not expose `renameat2(RENAME_NOREPLACE)`, the reference producer fails closed rather than falling back to overwrite-capable `rename()` semantics.
 ## Descriptor binding
 
 The producer holds the source package directory open, verifies that exact descriptor, reads source bytes through it, and verifies the staged disclosure against the same descriptor before atomic publication.
