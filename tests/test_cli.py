@@ -507,6 +507,197 @@ class ProvenanceCliTests(unittest.TestCase):
                 ),
             )
 
+    def test_phase15_distributed_transfer_cli_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sender = root / "sender"
+            receiver = root / "receiver"
+            sender.mkdir()
+            receiver.mkdir()
+            store = sender / "store"
+            custody = sender / "custody"
+            package = sender / "package"
+            transfer = sender / "transfer"
+            received_package = receiver / "package"
+            receipt = receiver / "receipt"
+            receiver_custody = receiver / "custody"
+            sender_key = sender / "sender-key"
+            receiver_key = receiver / "receiver-key"
+
+            recorded = _json_result(
+                _run(
+                    "record",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                    "--text",
+                    "phase15 distributed evidence",
+                    "--actor",
+                    "operator:sender",
+                    "--operation",
+                    "phase15.capture",
+                )
+            )
+            _json_result(
+                _run(
+                    "finalize",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                    "--scope",
+                    "closed",
+                )
+            )
+            packaged = _json_result(
+                _run(
+                    "package",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                    "--destination",
+                    str(package),
+                )
+            )
+
+            for key in (sender_key, receiver_key):
+                generated = subprocess.run(
+                    [
+                        "ssh-keygen",
+                        "-q",
+                        "-t",
+                        "ed25519",
+                        "-N",
+                        "",
+                        "-f",
+                        str(key),
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual(
+                    generated.returncode,
+                    0,
+                    generated.stderr,
+                )
+
+            created = _json_result(
+                _run(
+                    "transfer-create",
+                    "--package",
+                    str(package),
+                    "--source-system",
+                    "org-a/system-1",
+                    "--destination-system",
+                    "org-b/system-9",
+                    "--sender-key",
+                    str(sender_key),
+                    "--output",
+                    str(transfer),
+                )
+            )
+            self.assertEqual(
+                created["package_identity"],
+                packaged["package_identity"],
+            )
+            self.assertEqual(
+                created["verification"]["ordering"],
+                "PARTIAL",
+            )
+            self.assertEqual(
+                created["verification"]["sender_signature"],
+                "VERIFIED",
+            )
+
+            verified_transfer = _json_result(
+                _run(
+                    "verify-transfer",
+                    "--transfer",
+                    str(transfer),
+                )
+            )
+            self.assertTrue(
+                verified_transfer["integrity_verified"]
+            )
+
+            received = _json_result(
+                _run(
+                    "transfer-receive",
+                    "--transfer",
+                    str(transfer),
+                    "--package-destination",
+                    str(received_package),
+                    "--receipt",
+                    str(receipt),
+                    "--custody",
+                    str(receiver_custody),
+                    "--receiver-system",
+                    "org-b/system-9",
+                    "--receiver-key",
+                    str(receiver_key),
+                )
+            )
+            self.assertFalse(received["duplicate_delivery"])
+            self.assertEqual(
+                received["package_identity"],
+                packaged["package_identity"],
+            )
+            self.assertEqual(
+                received["verification"]["receiver_custody"],
+                "VERIFIED",
+            )
+            self.assertEqual(
+                received["verification"]["receiver_signature"],
+                "VERIFIED",
+            )
+
+            receipt_check = _json_result(
+                _run(
+                    "verify-receipt",
+                    "--receipt",
+                    str(receipt),
+                    "--transfer",
+                    str(transfer),
+                    "--package",
+                    str(received_package),
+                )
+            )
+            self.assertTrue(receipt_check["integrity_verified"])
+            self.assertEqual(
+                receipt_check["ordering"],
+                "PARTIAL",
+            )
+
+            duplicate = _json_result(
+                _run(
+                    "transfer-receive",
+                    "--transfer",
+                    str(transfer),
+                    "--package-destination",
+                    str(received_package),
+                    "--receipt",
+                    str(receipt),
+                    "--custody",
+                    str(receiver_custody),
+                    "--receiver-system",
+                    "org-b/system-9",
+                    "--receiver-key",
+                    str(receiver_key),
+                )
+            )
+            self.assertTrue(duplicate["duplicate_delivery"])
+            self.assertEqual(
+                duplicate["receipt_identity"],
+                received["receipt_identity"],
+            )
+            self.assertEqual(
+                recorded["artifact_identity"][:7],
+                "sha256:",
+            )
+
     def test_relative_paths_resolve_from_caller_working_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             caller = Path(tmp)
