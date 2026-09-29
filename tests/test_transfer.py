@@ -246,6 +246,122 @@ class DistributedCustodyTests(unittest.TestCase):
             self.assertEqual(before, after)
             self.assertEqual(len(after), 3)
 
+    def test_partial_receiver_custody_prefix_resumes_without_duplication(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sender = root / "sender"
+            receiver = root / "receiver"
+            sender.mkdir()
+            receiver.mkdir()
+            package = _sender_package(sender)
+            sender_key = sender / "sender-key"
+            receiver_key = receiver / "receiver-key"
+            _key(sender_key)
+            _key(receiver_key)
+
+            bundle = create_transfer_bundle(
+                package,
+                sender / "transfer",
+                source_system="sender",
+                destination_system="receiver",
+                sender_key=sender_key,
+            )
+            recovery_clock = ClockObservation(
+                recorded_at="2026-09-29T12:34:56.000000Z",
+                clock_source="receiver-recovery-clock",
+                clock_assurance=ClockAssurance.LOCAL,
+            )
+            ledger = LocalCustodyLedger(receiver / "custody")
+            first = ledger.append(
+                bundle.package_identity,
+                CustodyAction.CAPTURED,
+                actor="receiver",
+                source="sender",
+                related_identity=bundle.offer_identity,
+                clock=recovery_clock,
+            )
+
+            receipt = receive_transfer(
+                bundle.path,
+                receiver / "package",
+                receiver / "receipt",
+                receiver / "custody",
+                receiver_system="receiver",
+                receiver_key=receiver_key,
+                accepted_at=ClockObservation(
+                    recorded_at="2035-01-01T00:00:00.000000Z",
+                    clock_source="should-not-replace-recovery-clock",
+                    clock_assurance=ClockAssurance.LOCAL,
+                ),
+            )
+            report = verify_transfer_receipt(
+                receipt.path,
+                transfer_bundle=bundle.path,
+                received_package=receiver / "package",
+            )
+            self.assertTrue(report.integrity_verified, report.errors)
+            self.assertEqual(
+                report.accepted_at["recorded_at"],
+                recovery_clock.recorded_at,
+            )
+            records = ledger.record_bytes_for_subject(
+                bundle.package_identity
+            )
+            self.assertEqual(len(records), 3)
+            identities = {
+                str(
+                    __import__("json").loads(
+                        raw.decode("utf-8")
+                    )["custody_identity"]
+                )
+                for raw in records
+            }
+            self.assertIn(first.custody_identity, identities)
+
+    def test_duplicate_delivery_refuses_to_hide_live_custody_loss(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sender = root / "sender"
+            receiver = root / "receiver"
+            sender.mkdir()
+            receiver.mkdir()
+            package = _sender_package(sender)
+            sender_key = sender / "sender-key"
+            receiver_key = receiver / "receiver-key"
+            _key(sender_key)
+            _key(receiver_key)
+
+            bundle = create_transfer_bundle(
+                package,
+                sender / "transfer",
+                source_system="sender",
+                destination_system="receiver",
+                sender_key=sender_key,
+            )
+            receive_transfer(
+                bundle.path,
+                receiver / "package",
+                receiver / "receipt",
+                receiver / "custody",
+                receiver_system="receiver",
+                receiver_key=receiver_key,
+            )
+            shutil.rmtree(receiver / "custody")
+
+            with self.assertRaisesRegex(
+                TransferError,
+                "live receiver custody ledger is unavailable",
+            ):
+                receive_transfer(
+                    bundle.path,
+                    receiver / "package",
+                    receiver / "receipt",
+                    receiver / "custody",
+                    receiver_system="receiver",
+                    receiver_key=receiver_key,
+                )
+            self.assertFalse((receiver / "custody").exists())
+
     def test_wrong_receiver_is_rejected_without_local_custody(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
