@@ -31,12 +31,12 @@ _ENDPOINT_ACTOR = "ollama:local-endpoint"
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 _OBSERVATION_LOCK_NAME = ".ollama-observation.lock"
-_OBSERVATION_LOCKS_GUARD = threading.Lock()
+_OBSERVATION_LOCKS_GUARD = threading.RLock()
 _OBSERVATION_LOCKS: dict[
     tuple[int, int],
-    threading.Lock,
+    threading.RLock,
 ] = {}
-_OBSERVATION_LOCKS_HELD_FOR_FORK: tuple[threading.Lock, ...] = ()
+_OBSERVATION_LOCKS_HELD_FOR_FORK: tuple[threading.RLock, ...] = ()
 _OBSERVATION_AT_FORK_REGISTERED = globals().get(
     "_OBSERVATION_AT_FORK_REGISTERED",
     False,
@@ -190,13 +190,13 @@ def _failure_detail_bytes(
 
 def _process_observation_locks(
     keys: list[tuple[int, int]],
-) -> list[threading.Lock]:
+) -> list[threading.RLock]:
     with _OBSERVATION_LOCKS_GUARD:
-        locks: list[threading.Lock] = []
+        locks: list[threading.RLock] = []
         for key in keys:
             lock = _OBSERVATION_LOCKS.get(key)
             if lock is None:
-                lock = threading.Lock()
+                lock = threading.RLock()
                 _OBSERVATION_LOCKS[key] = lock
             locks.append(lock)
         return locks
@@ -204,7 +204,7 @@ def _process_observation_locks(
 
 def _process_observation_lock(
     key: tuple[int, int],
-) -> threading.Lock:
+) -> threading.RLock:
     return _process_observation_locks([key])[0]
 
 
@@ -212,7 +212,7 @@ def _before_observation_fork() -> None:
     global _OBSERVATION_LOCKS_HELD_FOR_FORK
 
     _OBSERVATION_LOCKS_GUARD.acquire()
-    acquired: list[threading.Lock] = []
+    acquired: list[threading.RLock] = []
     try:
         for key in sorted(_OBSERVATION_LOCKS):
             lock = _OBSERVATION_LOCKS[key]
@@ -244,7 +244,7 @@ def _after_observation_fork_child() -> None:
     # The child has only the forking thread. Discard every inherited
     # process-local mutex rather than attempting to reuse copied lock state.
     _OBSERVATION_LOCKS = {}
-    _OBSERVATION_LOCKS_GUARD = threading.Lock()
+    _OBSERVATION_LOCKS_GUARD = threading.RLock()
     _OBSERVATION_LOCKS_HELD_FOR_FORK = ()
 
 
@@ -269,7 +269,7 @@ def _observation_reservation(
         | os.O_CLOEXEC
     )
     root_fds: dict[tuple[int, int], int] = {}
-    process_locks: list[threading.Lock] = []
+    process_locks: list[threading.RLock] = []
     lock_fds: list[int] = []
 
     try:
