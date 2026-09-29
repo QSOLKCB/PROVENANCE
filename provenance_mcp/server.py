@@ -295,7 +295,7 @@ TOOLS: tuple[dict[str, Any], ...] = (
         "annotations": {
             "readOnlyHint": False,
             "destructiveHint": False,
-            "idempotentHint": True,
+            "idempotentHint": False,
         },
     },
     {
@@ -797,6 +797,21 @@ class ProvenanceMCPServer:
         if not parent.is_dir() or parent.is_symlink():
             raise ValueError(
                 "export destination parent must be an existing non-symlink directory"
+            )
+
+        protected_roots = (
+            Path(self.store.root).resolve(strict=True),
+            Path(self.custody.root).resolve(strict=True),
+            snapshot.resolve(strict=True),
+        )
+        for protected_root in protected_roots:
+            try:
+                destination.relative_to(protected_root)
+            except ValueError:
+                continue
+            raise ValueError(
+                "export destination must be outside the live store, "
+                "custody ledger, and source snapshot"
             )
 
         try:
