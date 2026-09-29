@@ -21,7 +21,10 @@ from provenance_verify import verify_bundle
 
 class _FakeOllamaHandler(BaseHTTPRequestHandler):
     received: bytes | None = None
+    request_count = 0
     status = 200
+    content_length_override: int | None = None
+    echo_request = False
     response_bytes = (
         b'{"model":"qwen2.5:0.5b","created_at":"2026-09-29T00:00:00Z",'
         b'"response":"PROVENANCE smoke response","done":true}'
@@ -32,12 +35,20 @@ class _FakeOllamaHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         length = int(self.headers["Content-Length"])
-        type(self).received = self.rfile.read(length)
+        received = self.rfile.read(length)
+        type(self).received = received
+        type(self).request_count += 1
+        body = received if type(self).echo_request else type(self).response_bytes
         self.send_response(type(self).status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(self.response_bytes)))
+        advertised = (
+            type(self).content_length_override
+            if type(self).content_length_override is not None
+            else len(body)
+        )
+        self.send_header("Content-Length", str(advertised))
         self.end_headers()
-        self.wfile.write(self.response_bytes)
+        self.wfile.write(body)
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -46,7 +57,10 @@ class _FakeOllamaHandler(BaseHTTPRequestHandler):
 class OllamaAdapterTests(unittest.TestCase):
     def setUp(self) -> None:
         _FakeOllamaHandler.received = None
+        _FakeOllamaHandler.request_count = 0
         _FakeOllamaHandler.status = 200
+        _FakeOllamaHandler.content_length_override = None
+        _FakeOllamaHandler.echo_request = False
         _FakeOllamaHandler.response_bytes = (
             b'{"model":"qwen2.5:0.5b","created_at":"2026-09-29T00:00:00Z",'
             b'"response":"PROVENANCE smoke response","done":true}'
@@ -146,7 +160,9 @@ class OllamaAdapterTests(unittest.TestCase):
         store: LocalEvidenceStore,
         custody: LocalCustodyLedger,
         response_bytes: bytes | None,
-    ) -> None:
+        failure_category: str | None = None,
+        failure_status: int | None = None,
+    ) -> dict[str, object]:
         snapshot = self._current_snapshot_path(store)
         report = verify_bundle(snapshot)
         self.assertTrue(report.integrity_verified, report.errors)
@@ -179,6 +195,34 @@ class OllamaAdapterTests(unittest.TestCase):
             )
             self.assertEqual(response_path.read_bytes(), response_bytes)
             self.assertIn(response_identity, failed[0]["outputs"])
+
+        detail: dict[str, object] | None = None
+        for identity in failed[0]["outputs"]:
+            artifact_path = (
+                snapshot
+                / "artifacts"
+                / "sha256"
+                / str(identity).split(":", 1)[1]
+            )
+            raw = artifact_path.read_bytes()
+            try:
+                value = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if (
+                isinstance(value, dict)
+                and value.get("schema") == "provenance.ollama-failure.v1"
+            ):
+                detail = value
+                break
+
+        self.assertIsNotNone(detail, failed[0])
+        assert detail is not None
+        if failure_category is not None:
+            self.assertEqual(detail["category"], failure_category)
+        if failure_status is not None:
+            self.assertEqual(detail["http_status"], failure_status)
+        return detail
 
     def test_malformed_response_is_retained_before_parse_failure(self) -> None:
         malformed = b'{"model":"qwen2.5:0.5b","response":'
@@ -301,10 +345,182 @@ class OllamaAdapterTests(unittest.TestCase):
                     custody=custody,
                 )
 
-            self._assert_failure_evidence(
+            detail = self._assert_failure_evidence(
                 store=store,
                 custody=custody,
                 response_bytes=failure,
+                failure_category="http_error",
+                failure_status=500,
+            )
+            self.assertIn("HTTP 500", str(detail["detail"]))
+
+    def test_truncated_http_response_retains_partial_bytes_and_failure(self) -> None:
+        partial = b"{}"
+        _FakeOllamaHandler.response_bytes = partial
+        _FakeOllamaHandler.content_length_override = 10
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalEvidenceStore(root / "store")
+            custody = LocalCustodyLedger(root / "custody")
+            adapter = OllamaAdapter(
+                f"http://127.0.0.1:{self.server.server_port}",
+                timeout_seconds=5,
+            )
+
+            with self.assertRaisesRegex(
+                OllamaAdapterError,
+                "truncated",
+            ):
+                adapter.observe_generate(
+                    model="m",
+                    prompt="p",
+                    store=store,
+                    custody=custody,
+                )
+
+            self._assert_failure_evidence(
+                store=store,
+                custody=custody,
+                response_bytes=partial,
+                failure_category="incomplete_read",
+                failure_status=200,
+            )
+
+    def test_excessive_json_nesting_finalizes_parse_failure(self) -> None:
+        nested = (
+            b'{"model":"m","response":"ok","done":true,"extra":'
+            + b"[" * 2000
+            + b"0"
+            + b"]" * 2000
+            + b"}"
+        )
+        _FakeOllamaHandler.response_bytes = nested
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalEvidenceStore(root / "store")
+            custody = LocalCustodyLedger(root / "custody")
+            adapter = OllamaAdapter(
+                f"http://127.0.0.1:{self.server.server_port}",
+                timeout_seconds=5,
+            )
+
+            with self.assertRaisesRegex(
+                OllamaAdapterError,
+                "nesting depth",
+            ):
+                adapter.observe_generate(
+                    model="m",
+                    prompt="p",
+                    store=store,
+                    custody=custody,
+                )
+
+            self._assert_failure_evidence(
+                store=store,
+                custody=custody,
+                response_bytes=nested,
+                failure_category="response_invalid",
+                failure_status=200,
+            )
+
+    def test_echoed_request_bytes_do_not_conflict_on_artifact_metadata(self) -> None:
+        _FakeOllamaHandler.echo_request = True
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalEvidenceStore(root / "store")
+            custody = LocalCustodyLedger(root / "custody")
+            adapter = OllamaAdapter(
+                f"http://127.0.0.1:{self.server.server_port}",
+                timeout_seconds=5,
+            )
+
+            with self.assertRaisesRegex(
+                OllamaAdapterError,
+                "response field",
+            ):
+                adapter.observe_generate(
+                    model="m",
+                    prompt="p",
+                    store=store,
+                    custody=custody,
+                )
+
+            request_bytes = _FakeOllamaHandler.received
+            self.assertIsNotNone(request_bytes)
+            assert request_bytes is not None
+            self._assert_failure_evidence(
+                store=store,
+                custody=custody,
+                response_bytes=request_bytes,
+                failure_category="response_invalid",
+                failure_status=200,
+            )
+            self.assertEqual(store.artifact_count, 2)
+
+    def test_repeated_observation_requires_fresh_evidence_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalEvidenceStore(root / "store")
+            custody = LocalCustodyLedger(root / "custody")
+            adapter = OllamaAdapter(
+                f"http://127.0.0.1:{self.server.server_port}",
+                timeout_seconds=5,
+            )
+
+            adapter.observe_generate(
+                model="qwen2.5:0.5b",
+                prompt="same",
+                store=store,
+                custody=custody,
+            )
+            self.assertEqual(_FakeOllamaHandler.request_count, 1)
+
+            with self.assertRaisesRegex(
+                OllamaAdapterError,
+                "requires a fresh store and custody ledger",
+            ):
+                adapter.observe_generate(
+                    model="qwen2.5:0.5b",
+                    prompt="same",
+                    store=store,
+                    custody=custody,
+                )
+
+            self.assertEqual(_FakeOllamaHandler.request_count, 1)
+
+    def test_zero_length_http_error_body_is_retained(self) -> None:
+        _FakeOllamaHandler.status = 500
+        _FakeOllamaHandler.response_bytes = b""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = LocalEvidenceStore(root / "store")
+            custody = LocalCustodyLedger(root / "custody")
+            adapter = OllamaAdapter(
+                f"http://127.0.0.1:{self.server.server_port}",
+                timeout_seconds=5,
+            )
+
+            with self.assertRaisesRegex(
+                OllamaAdapterError,
+                "HTTP 500",
+            ):
+                adapter.observe_generate(
+                    model="m",
+                    prompt="p",
+                    store=store,
+                    custody=custody,
+                )
+
+            self._assert_failure_evidence(
+                store=store,
+                custody=custody,
+                response_bytes=b"",
+                failure_category="http_error",
+                failure_status=500,
             )
 
     def test_response_capture_custody_actor_is_adapter(self) -> None:
