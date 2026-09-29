@@ -9,8 +9,8 @@ on:
       - "provenance_custody/**"
       - "provenance_verify/**"
       - "tests/test_ui.py"
-      - "UI.md"
-      - "ROADMAP.md"
+      - "docs/UI.md"
+      - "docs/ROADMAP.md"
       - ".github/workflows/ui.yml"
   pull_request:
     paths:
@@ -20,8 +20,8 @@ on:
       - "provenance_custody/**"
       - "provenance_verify/**"
       - "tests/test_ui.py"
-      - "UI.md"
-      - "ROADMAP.md"
+      - "docs/UI.md"
+      - "docs/ROADMAP.md"
       - ".github/workflows/ui.yml"
 
 permissions:
