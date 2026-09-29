@@ -727,6 +727,10 @@ See [CUSTODY.md](CUSTODY.md) for the Phase 4 append-only custody and clock-obser
 
 See [OLLAMA.md](OLLAMA.md) for the Phase 5 local Ollama observation contract and Phase 6 real-model CI boundary.
 
+See [MCP.md](MCP.md) for the Phase 7 stdio MCP interface contract.
+
+See [CLI.md](CLI.md) for the Phase 8 Rust terminal CLI/TUI contract.
+
 ---
 
 # Implementation Roadmap
@@ -752,7 +756,11 @@ Phase 6  Ollama GitHub Actions smoke test
    ↓
 Phase 7  MCP
    ↓
-CLI / UI / additional adapters
+Phase 8  Rust terminal CLI/TUI
+   ↓
+Phase 9  read-only local viewer
+   ↓
+additional adapters
 ```
 
 The full roadmap, exit gates, CI progression, and later trust/privacy/distributed phases are defined in [ROADMAP.md](ROADMAP.md).
@@ -811,7 +819,7 @@ That is the target.
 
 # Status
 
-**Bootstrap / Phase 6 implementation.**
+**Bootstrap / Phase 8 implementation.**
 
 The constitutional and architectural foundation is in place. The first executable module is now `provenance_core`, covering the initial Phase 1 surface:
 
@@ -837,7 +845,9 @@ The first real-system adapter is now implemented in `provenance_adapters` for lo
 
 A dedicated Ollama Actions lane launches independent small-model instances on clean runners and verifies both successful evidence capture and retained-byte tamper detection.
 
-MCP, the Rust TUI/CLI, the local pure-HTML/CSS/JS viewer, and generic/provider adapters remain later roadmap phases.
+The stdio MCP interface and the Rust terminal CLI/TUI are now implemented. The CLI exposes record, inspect, verify, finalize, export, and a keyboard-first slash-command palette while delegating evidence semantics and independent verification to the existing modules. MCP and CLI share one hardened operational working-state journal so acknowledged pending evidence cannot silently diverge between interfaces.
+
+The local pure-HTML/CSS/JS viewer and generic/provider adapters remain later roadmap phases.
 
 Interfaces and compatibility guarantees should still be considered unstable until explicitly versioned and released.
 
