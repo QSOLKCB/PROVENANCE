@@ -41,6 +41,7 @@ from provenance_verify import (
 )
 from provenance_verify.transfer import (
     verify_transfer_bundle,
+    verify_transfer_bundle_fd,
     verify_transfer_receipt,
 )
 
@@ -139,6 +140,8 @@ def _publish_directory(
 def _copy_package_directory(
     source_package: Path,
     destination: Path,
+    *,
+    source_package_fd: int | None = None,
 ) -> tuple[Path, tuple[int, int]]:
     if destination.exists() or destination.is_symlink():
         report = verify_forensic_package(destination)
@@ -162,7 +165,11 @@ def _copy_package_directory(
             dir_fd=parent_fd,
         )
         staging_identity = _directory_identity(staging_fd)
-        source_fd = os.open(source_package, _directory_flags())
+        source_fd = (
+            os.open(source_package, _directory_flags())
+            if source_package_fd is None
+            else os.dup(source_package_fd)
+        )
         try:
             _copy_tree(
                 source_fd,
@@ -183,14 +190,24 @@ def _copy_package_directory(
                 + "; ".join(staged.errors)
             )
 
-        final = _publish_directory(
-            parent=parent,
-            parent_fd=parent_fd,
-            staging_name=staging_name,
-            destination_name=destination.name,
-            staging_identity=staging_identity,
-            label="received package",
-        )
+        try:
+            final = _publish_directory(
+                parent=parent,
+                parent_fd=parent_fd,
+                staging_name=staging_name,
+                destination_name=destination.name,
+                staging_identity=staging_identity,
+                label="received package",
+            )
+        except TransferError:
+            if destination.exists() or destination.is_symlink():
+                existing = verify_forensic_package(destination)
+                if existing.integrity_verified:
+                    _remove_tree_at(parent_fd, staging_name)
+                    os.fsync(parent_fd)
+                    created = False
+                    return destination, _path_identity(destination)
+            raise
         created = False
         final_report = verify_forensic_package(final)
         if not final_report.integrity_verified:
@@ -533,346 +550,401 @@ def receive_transfer(
     *,
     receiver_system: str,
     receiver_key: Path | str,
+    expected_sender_fingerprint: str,
     accepted_at: ClockObservation | None = None,
 ) -> TransferReceipt:
     """Accept an offline transfer exactly once; duplicates are idempotent."""
 
-    transfer_path = Path(transfer_dir).expanduser()
-    transfer_report = verify_transfer_bundle(transfer_path)
-    if not transfer_report.integrity_verified:
-        raise TransferError(
-            "transfer bundle failed verification: "
-            + "; ".join(transfer_report.errors)
-        )
-    if transfer_report.destination_system != receiver_system:
-        raise TransferError(
-            "transfer is addressed to a different destination system"
-        )
-    assert transfer_report.transfer_bundle_identity is not None
-    assert transfer_report.offer_identity is not None
-    assert transfer_report.package_identity is not None
-    assert transfer_report.source_system is not None
-
-    package_dest = Path(package_destination).expanduser()
-    receipt_dest = Path(receipt_destination).expanduser()
-    custody_dest = Path(receiver_custody_root).expanduser()
-    transfer_resolved = transfer_path.resolve(strict=True)
-
-    package_parent = package_dest.parent.resolve(strict=True)
-    receipt_parent = receipt_dest.parent.resolve(strict=True)
-    custody_parent = custody_dest.parent.resolve(strict=True)
-    package_candidate = package_parent / package_dest.name
-    receipt_candidate = receipt_parent / receipt_dest.name
-    custody_candidate = custody_parent / custody_dest.name
-
-    for label, candidate in (
-        ("received package", package_candidate),
-        ("receipt", receipt_candidate),
-        ("receiver custody", custody_candidate),
+    if (
+        not isinstance(expected_sender_fingerprint, str)
+        or not expected_sender_fingerprint
+        or expected_sender_fingerprint.strip()
+        != expected_sender_fingerprint
     ):
-        if _paths_overlap(candidate, transfer_resolved):
-            raise TransferError(
-                f"{label} destination must be outside the transfer bundle"
-            )
-
-    if _paths_overlap(package_candidate, receipt_candidate):
         raise TransferError(
-            "received package and receipt destinations must be disjoint"
-        )
-    if _paths_overlap(package_candidate, custody_candidate):
-        raise TransferError(
-            "received package and receiver custody destinations must be disjoint"
-        )
-    if _paths_overlap(receipt_candidate, custody_candidate):
-        raise TransferError(
-            "receipt and receiver custody destinations must be disjoint"
+            "an independently supplied expected sender fingerprint is required"
         )
 
-    if receipt_dest.exists() or receipt_dest.is_symlink():
-        existing = verify_transfer_receipt(
-            receipt_dest,
-            transfer_bundle=transfer_path,
-            received_package=package_dest,
-        )
-        if not existing.integrity_verified:
-            raise TransferError(
-                "existing receipt destination is not a valid duplicate receipt: "
-                + "; ".join(existing.errors)
-            )
-        if existing.destination_system != receiver_system:
-            raise TransferError(
-                "existing receipt belongs to a different receiver"
-            )
-        custody_root_path = Path(receiver_custody_root).expanduser()
-        if not custody_root_path.is_dir() or custody_root_path.is_symlink():
-            raise TransferError(
-                "live receiver custody ledger is unavailable for duplicate delivery"
-            )
-        receipt_value = _canonical_file(receipt_dest / "receipt.json")
-        receipt_core_value = receipt_value.get("core")
-        if not isinstance(receipt_core_value, dict):
-            raise TransferError("existing receipt core is malformed")
-        declared_ids = set(
-            receipt_core_value.get("receiver_custody_identities", [])
-        )
-        live_ledger = LocalCustodyLedger(custody_root_path)
-        live_records = live_ledger.record_bytes_for_subject(
-            transfer_report.package_identity
-        )
-        live_ids = {
-            str(parse_canonical_json_bytes(raw)["custody_identity"])
-            for raw in live_records
-        }
-        if not declared_ids.issubset(live_ids):
-            raise TransferError(
-                "live receiver custody ledger no longer contains the "
-                "acknowledgements bound by the existing receipt"
-            )
-        assert existing.receipt_identity is not None
-        return TransferReceipt(
-            path=receipt_dest,
-            receipt_identity=existing.receipt_identity,
-            transfer_bundle_identity=(
-                transfer_report.transfer_bundle_identity
-            ),
-            offer_identity=transfer_report.offer_identity,
-            package_identity=transfer_report.package_identity,
-            duplicate_delivery=True,
-        )
+    transfer_path = Path(transfer_dir).expanduser()
+    try:
+        transfer_fd = os.open(transfer_path, _directory_flags())
+    except OSError as exc:
+        raise TransferError(
+            f"transfer bundle cannot be opened safely: {exc}"
+        ) from exc
 
-    embedded_package = transfer_path / "package"
-    if package_dest.exists() or package_dest.is_symlink():
-        existing_package = verify_forensic_package(package_dest)
-        if (
-            not existing_package.integrity_verified
-            or existing_package.package_identity
-            != transfer_report.package_identity
+    try:
+        transfer_report = verify_transfer_bundle_fd(
+            transfer_fd,
+            expected_sender_fingerprint=expected_sender_fingerprint,
+        )
+        if not transfer_report.integrity_verified:
+            raise TransferError(
+                "transfer bundle failed verification: "
+                + "; ".join(transfer_report.errors)
+            )
+        if transfer_report.sender_identity_binding != "VERIFIED":
+            raise TransferError(
+                "transfer sender identity was not bound to the expected fingerprint"
+            )
+        if transfer_report.destination_system != receiver_system:
+            raise TransferError(
+                "transfer is addressed to a different destination system"
+            )
+        assert transfer_report.transfer_bundle_identity is not None
+        assert transfer_report.offer_identity is not None
+        assert transfer_report.package_identity is not None
+        assert transfer_report.source_system is not None
+
+        package_dest = Path(package_destination).expanduser()
+        receipt_dest = Path(receipt_destination).expanduser()
+        custody_dest = Path(receiver_custody_root).expanduser()
+        transfer_resolved = transfer_path.resolve(strict=True)
+
+        package_parent = package_dest.parent.resolve(strict=True)
+        receipt_parent = receipt_dest.parent.resolve(strict=True)
+        custody_parent = custody_dest.parent.resolve(strict=True)
+        package_candidate = package_parent / package_dest.name
+        receipt_candidate = receipt_parent / receipt_dest.name
+        custody_candidate = custody_parent / custody_dest.name
+
+        for label, candidate in (
+            ("received package", package_candidate),
+            ("receipt", receipt_candidate),
+            ("receiver custody", custody_candidate),
         ):
+            if _paths_overlap(candidate, transfer_resolved):
+                raise TransferError(
+                    f"{label} destination must be outside the transfer bundle"
+                )
+
+        if _paths_overlap(package_candidate, receipt_candidate):
             raise TransferError(
-                "existing received package destination conflicts with transfer"
+                "received package and receipt destinations must be disjoint"
             )
-    else:
-        copied, _identity = _copy_package_directory(
-            embedded_package,
-            package_dest,
-        )
-        copied_report = verify_forensic_package(copied)
-        if (
-            not copied_report.integrity_verified
-            or copied_report.package_identity
-            != transfer_report.package_identity
-        ):
+        if _paths_overlap(package_candidate, custody_candidate):
             raise TransferError(
-                "received package copy does not match transfer subject"
+                "received package and receiver custody destinations must be disjoint"
+            )
+        if _paths_overlap(receipt_candidate, custody_candidate):
+            raise TransferError(
+                "receipt and receiver custody destinations must be disjoint"
             )
 
-    ledger = LocalCustodyLedger(receiver_custody_root)
-    existing_records = ledger.record_bytes_for_subject(
-        transfer_report.package_identity
-    )
-    clock = _existing_acceptance_clock(
-        existing_records,
-        offer_identity_value=transfer_report.offer_identity,
-        receiver_system=receiver_system,
-        source_system=transfer_report.source_system,
-    ) or accepted_at or observe_clock()
-    existing_actions = _existing_acceptance_actions(
-        existing_records,
-        offer_identity_value=transfer_report.offer_identity,
-        receiver_system=receiver_system,
-        source_system=transfer_report.source_system,
-    )
-    expected_actions = (
-        CustodyAction.CAPTURED,
-        CustodyAction.STORED,
-        CustodyAction.VERIFIED,
-    )
-    for action in expected_actions[len(existing_actions):]:
-        ledger.append(
+        def _verified_duplicate_receipt() -> TransferReceipt:
+            existing = verify_transfer_receipt(
+                receipt_dest,
+                transfer_bundle=transfer_path,
+                received_package=package_dest,
+                expected_sender_fingerprint=expected_sender_fingerprint,
+                _transfer_fd=transfer_fd,
+            )
+            if not existing.integrity_verified:
+                raise TransferError(
+                    "existing receipt destination is not a valid duplicate receipt: "
+                    + "; ".join(existing.errors)
+                )
+            if existing.destination_system != receiver_system:
+                raise TransferError(
+                    "existing receipt belongs to a different receiver"
+                )
+            custody_root_path = Path(receiver_custody_root).expanduser()
+            if (
+                not custody_root_path.is_dir()
+                or custody_root_path.is_symlink()
+            ):
+                raise TransferError(
+                    "live receiver custody ledger is unavailable for duplicate delivery"
+                )
+            receipt_value = _canonical_file(receipt_dest / "receipt.json")
+            receipt_core_value = receipt_value.get("core")
+            if not isinstance(receipt_core_value, dict):
+                raise TransferError("existing receipt core is malformed")
+            declared_ids = set(
+                receipt_core_value.get("receiver_custody_identities", [])
+            )
+            live_ledger = LocalCustodyLedger(custody_root_path)
+            live_records = live_ledger.record_bytes_for_subject(
+                transfer_report.package_identity
+            )
+            live_ids = {
+                str(parse_canonical_json_bytes(raw)["custody_identity"])
+                for raw in live_records
+            }
+            if not declared_ids.issubset(live_ids):
+                raise TransferError(
+                    "live receiver custody ledger no longer contains the "
+                    "acknowledgements bound by the existing receipt"
+                )
+            assert existing.receipt_identity is not None
+            return TransferReceipt(
+                path=receipt_dest,
+                receipt_identity=existing.receipt_identity,
+                transfer_bundle_identity=(
+                    transfer_report.transfer_bundle_identity
+                ),
+                offer_identity=transfer_report.offer_identity,
+                package_identity=transfer_report.package_identity,
+                duplicate_delivery=True,
+            )
+
+        if receipt_dest.exists() or receipt_dest.is_symlink():
+            return _verified_duplicate_receipt()
+
+        embedded_package = transfer_path / "package"
+        if package_dest.exists() or package_dest.is_symlink():
+            existing_package = verify_forensic_package(package_dest)
+            if (
+                not existing_package.integrity_verified
+                or existing_package.package_identity
+                != transfer_report.package_identity
+            ):
+                raise TransferError(
+                    "existing received package destination conflicts with transfer"
+                )
+        else:
+            try:
+                embedded_package_fd = os.open(
+                    "package",
+                    _directory_flags(),
+                    dir_fd=transfer_fd,
+                )
+            except OSError as exc:
+                raise TransferError(
+                    f"embedded transfer package cannot be opened safely: {exc}"
+                ) from exc
+            try:
+                copied, _identity = _copy_package_directory(
+                    embedded_package,
+                    package_dest,
+                    source_package_fd=embedded_package_fd,
+                )
+            finally:
+                os.close(embedded_package_fd)
+            copied_report = verify_forensic_package(copied)
+            if (
+                not copied_report.integrity_verified
+                or copied_report.package_identity
+                != transfer_report.package_identity
+            ):
+                raise TransferError(
+                    "received package copy does not match transfer subject"
+                )
+
+        ledger = LocalCustodyLedger(receiver_custody_root)
+        requested_clock = accepted_at or observe_clock()
+        expected_actions = (
+            CustodyAction.CAPTURED,
+            CustodyAction.STORED,
+            CustodyAction.VERIFIED,
+        )
+        receiver_records = ledger.ensure_action_sequence(
             transfer_report.package_identity,
-            action,
+            expected_actions,
             actor=receiver_system,
             source=transfer_report.source_system,
             related_identity=transfer_report.offer_identity,
-            clock=clock,
+            clock=requested_clock,
+        )
+        clock = _existing_acceptance_clock(
+            receiver_records,
+            offer_identity_value=transfer_report.offer_identity,
+            receiver_system=receiver_system,
+            source_system=transfer_report.source_system,
+        )
+        if clock is None:
+            raise TransferError(
+                "receiver acknowledgement custody clock is unavailable"
+            )
+
+        custody_ids: list[str] = []
+        for raw in receiver_records:
+            value = parse_canonical_json_bytes(raw)
+            custody_ids.append(str(value["custody_identity"]))
+
+        receipt_core_value = receipt_core(
+            transfer_bundle_identity_value=(
+                transfer_report.transfer_bundle_identity
+            ),
+            offer_identity_value=transfer_report.offer_identity,
+            package_identity=transfer_report.package_identity,
+            source_system=transfer_report.source_system,
+            destination_system=receiver_system,
+            accepted_at=clock,
+            receiver_custody_identities=custody_ids,
+        )
+        receipt_identity_value = receipt_identity(receipt_core_value)
+        receipt = {
+            "core": receipt_core_value,
+            "receipt_identity": receipt_identity_value,
+            "self_hash_exclusion": "receipt_identity",
+        }
+        signature = sign_transfer_envelope(
+            receipt,
+            role="receiver",
+            subject_kind="transfer_receipt",
+            subject_identity=receipt_identity_value,
+            key_file=receiver_key,
         )
 
-    receiver_records = ledger.record_bytes_for_subject(
-        transfer_report.package_identity
-    )
-    custody_ids: list[str] = []
-    for raw in receiver_records:
-        value = parse_canonical_json_bytes(raw)
-        custody_ids.append(str(value["custody_identity"]))
-
-    receipt_core_value = receipt_core(
-        transfer_bundle_identity_value=(
-            transfer_report.transfer_bundle_identity
-        ),
-        offer_identity_value=transfer_report.offer_identity,
-        package_identity=transfer_report.package_identity,
-        source_system=transfer_report.source_system,
-        destination_system=receiver_system,
-        accepted_at=clock,
-        receiver_custody_identities=custody_ids,
-    )
-    receipt_identity_value = receipt_identity(receipt_core_value)
-    receipt = {
-        "core": receipt_core_value,
-        "receipt_identity": receipt_identity_value,
-        "self_hash_exclusion": "receipt_identity",
-    }
-    signature = sign_transfer_envelope(
-        receipt,
-        role="receiver",
-        subject_kind="transfer_receipt",
-        subject_identity=receipt_identity_value,
-        key_file=receiver_key,
-    )
-
-    if receipt_dest.name in {"", ".", ".."}:
-        raise TransferError("receipt destination name is invalid")
-    if receipt_dest.exists() or receipt_dest.is_symlink():
-        raise TransferError("receipt destination must not already exist")
-    parent = receipt_dest.parent.resolve(strict=True)
-    parent_fd = os.open(parent, _directory_flags())
-    staging_name = f".{receipt_dest.name}.{uuid.uuid4().hex}.tmp"
-    created = False
-    try:
-        os.mkdir(staging_name, mode=0o700, dir_fd=parent_fd)
-        created = True
-        staging_fd = os.open(
-            staging_name,
-            _directory_flags(),
-            dir_fd=parent_fd,
-        )
-        staging_identity = _directory_identity(staging_fd)
+        if receipt_dest.name in {"", ".", ".."}:
+            raise TransferError("receipt destination name is invalid")
+        if receipt_dest.exists() or receipt_dest.is_symlink():
+            return _verified_duplicate_receipt()
+        parent = receipt_dest.parent.resolve(strict=True)
+        parent_fd = os.open(parent, _directory_flags())
+        staging_name = f".{receipt_dest.name}.{uuid.uuid4().hex}.tmp"
+        created = False
         try:
-            os.mkdir(
-                "receiver_custody",
-                mode=0o700,
-                dir_fd=staging_fd,
-            )
-            custody_parent = os.open(
-                "receiver_custody",
+            os.mkdir(staging_name, mode=0o700, dir_fd=parent_fd)
+            created = True
+            staging_fd = os.open(
+                staging_name,
                 _directory_flags(),
-                dir_fd=staging_fd,
+                dir_fd=parent_fd,
             )
+            staging_identity = _directory_identity(staging_fd)
             try:
-                os.mkdir("sha256", mode=0o700, dir_fd=custody_parent)
-                custody_fd = os.open(
-                    "sha256",
-                    _directory_flags(),
-                    dir_fd=custody_parent,
+                os.mkdir(
+                    "receiver_custody",
+                    mode=0o700,
+                    dir_fd=staging_fd,
                 )
-                try:
-                    for raw in receiver_records:
-                        value = parse_canonical_json_bytes(raw)
-                        identity = str(value["custody_identity"])
-                        name = identity.split(":", 1)[1] + ".json"
-                        fd = os.open(
-                            name,
-                            os.O_WRONLY
-                            | os.O_CREAT
-                            | os.O_EXCL
-                            | os.O_NOFOLLOW
-                            | os.O_CLOEXEC,
-                            0o600,
-                            dir_fd=custody_fd,
-                        )
-                        try:
-                            _write_all(fd, raw)
-                            os.fsync(fd)
-                        finally:
-                            os.close(fd)
-                    os.fsync(custody_fd)
-                finally:
-                    os.close(custody_fd)
-            finally:
-                os.close(custody_parent)
-
-            for name, data in (
-                ("receipt.json", canonical_json_bytes(receipt)),
-                (
-                    "receipt.signature.json",
-                    canonical_json_bytes(signature),
-                ),
-            ):
-                fd = os.open(
-                    name,
-                    os.O_WRONLY
-                    | os.O_CREAT
-                    | os.O_EXCL
-                    | os.O_NOFOLLOW
-                    | os.O_CLOEXEC,
-                    0o600,
+                custody_parent_fd = os.open(
+                    "receiver_custody",
+                    _directory_flags(),
                     dir_fd=staging_fd,
                 )
                 try:
-                    _write_all(fd, data)
-                    os.fsync(fd)
+                    os.mkdir("sha256", mode=0o700, dir_fd=custody_parent_fd)
+                    custody_fd = os.open(
+                        "sha256",
+                        _directory_flags(),
+                        dir_fd=custody_parent_fd,
+                    )
+                    try:
+                        for raw in receiver_records:
+                            value = parse_canonical_json_bytes(raw)
+                            identity = str(value["custody_identity"])
+                            name = identity.split(":", 1)[1] + ".json"
+                            fd = os.open(
+                                name,
+                                os.O_WRONLY
+                                | os.O_CREAT
+                                | os.O_EXCL
+                                | os.O_NOFOLLOW
+                                | os.O_CLOEXEC,
+                                0o600,
+                                dir_fd=custody_fd,
+                            )
+                            try:
+                                _write_all(fd, raw)
+                                os.fsync(fd)
+                            finally:
+                                os.close(fd)
+                        os.fsync(custody_fd)
+                    finally:
+                        os.close(custody_fd)
                 finally:
-                    os.close(fd)
-            os.fsync(staging_fd)
-        finally:
-            os.close(staging_fd)
+                    os.close(custody_parent_fd)
 
-        staged_path = parent / staging_name
-        staged_report = verify_transfer_receipt(
-            staged_path,
-            transfer_bundle=transfer_path,
-            received_package=package_dest,
-        )
-        if (
-            not staged_report.integrity_verified
-            or staged_report.receipt_identity
-            != receipt_identity_value
-        ):
-            raise TransferError(
-                "staged transfer receipt failed verification: "
-                + "; ".join(staged_report.errors)
-            )
+                for name, data in (
+                    ("receipt.json", canonical_json_bytes(receipt)),
+                    (
+                        "receipt.signature.json",
+                        canonical_json_bytes(signature),
+                    ),
+                ):
+                    fd = os.open(
+                        name,
+                        os.O_WRONLY
+                        | os.O_CREAT
+                        | os.O_EXCL
+                        | os.O_NOFOLLOW
+                        | os.O_CLOEXEC,
+                        0o600,
+                        dir_fd=staging_fd,
+                    )
+                    try:
+                        _write_all(fd, data)
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+                os.fsync(staging_fd)
+            finally:
+                os.close(staging_fd)
 
-        final = _publish_directory(
-            parent=parent,
-            parent_fd=parent_fd,
-            staging_name=staging_name,
-            destination_name=receipt_dest.name,
-            staging_identity=staging_identity,
-            label="transfer receipt",
-        )
-        created = False
-        final_report = verify_transfer_receipt(
-            final,
-            transfer_bundle=transfer_path,
-            received_package=package_dest,
-        )
-        if (
-            not final_report.integrity_verified
-            or final_report.receipt_identity
-            != receipt_identity_value
-        ):
-            raise TransferError(
-                "published transfer receipt failed verification: "
-                + "; ".join(final_report.errors)
+            staged_path = parent / staging_name
+            staged_report = verify_transfer_receipt(
+                staged_path,
+                transfer_bundle=transfer_path,
+                received_package=package_dest,
+                expected_sender_fingerprint=expected_sender_fingerprint,
+                _transfer_fd=transfer_fd,
             )
-        return TransferReceipt(
-            path=final,
-            receipt_identity=receipt_identity_value,
-            transfer_bundle_identity=(
-                transfer_report.transfer_bundle_identity
-            ),
-            offer_identity=transfer_report.offer_identity,
-            package_identity=transfer_report.package_identity,
-            duplicate_delivery=False,
-        )
-    except Exception:
-        if created:
+            if (
+                not staged_report.integrity_verified
+                or staged_report.receipt_identity
+                != receipt_identity_value
+            ):
+                raise TransferError(
+                    "staged transfer receipt failed verification: "
+                    + "; ".join(staged_report.errors)
+                )
+
             try:
-                _remove_tree_at(parent_fd, staging_name)
-                os.fsync(parent_fd)
-            except OSError:
-                pass
-        raise
+                final = _publish_directory(
+                    parent=parent,
+                    parent_fd=parent_fd,
+                    staging_name=staging_name,
+                    destination_name=receipt_dest.name,
+                    staging_identity=staging_identity,
+                    label="transfer receipt",
+                )
+            except TransferError:
+                if receipt_dest.exists() or receipt_dest.is_symlink():
+                    duplicate = _verified_duplicate_receipt()
+                    _remove_tree_at(parent_fd, staging_name)
+                    os.fsync(parent_fd)
+                    created = False
+                    return duplicate
+                raise
+            created = False
+            final_report = verify_transfer_receipt(
+                final,
+                transfer_bundle=transfer_path,
+                received_package=package_dest,
+                expected_sender_fingerprint=expected_sender_fingerprint,
+                _transfer_fd=transfer_fd,
+            )
+            if (
+                not final_report.integrity_verified
+                or final_report.receipt_identity
+                != receipt_identity_value
+            ):
+                raise TransferError(
+                    "published transfer receipt failed verification: "
+                    + "; ".join(final_report.errors)
+                )
+            return TransferReceipt(
+                path=final,
+                receipt_identity=receipt_identity_value,
+                transfer_bundle_identity=(
+                    transfer_report.transfer_bundle_identity
+                ),
+                offer_identity=transfer_report.offer_identity,
+                package_identity=transfer_report.package_identity,
+                duplicate_delivery=False,
+            )
+        except Exception:
+            if created:
+                try:
+                    _remove_tree_at(parent_fd, staging_name)
+                    os.fsync(parent_fd)
+                except OSError:
+                    pass
+            raise
+        finally:
+            os.close(parent_fd)
     finally:
-        os.close(parent_fd)
+        os.close(transfer_fd)
