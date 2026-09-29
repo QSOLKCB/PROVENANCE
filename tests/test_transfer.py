@@ -16,10 +16,15 @@ from provenance_core import (
 from provenance_custody import ClockObservation, LocalCustodyLedger
 from provenance_export import create_forensic_package
 from provenance_store import LocalEvidenceStore
+from provenance_transfer.model import transfer_signature_identity
 from provenance_transfer.protocol import (
     TransferError,
     create_transfer_bundle,
     receive_transfer,
+)
+from provenance_transfer.signing import (
+    sign_transfer_envelope,
+    verify_transfer_signature,
 )
 from provenance_verify import (
     verify_transfer_bundle,
@@ -45,6 +50,13 @@ def _key(path: Path) -> None:
     )
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.decode("utf-8", errors="replace"))
+
+
+def _sender_fingerprint(transfer: Path) -> str:
+    report = verify_transfer_bundle(transfer)
+    if not report.integrity_verified or report.sender_key_fingerprint is None:
+        raise RuntimeError("test transfer did not expose a verified sender fingerprint")
+    return report.sender_key_fingerprint
 
 
 def _sender_package(root: Path) -> Path:
@@ -165,6 +177,7 @@ class DistributedCustodyTests(unittest.TestCase):
                 receiver / "custody",
                 receiver_system="org-b/system-9",
                 receiver_key=receiver_key,
+                expected_sender_fingerprint=_sender_fingerprint(offline_copy),
                 accepted_at=accepted_at,
             )
             self.assertFalse(receipt.duplicate_delivery)
@@ -223,6 +236,7 @@ class DistributedCustodyTests(unittest.TestCase):
                 receiver / "custody",
                 receiver_system="receiver",
                 receiver_key=receiver_key,
+                expected_sender_fingerprint=_sender_fingerprint(bundle.path),
             )
             ledger = LocalCustodyLedger(receiver / "custody")
             before = ledger.record_bytes_for_subject(
@@ -235,6 +249,7 @@ class DistributedCustodyTests(unittest.TestCase):
                 receiver / "custody",
                 receiver_system="receiver",
                 receiver_key=receiver_key,
+                expected_sender_fingerprint=_sender_fingerprint(bundle.path),
             )
             after = ledger.record_bytes_for_subject(
                 bundle.package_identity
@@ -288,6 +303,7 @@ class DistributedCustodyTests(unittest.TestCase):
                 receiver / "custody",
                 receiver_system="receiver",
                 receiver_key=receiver_key,
+                expected_sender_fingerprint=_sender_fingerprint(bundle.path),
                 accepted_at=ClockObservation(
                     recorded_at="2035-01-01T00:00:00.000000Z",
                     clock_source="should-not-replace-recovery-clock",
@@ -345,6 +361,7 @@ class DistributedCustodyTests(unittest.TestCase):
                 receiver / "custody",
                 receiver_system="receiver",
                 receiver_key=receiver_key,
+                expected_sender_fingerprint=_sender_fingerprint(bundle.path),
             )
             shutil.rmtree(receiver / "custody")
 
@@ -359,6 +376,7 @@ class DistributedCustodyTests(unittest.TestCase):
                     receiver / "custody",
                     receiver_system="receiver",
                     receiver_key=receiver_key,
+                    expected_sender_fingerprint=_sender_fingerprint(bundle.path),
                 )
             self.assertFalse((receiver / "custody").exists())
 
@@ -393,6 +411,7 @@ class DistributedCustodyTests(unittest.TestCase):
                     receiver / "custody",
                     receiver_system="other-receiver",
                     receiver_key=receiver_key,
+                    expected_sender_fingerprint=_sender_fingerprint(bundle.path),
                 )
             self.assertFalse((receiver / "custody").exists())
             self.assertFalse((receiver / "package").exists())
@@ -430,6 +449,7 @@ class DistributedCustodyTests(unittest.TestCase):
                     bundle.path / "receiver-custody",
                     receiver_system="receiver",
                     receiver_key=receiver_key,
+                    expected_sender_fingerprint=_sender_fingerprint(bundle.path),
                 )
 
             (receiver / "state").mkdir()
@@ -444,6 +464,7 @@ class DistributedCustodyTests(unittest.TestCase):
                     receiver / "state",
                     receiver_system="receiver",
                     receiver_key=receiver_key,
+                    expected_sender_fingerprint=_sender_fingerprint(bundle.path),
                 )
 
             self.assertFalse((bundle.path / "receiver-custody").exists())
@@ -507,8 +528,83 @@ class DistributedCustodyTests(unittest.TestCase):
                     receiver / "custody",
                     receiver_system="receiver",
                     receiver_key=receiver_key,
+                    expected_sender_fingerprint=_sender_fingerprint(bundle.path),
                 )
             self.assertFalse((receiver / "custody").exists())
+
+    def test_receive_rejects_untrusted_sender_fingerprint_before_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sender = root / "sender"
+            receiver = root / "receiver"
+            sender.mkdir()
+            receiver.mkdir()
+            package = _sender_package(sender)
+            sender_key = sender / "sender-key"
+            receiver_key = receiver / "receiver-key"
+            _key(sender_key)
+            _key(receiver_key)
+
+            bundle = create_transfer_bundle(
+                package,
+                sender / "transfer",
+                source_system="trusted-bank",
+                destination_system="receiver",
+                sender_key=sender_key,
+            )
+            with self.assertRaisesRegex(
+                TransferError,
+                "expected fingerprint",
+            ):
+                receive_transfer(
+                    bundle.path,
+                    receiver / "package",
+                    receiver / "receipt",
+                    receiver / "custody",
+                    receiver_system="receiver",
+                    receiver_key=receiver_key,
+                    expected_sender_fingerprint=(
+                        _sender_fingerprint(bundle.path) + "-wrong"
+                    ),
+                )
+
+            self.assertFalse((receiver / "package").exists())
+            self.assertFalse((receiver / "receipt").exists())
+            self.assertFalse((receiver / "custody").exists())
+
+    def test_signature_rejects_unsupported_canonicalization_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            key = root / "sender-key"
+            _key(key)
+            envelope = {"payload": "canonicalization-regression"}
+            subject_identity = "sha256:" + ("0" * 64)
+            signature = sign_transfer_envelope(
+                envelope,
+                role="sender",
+                subject_kind="transfer_offer",
+                subject_identity=subject_identity,
+                key_file=key,
+            )
+            signature["core"]["canonicalization"] = (
+                "unsupported.canonicalization.v999"
+            )
+            signature["signature_identity"] = transfer_signature_identity(
+                signature["core"]
+            )
+
+            ok, errors = verify_transfer_signature(
+                envelope,
+                signature,
+                expected_role="sender",
+                expected_subject_kind="transfer_offer",
+                expected_subject_identity=subject_identity,
+            )
+            self.assertFalse(ok)
+            self.assertTrue(
+                any("canonicalization" in error for error in errors),
+                errors,
+            )
 
     def test_receiver_receipt_tamper_is_detected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -537,6 +633,7 @@ class DistributedCustodyTests(unittest.TestCase):
                 receiver / "custody",
                 receiver_system="receiver",
                 receiver_key=receiver_key,
+                expected_sender_fingerprint=_sender_fingerprint(bundle.path),
             )
             receipt_json = receipt.path / "receipt.json"
             receipt_json.write_bytes(receipt_json.read_bytes() + b" ")
