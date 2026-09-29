@@ -434,24 +434,78 @@ def _existing_acceptance_clock(
     )
 
 
-def _existing_actions(
+def _ordered_subject_cores(
+    records: tuple[bytes, ...],
+) -> list[dict[str, object]]:
+    parsed: dict[str, dict[str, object]] = {}
+    child_of: dict[str, str] = {}
+    root: str | None = None
+    for raw in records:
+        value = parse_canonical_json_bytes(raw)
+        if not isinstance(value, dict) or not isinstance(
+            value.get("core"), dict
+        ):
+            raise TransferError("receiver custody record is malformed")
+        identity = str(value.get("custody_identity"))
+        core = value["core"]
+        parsed[identity] = core
+    for identity, core in parsed.items():
+        previous = core.get("previous_custody")
+        if previous is None:
+            if root is not None:
+                raise TransferError(
+                    "receiver custody subject has multiple roots"
+                )
+            root = identity
+        else:
+            child_of[str(previous)] = identity
+    if not parsed:
+        return []
+    if root is None:
+        raise TransferError("receiver custody subject lacks a root")
+    ordered: list[dict[str, object]] = []
+    current: str | None = root
+    seen: set[str] = set()
+    while current is not None:
+        if current in seen or current not in parsed:
+            raise TransferError(
+                "receiver custody subject chain is invalid"
+            )
+        seen.add(current)
+        ordered.append(parsed[current])
+        current = child_of.get(current)
+    if len(seen) != len(parsed):
+        raise TransferError(
+            "receiver custody subject chain is disconnected"
+        )
+    return ordered
+
+
+def _existing_acceptance_actions(
     records: tuple[bytes, ...],
     *,
     offer_identity_value: str,
     receiver_system: str,
     source_system: str,
-) -> set[str]:
-    actions: set[str] = set()
-    for raw in records:
-        value = parse_canonical_json_bytes(raw)
-        core = value.get("core") if isinstance(value, dict) else None
+) -> list[str]:
+    actions: list[str] = []
+    for core in _ordered_subject_cores(records):
         if (
-            isinstance(core, dict)
-            and core.get("related_identity") == offer_identity_value
+            core.get("related_identity") == offer_identity_value
             and core.get("actor") == receiver_system
             and core.get("source") == source_system
         ):
-            actions.add(str(core.get("action")))
+            actions.append(str(core.get("action")))
+    expected = [
+        CustodyAction.CAPTURED.value,
+        CustodyAction.STORED.value,
+        CustodyAction.VERIFIED.value,
+    ]
+    if actions != expected[: len(actions)]:
+        raise TransferError(
+            "existing receiver acknowledgement custody is not a valid "
+            "CAPTURED/STORED/VERIFIED prefix"
+        )
     return actions
 
 
@@ -501,6 +555,31 @@ def receive_transfer(
             raise TransferError(
                 "existing receipt belongs to a different receiver"
             )
+        custody_root_path = Path(receiver_custody_root).expanduser()
+        if not custody_root_path.is_dir() or custody_root_path.is_symlink():
+            raise TransferError(
+                "live receiver custody ledger is unavailable for duplicate delivery"
+            )
+        receipt_value = _canonical_file(receipt_dest / "receipt.json")
+        receipt_core_value = receipt_value.get("core")
+        if not isinstance(receipt_core_value, dict):
+            raise TransferError("existing receipt core is malformed")
+        declared_ids = set(
+            receipt_core_value.get("receiver_custody_identities", [])
+        )
+        live_ledger = LocalCustodyLedger(custody_root_path)
+        live_records = live_ledger.record_bytes_for_subject(
+            transfer_report.package_identity
+        )
+        live_ids = {
+            str(parse_canonical_json_bytes(raw)["custody_identity"])
+            for raw in live_records
+        }
+        if not declared_ids.issubset(live_ids):
+            raise TransferError(
+                "live receiver custody ledger no longer contains the "
+                "acknowledgements bound by the existing receipt"
+            )
         assert existing.receipt_identity is not None
         return TransferReceipt(
             path=receipt_dest,
@@ -549,19 +628,18 @@ def receive_transfer(
         receiver_system=receiver_system,
         source_system=transfer_report.source_system,
     ) or accepted_at or observe_clock()
-    actions = _existing_actions(
+    existing_actions = _existing_acceptance_actions(
         existing_records,
         offer_identity_value=transfer_report.offer_identity,
         receiver_system=receiver_system,
         source_system=transfer_report.source_system,
     )
-    for action in (
+    expected_actions = (
         CustodyAction.CAPTURED,
         CustodyAction.STORED,
         CustodyAction.VERIFIED,
-    ):
-        if action.value in actions:
-            continue
+    )
+    for action in expected_actions[len(existing_actions):]:
         ledger.append(
             transfer_report.package_identity,
             action,
