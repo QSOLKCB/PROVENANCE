@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PROVENANCE Viewer</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">READ_ONLY_PRESENTATION</p>
+      <h1>PROVENANCE</h1>
+      <p class="sub">Chain-of-custody evidence viewer</p>
+    </div>
+    <button id="refresh" type="button">Refresh</button>
+  </header>
+  <main>
+    <section><h2>Verification</h2><div id="verification" class="status-grid"></div></section>
+    <section><h2>Evidence gaps</h2><div id="gaps"></div></section>
+    <section><h2>Evidence graph</h2><p class="hint">Presentation grouping only; evidence identities remain unchanged.</p><div id="graph" class="graph"></div></section>
+    <section><h2>Timeline</h2><p id="ordering-note" class="hint"></p><div id="timeline"></div></section>
+    <section>
+      <div class="section-head"><h2>Artifact inspector</h2><input id="artifact-filter" type="search" placeholder="Filter identity or media type" aria-label="Filter artifacts"></div>
+      <div id="artifacts"></div>
+    </section>
+    <section><h2>Events</h2><div id="events"></div></section>
+  </main>
+  <footer>This viewer has no evidentiary authority. Deleting it must not change evidence identity or verification outcome.</footer>
+  <script src="/app.js" defer></script>
+</body>
+</html>
