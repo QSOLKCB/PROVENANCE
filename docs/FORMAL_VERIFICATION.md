@@ -30,7 +30,7 @@ The target declaration is machine-readable in `formal/TARGET.json`.
 |---|---|---|---|---|
 | `FV-01` Self-hash exclusion | `INV-HSH-2` | `selfHashExclusion`, `storedIdentityDoesNotAffectRecomputation` | `provenance_core.identity.event_identity/custody_identity/manifest_identity`; envelope `seal()` methods hash only `core.to_dict()` | `tests.test_core.test_self_hash_fields_are_outside_hashed_core`; `test_event_envelope_rejects_identity_substitution` |
 | `FV-02` Append-only history extension | `INV-CUS-1`, `INV-EVD-3` | `appendOnlyPrefix`, `priorRecordSurvivesAppend` | `LocalCustodyLedger.append()` and `ensure_action_sequence()` publish new immutable records linked to prior tips | `tests.test_custody.test_append_reopen_and_verify_chain`; `test_same_process_instances_serialize_appends_without_fork` |
-| `FV-03` Classification non-promotion | `INV-CLS-3`, `INV-CLS-5` | `callerDeclarationRemainsDeclared`, `callerDeclarationIsNotObserved`, `operationChangePreservesClassification` | MCP/CLI caller assertions enter through DECLARED evidence paths; observation receipts are separate OBSERVED events | `tests.test_mcp.test_modern_stdio_self_demonstration_preserves_classification`; `test_record_rejects_caller_evidence_class_override` |
+| `FV-03` Classification non-promotion | `INV-CLS-3` | `callerDeclarationRemainsDeclared`, `callerDeclarationIsNotObserved`, `operationChangePreservesClassification` | MCP/CLI caller assertions enter through DECLARED evidence paths; observation receipts are separate OBSERVED events | `tests.test_mcp.test_modern_stdio_self_demonstration_preserves_classification`; `test_record_rejects_caller_evidence_class_override` |
 | `FV-04` Presentation non-interference | `INV-EVD-5`, `INV-ARC-3` | `presentationPreservesSource` | `provenance_ui.viewer.build_view()` reads finalized evidence and produces a projection without mutation authority | `tests.test_ui.test_projection_is_read_only_and_separates_verification_dimensions`; `test_http_surface_is_get_head_only_and_does_not_mutate_evidence` |
 
 The bridge is intentionally explicit rather than implied.
@@ -170,11 +170,23 @@ It then runs:
 
 ```text
 lake build
-lake env leanchecker
+lake env leanchecker ProvenanceFormal
 formal-source placeholder scan
 ```
 
 The placeholder scan rejects `sorry`, `admit`, and explicit `axiom` declarations in the proof source.
+
+The successful workflow retains the executed verification evidence itself:
+
+```text
+verification-attestation.json
+lean-version.txt
+lake-version.txt
+lake-build.log
+leanchecker.log
+```
+
+The success attestation is emitted in the same `set -euo pipefail` step immediately after `lake build` and `leanchecker` return zero. It binds the frozen target, DOI, proof commit, Lean bundle digest, GitHub run identity, exact tool versions, and SHA-256/byte counts of both checker logs.
 
 No Lean build cache is authoritative in this lane.
 
@@ -206,10 +218,13 @@ containing:
 - Lean toolchain;
 - proof commit;
 - formal claim registry;
-- SHA-256 and byte count of every proof/archive source file;
-- verification contract.
+- SHA-256 and byte count of every proof/archive source file, read directly from the recorded proof commit rather than mutable working-tree bytes;
+- verification contract;
+- SHA-256 and byte count of the retained executed verification evidence.
 
-The resulting manifest is retained as a workflow artifact together with frozen source and formal-source archives.
+The proof/archive source inventory includes every file placed in the formal-source archive, including `formal/.gitignore` and both Phase 18 evidence-generation scripts.
+
+The resulting manifest is retained as a workflow artifact together with the frozen source archive, formal-source archive, success attestation, exact tool-version files, build/checker logs, and aggregate `SHA256SUMS`.
 
 ---
 
