@@ -29,6 +29,10 @@ from provenance_custody import LocalCustodyLedger, observe_clock
 from provenance_export import create_forensic_package
 from provenance_privacy.disclosure import create_redacted_disclosure
 from provenance_store import LocalEvidenceStore
+from provenance_transfer.protocol import (
+    create_transfer_bundle,
+    receive_transfer,
+)
 from provenance_trust.records import (
     create_git_anchor_record,
     create_signature_record,
@@ -42,6 +46,8 @@ from provenance_verify import (
     verify_git_anchor_record,
     verify_selective_disclosure,
     verify_signature_record,
+    verify_transfer_bundle,
+    verify_transfer_receipt,
 )
 
 
@@ -1182,6 +1188,29 @@ def _parser() -> argparse.ArgumentParser:
     verify_disclosure.add_argument("--disclosure", required=True)
     verify_disclosure.add_argument("--source-package")
 
+    transfer_create = subparsers.add_parser("transfer-create")
+    transfer_create.add_argument("--package", required=True)
+    transfer_create.add_argument("--source-system", required=True)
+    transfer_create.add_argument("--destination-system", required=True)
+    transfer_create.add_argument("--sender-key", required=True)
+    transfer_create.add_argument("--output", required=True)
+
+    transfer_receive = subparsers.add_parser("transfer-receive")
+    transfer_receive.add_argument("--transfer", required=True)
+    transfer_receive.add_argument("--package-destination", required=True)
+    transfer_receive.add_argument("--receipt", required=True)
+    transfer_receive.add_argument("--custody", required=True)
+    transfer_receive.add_argument("--receiver-system", required=True)
+    transfer_receive.add_argument("--receiver-key", required=True)
+
+    verify_transfer_parser = subparsers.add_parser("verify-transfer")
+    verify_transfer_parser.add_argument("--transfer", required=True)
+
+    verify_receipt_parser = subparsers.add_parser("verify-receipt")
+    verify_receipt_parser.add_argument("--receipt", required=True)
+    verify_receipt_parser.add_argument("--transfer")
+    verify_receipt_parser.add_argument("--package")
+
     return parser
 
 
@@ -1225,7 +1254,70 @@ def _load_record_source(args: argparse.Namespace) -> tuple[bytes, str, str]:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        if args.command == "redact-disclosure":
+        if args.command == "transfer-create":
+            transfer = create_transfer_bundle(
+                args.package,
+                args.output,
+                source_system=args.source_system,
+                destination_system=args.destination_system,
+                sender_key=args.sender_key,
+            )
+            verification = verify_transfer_bundle(transfer.path)
+            if not verification.integrity_verified:
+                raise CliError(
+                    "new transfer bundle failed verification: "
+                    + "; ".join(verification.errors)
+                )
+            result = {
+                "output": str(transfer.path),
+                "transfer_bundle_identity": (
+                    transfer.transfer_bundle_identity
+                ),
+                "offer_identity": transfer.offer_identity,
+                "package_identity": transfer.package_identity,
+                "source_system": transfer.source_system,
+                "destination_system": transfer.destination_system,
+                "verification": verification.to_dict(),
+            }
+        elif args.command == "transfer-receive":
+            receipt = receive_transfer(
+                args.transfer,
+                args.package_destination,
+                args.receipt,
+                args.custody,
+                receiver_system=args.receiver_system,
+                receiver_key=args.receiver_key,
+            )
+            verification = verify_transfer_receipt(
+                receipt.path,
+                transfer_bundle=args.transfer,
+                received_package=args.package_destination,
+            )
+            if not verification.integrity_verified:
+                raise CliError(
+                    "transfer receipt failed verification: "
+                    + "; ".join(verification.errors)
+                )
+            result = {
+                "receipt": str(receipt.path),
+                "receipt_identity": receipt.receipt_identity,
+                "transfer_bundle_identity": (
+                    receipt.transfer_bundle_identity
+                ),
+                "offer_identity": receipt.offer_identity,
+                "package_identity": receipt.package_identity,
+                "duplicate_delivery": receipt.duplicate_delivery,
+                "verification": verification.to_dict(),
+            }
+        elif args.command == "verify-transfer":
+            result = verify_transfer_bundle(args.transfer).to_dict()
+        elif args.command == "verify-receipt":
+            result = verify_transfer_receipt(
+                args.receipt,
+                transfer_bundle=args.transfer,
+                received_package=args.package,
+            ).to_dict()
+        elif args.command == "redact-disclosure":
             ranges = _parse_redaction_ranges(args.ranges)
             disclosure = create_redacted_disclosure(
                 args.package,
