@@ -2300,3 +2300,47 @@ provenance-verify
 No cross-system timestamp comparison creates ordering authority. The verifier reports explicit causal edges and `PARTIAL` ordering only.
 
 See [TRANSFER.md](TRANSFER.md).
+
+---
+
+# Phase 16 — Release-Grade Trust Architecture
+
+Phase 16 adds a validation layer around the existing modules without changing evidence semantics.
+
+```text
+focused module CI
+      ↓
+routine development feedback
+
+exact release candidate ref
+      ↓
+full.yml
+  ├── pinned Python + Rust
+  ├── complete invariant/tamper/integration corpus
+  ├── CLI build/tests
+  ├── canonicalization cross-seed recheck
+  ├── clean-tree check
+  └── real Ollama matrix
+      ↓
+release-gate
+      ↓
+eligible for Phase 17 freeze
+```
+
+The release lane composes the existing module contracts. It does not define a new evidence format, verifier, adapter, package, or custody model.
+
+The high-assurance lane deliberately avoids authoritative dependency caches and uses fresh checkouts. Toolchain/action versions are pinned at the workflow level where practical. The managed GitHub runner family remains an execution environment rather than evidence authority.
+
+A successful run binds assurance to the exact tested repository commit. Any implementation change requires a new Phase 16 run before Phase 17 freeze.
+
+Formal proof remains downstream:
+
+```text
+Phase 16 engineering gate
+        ↓
+Phase 17 immutable implementation freeze
+        ↓
+Phase 18 Lean formalization + archival release
+```
+
+See [RELEASE.md](RELEASE.md).
