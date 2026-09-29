@@ -9,8 +9,8 @@ on:
       - "provenance_custody/**"
       - "provenance_verify/**"
       - "tests/test_generic_adapters.py"
-      - "ADAPTERS.md"
-      - "ROADMAP.md"
+      - "docs/ADAPTERS.md"
+      - "docs/ROADMAP.md"
       - ".github/workflows/adapters.yml"
   pull_request:
     paths:
@@ -20,8 +20,8 @@ on:
       - "provenance_custody/**"
       - "provenance_verify/**"
       - "tests/test_generic_adapters.py"
-      - "ADAPTERS.md"
-      - "ROADMAP.md"
+      - "docs/ADAPTERS.md"
+      - "docs/ROADMAP.md"
       - ".github/workflows/adapters.yml"
 
 permissions:
