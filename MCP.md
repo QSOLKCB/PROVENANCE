@@ -28,6 +28,8 @@ Modern requests carry their protocol revision and client capabilities in `params
 
 The server emits one JSON-RPC message per UTF-8 line on stdout and writes no ordinary application output to stdout.
 
+Ambiguous/non-JSON framing is rejected before MCP dispatch. Duplicate object keys and non-finite JSON numeric tokens are not silently normalized.
+
 ---
 
 # Start the server
@@ -113,6 +115,20 @@ Event, manifest, and custody resources return canonical JSON.
 Retained artifact resources return exact bytes through MCP blob content. DIGEST_ONLY artifacts return explicit retention metadata rather than fabricated content.
 
 Resource reads use identity-derived paths and descriptor-safe non-symlink file opens.
+
+Before serving a resource, Phase 7 recomputes the identity bound by the URI:
+
+~~~text
+event      -> recompute event identity from canonical core
+custody    -> recompute custody identity from canonical core
+manifest   -> recompute manifest identity from canonical core
+artifact   -> recompute artifact-record identity
+retained bytes -> recompute raw SHA-256 content identity
+~~~
+
+A canonical object placed under the wrong content-addressed filename is therefore not served as that identity. Resource corruption is reported as an internal evidence/read failure rather than silently relabeling the bytes.
+
+Unknown resource URIs return MCP invalid-params/resource-not-found semantics instead of an internal error.
 
 ---
 
