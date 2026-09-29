@@ -413,6 +413,33 @@ def create_git_anchor_record(
         )
     commit_oid = commit_result.stdout.strip().lower()
 
+    tree_entry = _git(
+        git,
+        repo,
+        ["ls-tree", commit_oid, "--", anchor_path],
+    )
+    if tree_entry.returncode != 0:
+        raise TrustRecordError(
+            tree_entry.stderr.strip()
+            or "cannot inspect Git anchor tree entry"
+        )
+    entry = tree_entry.stdout.rstrip("\n")
+    if "\n" in entry or "\t" not in entry:
+        raise TrustRecordError(
+            "Git anchor path does not resolve to exactly one tree entry"
+        )
+    metadata, observed_path = entry.split("\t", 1)
+    fields = metadata.split()
+    if (
+        observed_path != anchor_path
+        or len(fields) != 3
+        or fields[0] not in {"100644", "100755"}
+        or fields[1] != "blob"
+    ):
+        raise TrustRecordError(
+            "Git anchor path must be a regular committed blob"
+        )
+
     payload = git_anchor_payload(package_identity)
     show = _git(
         git,
