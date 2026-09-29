@@ -102,6 +102,10 @@ class _StdioClient:
             self.process.stdin.close()
         returncode = self.process.wait(timeout=10)
         stderr = self.process.stderr.read()
+        if self.process.stdout is not None and not self.process.stdout.closed:
+            self.process.stdout.close()
+        if self.process.stderr is not None and not self.process.stderr.closed:
+            self.process.stderr.close()
         return returncode, stderr
 
 
@@ -414,6 +418,87 @@ class ProvenanceMCPTests(unittest.TestCase):
                     "before initialize",
                     response["error"]["message"],
                 )
+            finally:
+                returncode, stderr = client.close()
+            self.assertEqual(returncode, 0, stderr)
+            self.assertEqual(stderr, "")
+
+    def test_modern_missing_resource_is_invalid_params(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = _StdioClient(root / "store", root / "custody")
+            try:
+                client.request("server/discover")
+                missing = (
+                    "provenance://event/sha256:"
+                    + "0" * 64
+                )
+                response = client.request(
+                    "resources/read",
+                    {"uri": missing},
+                )
+                self.assertEqual(response["error"]["code"], -32602)
+                self.assertEqual(
+                    response["error"]["data"],
+                    {"uri": missing},
+                )
+                self.assertIn(
+                    "does not exist",
+                    response["error"]["message"],
+                )
+            finally:
+                returncode, stderr = client.close()
+            self.assertEqual(returncode, 0, stderr)
+            self.assertEqual(stderr, "")
+
+    def test_modern_unsupported_version_returns_negotiation_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = _StdioClient(root / "store", root / "custody")
+            try:
+                request_id = client._next_id
+                client._next_id += 1
+                request = {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "method": "tools/list",
+                    "params": {
+                        "_meta": {
+                            "io.modelcontextprotocol/protocolVersion":
+                                "2099-01-01",
+                            "io.modelcontextprotocol/clientCapabilities": {},
+                        }
+                    },
+                }
+                client.process.stdin.write(
+                    json.dumps(
+                        request,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+                client.process.stdin.flush()
+                response = json.loads(client.process.stdout.readline())
+                self.assertEqual(response["id"], request_id)
+                self.assertEqual(response["error"]["code"], -32022)
+                self.assertIn(
+                    "2026-07-28",
+                    response["error"]["data"]["supportedVersions"],
+                )
+            finally:
+                returncode, stderr = client.close()
+            self.assertEqual(returncode, 0, stderr)
+            self.assertEqual(stderr, "")
+
+    def test_modern_ping_is_not_defined(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = _StdioClient(root / "store", root / "custody")
+            try:
+                client.request("server/discover")
+                response = client.request("ping")
+                self.assertEqual(response["error"]["code"], -32601)
             finally:
                 returncode, stderr = client.close()
             self.assertEqual(returncode, 0, stderr)
