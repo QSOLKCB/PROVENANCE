@@ -5,6 +5,7 @@ on:
     paths:
       - "formal/**"
       - "scripts/phase18_manifest.py"
+      - "scripts/phase18_attestation.py"
       - "docs/FORMAL_VERIFICATION.md"
       - "docs/ARCHIVAL_RELEASE.md"
       - "docs/ROADMAP.md"
@@ -18,6 +19,7 @@ on:
     paths:
       - "formal/**"
       - "scripts/phase18_manifest.py"
+      - "scripts/phase18_attestation.py"
       - "docs/FORMAL_VERIFICATION.md"
       - "docs/ARCHIVAL_RELEASE.md"
       - "docs/ROADMAP.md"
@@ -83,24 +85,32 @@ jobs:
           tar --zstd -xf "$archive" -C "$root" --strip-components=1
           printf '%s\n' "$root/bin" >> "$GITHUB_PATH"
 
-      - name: Build and independently check Lean proof set
-        shell: sh
+      - name: Build, independently check, and attest Lean proof set
+        shell: bash
         run: |
-          set -eu
-          lean --version | grep -F "version 4.34.1"
-          lake --version
-          cd formal
-          lake build
-          lake env leanchecker ProvenanceFormal
+          set -euo pipefail
+          out="$RUNNER_TEMP/phase18"
+          mkdir -p "$out"
+
+          lean --version | tee "$out/lean-version.txt"
+          lake --version | tee "$out/lake-version.txt"
+
+          (
+            cd formal
+            lake build 2>&1 | tee "$out/lake-build.log"
+            lake env leanchecker ProvenanceFormal 2>&1 | tee "$out/leanchecker.log"
+          )
+
+          python3 scripts/phase18_attestation.py             --output "$out/verification-attestation.json"             --lean-build-log "$out/lake-build.log"             --leanchecker-log "$out/leanchecker.log"             --lean-version-file "$out/lean-version.txt"             --lake-version-file "$out/lake-version.txt"
+
+          cat "$out/verification-attestation.json"
 
       - name: Generate formal evidence manifest
         shell: sh
         run: |
           set -eu
           out="$RUNNER_TEMP/phase18"
-          mkdir -p "$out"
-          python3 scripts/phase18_manifest.py \
-            --output "$out/formal-evidence.json"
+          python3 scripts/phase18_manifest.py             --output "$out/formal-evidence.json"             --verification-evidence "$out/verification-attestation.json"             --verification-evidence "$out/lean-version.txt"             --verification-evidence "$out/lake-version.txt"             --verification-evidence "$out/lake-build.log"             --verification-evidence "$out/leanchecker.log"
           cat "$out/formal-evidence.json"
 
       - name: Build archival source bundles
@@ -108,31 +118,13 @@ jobs:
         run: |
           set -eu
           out="$RUNNER_TEMP/phase18"
-          git archive \
-            --format=tar.gz \
-            --prefix=PROVENANCE-v1.0.0/ \
-            --output="$out/PROVENANCE-v1.0.0-source.tar.gz" \
-            "$FROZEN_TAG"
+          git archive             --format=tar.gz             --prefix=PROVENANCE-v1.0.0/             --output="$out/PROVENANCE-v1.0.0-source.tar.gz"             "$FROZEN_TAG"
 
-          git archive \
-            --format=tar.gz \
-            --prefix=PROVENANCE-phase18-formal/ \
-            --output="$out/PROVENANCE-phase18-formal-sources.tar.gz" \
-            HEAD -- \
-            formal \
-            docs/FORMAL_VERIFICATION.md \
-            docs/ARCHIVAL_RELEASE.md \
-            CITATION.cff \
-            scripts/phase18_manifest.py \
-            .github/workflows/formal.yml
+          git archive             --format=tar.gz             --prefix=PROVENANCE-phase18-formal/             --output="$out/PROVENANCE-phase18-formal-sources.tar.gz"             HEAD --             formal             docs/FORMAL_VERIFICATION.md             docs/ARCHIVAL_RELEASE.md             CITATION.cff             scripts/phase18_attestation.py             scripts/phase18_manifest.py             .github/workflows/formal.yml
 
           (
             cd "$out"
-            sha256sum \
-              PROVENANCE-v1.0.0-source.tar.gz \
-              PROVENANCE-phase18-formal-sources.tar.gz \
-              formal-evidence.json \
-              > SHA256SUMS
+            sha256sum               PROVENANCE-v1.0.0-source.tar.gz               PROVENANCE-phase18-formal-sources.tar.gz               formal-evidence.json               verification-attestation.json               lean-version.txt               lake-version.txt               lake-build.log               leanchecker.log               > SHA256SUMS
             cat SHA256SUMS
           )
 
