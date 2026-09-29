@@ -11,6 +11,7 @@ PROVENANCE records **who did what, when, where, why, and how — backed by evide
 [![Core CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml)
 [![Verify CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml)
 [![Package CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml)
+[![Trust CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/trust.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/trust.yml)
 [![Determinism](https://img.shields.io/badge/determinism-canonical%20SHA--256-0969da.svg)](docs/INVARIANTS.md)
 [![Verification](https://img.shields.io/badge/verification-independent-6f42c1.svg)](docs/BUNDLE.md)
 [![Custody](https://img.shields.io/badge/custody-append--only-b60205.svg)](docs/CUSTODY.md)
