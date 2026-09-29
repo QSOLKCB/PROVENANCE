@@ -595,7 +595,55 @@ def _physical_files(root_fd: int) -> tuple[set[str], list[str]]:
     return files, unsafe
 
 
-def _verify_bundle_root_fd(root_fd: int) -> VerificationReport:
+def _artifact_task(
+    args: tuple[int, dict[str, Any]],
+) -> tuple[str, str | None]:
+    root_fd, entry = args
+    relative = _artifact_record_relative(entry["record_identity"])
+    try:
+        _verify_artifact_record(
+            root_fd,
+            relative,
+            manifest_entry=entry,
+        )
+    except VerificationError as exc:
+        return relative, str(exc)
+    return relative, None
+
+
+def _event_task(
+    args: tuple[int, str],
+) -> tuple[
+    str,
+    list[str] | None,
+    list[str] | None,
+    list[str] | None,
+    str | None,
+]:
+    root_fd, identity = args
+    relative = _event_relative(identity)
+    try:
+        inputs, outputs, relationship_targets = _verify_event(
+            root_fd,
+            relative,
+            expected_identity=identity,
+        )
+    except VerificationError as exc:
+        return relative, None, None, None, str(exc)
+    return (
+        relative,
+        inputs,
+        outputs,
+        relationship_targets,
+        None,
+    )
+
+
+def _verify_bundle_root_fd(
+    root_fd: int,
+    *,
+    max_workers: int,
+) -> VerificationReport:
     checks: list[str] = []
     errors: list[str] = []
     manifest_identity_value: str | None = None
@@ -689,36 +737,44 @@ def _verify_bundle_root_fd(root_fd: int) -> VerificationReport:
     event_ids = set(events)
 
     artifact_phase_ok = True
-    for entry in artifacts:
-        if entry["retention"] == RetentionState.MISSING.value:
-            continue
-        relative = _artifact_record_relative(entry["record_identity"])
-        try:
-            _verify_artifact_record(
-                root_fd,
-                relative,
-                manifest_entry=entry,
-            )
-        except VerificationError as exc:
+    artifact_entries = [
+        entry
+        for entry in artifacts
+        if entry["retention"] != RetentionState.MISSING.value
+    ]
+    artifact_results = ordered_bounded_map(
+        _artifact_task,
+        [(root_fd, entry) for entry in artifact_entries],
+        max_workers=max_workers,
+    )
+    for relative, error in artifact_results:
+        if error is not None:
             artifact_phase_ok = False
-            errors.append(f"{relative}: {exc}")
+            errors.append(f"{relative}: {error}")
     if artifact_phase_ok:
         checks.append("artifact metadata and available content verified")
 
     event_phase_ok = True
     references: list[tuple[str, str, str]] = []
-    for identity in events:
-        relative = _event_relative(identity)
-        try:
-            inputs, outputs, relationship_targets = _verify_event(
-                root_fd,
-                relative,
-                expected_identity=identity,
-            )
-        except VerificationError as exc:
+    event_results = ordered_bounded_map(
+        _event_task,
+        [(root_fd, identity) for identity in events],
+        max_workers=max_workers,
+    )
+    for (
+        relative,
+        inputs,
+        outputs,
+        relationship_targets,
+        error,
+    ) in event_results:
+        if error is not None:
             event_phase_ok = False
-            errors.append(f"{relative}: {exc}")
+            errors.append(f"{relative}: {error}")
             continue
+        assert inputs is not None
+        assert outputs is not None
+        assert relationship_targets is not None
         references.extend((relative, "input", value) for value in inputs)
         references.extend((relative, "output", value) for value in outputs)
         references.extend(
@@ -773,7 +829,45 @@ def verify_bundle_fd(bundle_fd: int) -> VerificationReport:
             False, None, None, 0, checks, (str(exc),)
         )
     try:
-        return _verify_bundle_root_fd(root_fd)
+        return _verify_bundle_root_fd(
+            root_fd,
+            max_workers=DEFAULT_MAX_VERIFY_WORKERS,
+        )
+    finally:
+        os.close(root_fd)
+
+
+def verify_bundle_fd_reference(bundle_fd: int) -> VerificationReport:
+    """Serial reference verifier for Phase 13 equivalence checks."""
+
+    checks: tuple[str, ...] = ()
+    try:
+        root_fd = os.dup(bundle_fd)
+        if not stat.S_ISDIR(os.fstat(root_fd).st_mode):
+            os.close(root_fd)
+            raise VerificationError("bundle descriptor must reference a directory")
+    except (OSError, TypeError, VerificationError) as exc:
+        return VerificationReport(
+            False, None, None, 0, checks, (str(exc),)
+        )
+    try:
+        return _verify_bundle_root_fd(root_fd, max_workers=1)
+    finally:
+        os.close(root_fd)
+
+
+def verify_bundle_reference(bundle_dir: Path) -> VerificationReport:
+    """Serial reference verifier retained for exact Phase 13 parity."""
+
+    bundle_dir = Path(bundle_dir)
+    try:
+        root_fd = _open_bundle_root(bundle_dir)
+    except VerificationError as exc:
+        return VerificationReport(
+            False, None, None, 0, (), (str(exc),)
+        )
+    try:
+        return _verify_bundle_root_fd(root_fd, max_workers=1)
     finally:
         os.close(root_fd)
 
@@ -789,6 +883,9 @@ def verify_bundle(bundle_dir: Path) -> VerificationReport:
             False, None, None, 0, (), (str(exc),)
         )
     try:
-        return _verify_bundle_root_fd(root_fd)
+        return _verify_bundle_root_fd(
+            root_fd,
+            max_workers=DEFAULT_MAX_VERIFY_WORKERS,
+        )
     finally:
         os.close(root_fd)
