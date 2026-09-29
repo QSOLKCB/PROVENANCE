@@ -235,8 +235,11 @@ def _hash_member(root_fd: int, relative: str) -> tuple[str, int]:
     return f"sha256:{hasher.hexdigest()}", count
 
 
-def _physical_files(root_fd: int) -> tuple[set[str], set[str]]:
+def _physical_files(
+    root_fd: int,
+) -> tuple[set[str], set[str], set[str]]:
     files: set[str] = set()
+    directories: set[str] = set()
     unsafe: set[str] = set()
     stack: list[tuple[int, str]] = [(os.dup(root_fd), "")]
     try:
@@ -256,6 +259,7 @@ def _physical_files(root_fd: int) -> tuple[set[str], set[str]]:
                             unsafe.add(relative)
                             continue
                         if stat.S_ISDIR(mode):
+                            directories.add(relative)
                             try:
                                 child = os.open(
                                     entry.name,
@@ -278,7 +282,7 @@ def _physical_files(root_fd: int) -> tuple[set[str], set[str]]:
                 os.close(fd)
             except OSError:
                 pass
-    return files, unsafe
+    return files, directories, unsafe
 
 
 def _manifest_and_events(evidence_root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -526,7 +530,7 @@ def verify_forensic_package(
             )
 
         try:
-            physical, unsafe = _physical_files(root_fd)
+            physical, physical_directories, unsafe = _physical_files(root_fd)
         except Exception as exc:
             errors.append(f"cannot enumerate package: {exc}")
             return ForensicPackageVerificationReport(
@@ -540,6 +544,13 @@ def verify_forensic_package(
             )
 
         expected_files = {"package.json", *member_paths}
+        expected_directories: set[str] = set()
+        for relative in member_paths:
+            parts = PurePosixPath(relative).parts[:-1]
+            for index in range(1, len(parts) + 1):
+                expected_directories.add(
+                    PurePosixPath(*parts[:index]).as_posix()
+                )
         if unsafe:
             errors.append(
                 "non-regular filesystem entries are forbidden inside forensic packages: "
@@ -557,7 +568,29 @@ def verify_forensic_package(
                 "forensic package contains undeclared files: "
                 + ", ".join(extra)
             )
-        if unsafe or missing or extra:
+        extra_directories = sorted(
+            physical_directories - expected_directories
+        )
+        missing_directories = sorted(
+            expected_directories - physical_directories
+        )
+        if missing_directories:
+            errors.append(
+                "forensic package is missing declared directory structure: "
+                + ", ".join(missing_directories)
+            )
+        if extra_directories:
+            errors.append(
+                "forensic package contains undeclared directories: "
+                + ", ".join(extra_directories)
+            )
+        if (
+            unsafe
+            or missing
+            or extra
+            or missing_directories
+            or extra_directories
+        ):
             return ForensicPackageVerificationReport(
                 False,
                 package_identity_value,
