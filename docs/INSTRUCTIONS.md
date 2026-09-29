@@ -261,6 +261,38 @@ python3 scripts/benchmark_phase13.py \
 ```
 
 Do not transfer benchmark numbers to another host without re-measuring. See [PERFORMANCE.md](PERFORMANCE.md).
+## Phase 14 selective disclosure
+
+A redacted disclosure is created from a retained artifact in a finalized Phase 11 package.
+
+Example:
+
+```bash
+./provenance-cli/target/debug/provenance redact-disclosure \
+  --package /path/to/forensic-package \
+  --source sha256:<source-digest> \
+  --range 17:29 \
+  --output /path/to/disclosure
+```
+
+Verify disclosed lineage without revealing source bytes:
+
+```bash
+./provenance-cli/target/debug/provenance verify-disclosure \
+  --disclosure /path/to/disclosure
+```
+
+If the original source package is available, additionally recompute the transform:
+
+```bash
+./provenance-cli/target/debug/provenance verify-disclosure \
+  --disclosure /path/to/disclosure \
+  --source-package /path/to/forensic-package
+```
+
+The disclosure retains the source digest and original ArtifactRecord metadata but omits the source content bytes. The derivative is always a new DERIVED artifact.
+
+See [PRIVACY.md](PRIVACY.md) for privacy leakage limits, digest confirmation risks, and exact verification semantics.
 ## Operational rules
 
 - Do not put secrets into evidence-bearing URLs, argv, prompts, or artifacts unless retention is intentional.
@@ -271,4 +303,4 @@ Do not transfer benchmark numbers to another host without re-measuring. See [PER
 
 ## Deep reference
 
-[Architecture](ARCHITECTURE.md) · [Invariants](INVARIANTS.md) · [Store](STORE.md) · [Custody](CUSTODY.md) · [Bundle](BUNDLE.md) · [Package](PACKAGE.md) · [Trust](TRUST.md) · [Performance](PERFORMANCE.md) · [CLI](CLI.md) · [MCP](MCP.md) · [UI](UI.md) · [Adapters](ADAPTERS.md) · [Roadmap](ROADMAP.md)
+[Architecture](ARCHITECTURE.md) · [Invariants](INVARIANTS.md) · [Store](STORE.md) · [Custody](CUSTODY.md) · [Bundle](BUNDLE.md) · [Package](PACKAGE.md) · [Trust](TRUST.md) · [Performance](PERFORMANCE.md) · [Privacy](PRIVACY.md) · [CLI](CLI.md) · [MCP](MCP.md) · [UI](UI.md) · [Adapters](ADAPTERS.md) · [Roadmap](ROADMAP.md)

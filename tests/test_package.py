@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from provenance_core import (
     ClockAssurance,
@@ -19,6 +21,7 @@ from provenance_core import (
     sha256_identity,
 )
 from provenance_custody import ClockObservation, LocalCustodyLedger
+import provenance_export.package as package_module
 from provenance_export import (
     ForensicPackageError,
     create_forensic_package,
@@ -393,6 +396,59 @@ class ForensicPackageTests(unittest.TestCase):
                     for error in report.errors
                 ),
                 report.errors,
+            )
+
+    def test_destination_race_does_not_replace_existing_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store, custody, _manifest = _closed_fixture(root)
+            destination = root / "raced-package"
+            original_rename = package_module._rename_noreplace_at
+            raced_inode: int | None = None
+
+            def create_raced_destination(
+                source_dir_fd: int,
+                source_name: str,
+                destination_dir_fd: int,
+                destination_name: str,
+            ) -> None:
+                nonlocal raced_inode
+                os.mkdir(destination_name, dir_fd=destination_dir_fd)
+                raced_inode = os.stat(
+                    destination_name,
+                    dir_fd=destination_dir_fd,
+                    follow_symlinks=False,
+                ).st_ino
+                original_rename(
+                    source_dir_fd,
+                    source_name,
+                    destination_dir_fd,
+                    destination_name,
+                )
+
+            with mock.patch.object(
+                package_module,
+                "_rename_noreplace_at",
+                side_effect=create_raced_destination,
+            ):
+                with self.assertRaisesRegex(
+                    ForensicPackageError,
+                    "destination must not already exist",
+                ):
+                    create_forensic_package(
+                        store,
+                        custody,
+                        destination,
+                    )
+
+            self.assertTrue(destination.is_dir())
+            self.assertEqual(destination.stat().st_ino, raced_inode)
+            self.assertEqual(list(destination.iterdir()), [])
+            self.assertFalse(
+                any(
+                    path.name.startswith(".raced-package.")
+                    for path in root.iterdir()
+                )
             )
 
     def test_destination_inside_live_store_is_rejected(self) -> None:

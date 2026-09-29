@@ -510,13 +510,12 @@ def _member_hash_task(
     return relative, identity, byte_count, None
 
 
-def _verify_forensic_package(
-    package_dir: Path | str,
+def _verify_forensic_package_root_fd(
+    root_fd: int,
     *,
     max_workers: int,
     reference_dependencies: bool,
 ) -> ForensicPackageVerificationReport:
-    package = Path(package_dir)
     checks: list[str] = []
     errors: list[str] = []
     package_identity_value: str | None = None
@@ -525,325 +524,362 @@ def _verify_forensic_package(
     custody_record_count = 0
 
     try:
+        envelope = _canonical_object(root_fd, "package.json")
+        if set(envelope) != {
+            "core",
+            "package_identity",
+            "self_hash_exclusion",
+        }:
+            raise ValueError("package.json envelope keys changed")
+        core = envelope.get("core")
+        if not isinstance(core, dict):
+            raise ValueError("package core must be an object")
+        if set(core) != {
+            "schema",
+            "canonicalization",
+            "package_state",
+            "evidence_manifest_identity",
+            "evidence_scope",
+            "custody_record_count",
+            "members",
+        }:
+            raise ValueError("package core keys changed")
+        if core.get("schema") != FORENSIC_PACKAGE_SCHEMA:
+            raise ValueError("package schema changed")
+        if core.get("canonicalization") != CANONICALIZATION_ID:
+            raise ValueError("package canonicalization changed")
+        if core.get("package_state") != "FINALIZED":
+            raise ValueError("package_state must be FINALIZED")
+        if core.get("evidence_scope") not in {"open", "closed"}:
+            raise ValueError("package evidence_scope must be open or closed")
+        evidence_scope = str(core.get("evidence_scope"))
+        claimed_manifest = core.get("evidence_manifest_identity")
+        require_sha256_identity(
+            claimed_manifest,
+            label="package evidence manifest identity",
+        )
+        evidence_manifest_identity = str(claimed_manifest)
+        count = core.get("custody_record_count")
+        if type(count) is not int or not 0 <= count <= MAX_SAFE_INTEGER:
+            raise ValueError(
+                "package custody_record_count must be a safe non-negative integer"
+            )
+        custody_record_count = count
+        members = core.get("members")
+        if not isinstance(members, list):
+            raise ValueError("package members must be a list")
+
+        normalized_members: list[dict[str, object]] = []
+        member_paths: list[str] = []
+        for index, item in enumerate(members):
+            if not isinstance(item, dict) or set(item) != {
+                "path",
+                "content_identity",
+                "byte_count",
+            }:
+                raise ValueError(
+                    f"package member[{index}] keys changed"
+                )
+            relative = item.get("path")
+            parts = _safe_parts(relative)
+            assert isinstance(relative, str)
+            if relative == "package.json":
+                raise ValueError(
+                    "package.json must not be a self-declared member"
+                )
+            if not _member_path_allowed(relative):
+                raise ValueError(
+                    f"package member path is outside the v1 layout: {relative}"
+                )
+            content_identity = item.get("content_identity")
+            require_sha256_identity(
+                content_identity,
+                label=f"package member[{index}] identity",
+            )
+            byte_count = item.get("byte_count")
+            if (
+                type(byte_count) is not int
+                or not 0 <= byte_count <= MAX_SAFE_INTEGER
+            ):
+                raise ValueError(
+                    f"package member[{index}] byte_count is invalid"
+                )
+            member_paths.append(PurePosixPath(*parts).as_posix())
+            normalized_members.append(item)
+        if member_paths != sorted(member_paths):
+            raise ValueError("package members must be sorted by path")
+        if len(set(member_paths)) != len(member_paths):
+            raise ValueError("package member paths must be unique")
+
+        claimed_package = envelope.get("package_identity")
+        require_sha256_identity(
+            claimed_package,
+            label="package identity",
+        )
+        if envelope.get("self_hash_exclusion") != "package_identity":
+            raise ValueError("package self_hash_exclusion changed")
+        expected_package = forensic_package_identity(core)
+        if claimed_package != expected_package:
+            raise ValueError(
+                "package identity does not match canonical package core"
+            )
+        package_identity_value = str(claimed_package)
+        checks.append("package envelope and identity verified")
+    except Exception as exc:
+        errors.append(str(exc))
+        return ForensicPackageVerificationReport(
+            False,
+            package_identity_value,
+            evidence_manifest_identity,
+            evidence_scope,
+            custody_record_count,
+            tuple(checks),
+            tuple(errors),
+        )
+
+    try:
+        physical, physical_directories, unsafe = _physical_files(root_fd)
+    except Exception as exc:
+        errors.append(f"cannot enumerate package: {exc}")
+        return ForensicPackageVerificationReport(
+            False,
+            package_identity_value,
+            evidence_manifest_identity,
+            evidence_scope,
+            custody_record_count,
+            tuple(checks),
+            tuple(errors),
+        )
+
+    expected_files = {"package.json", *member_paths}
+    expected_directories: set[str] = {
+        "evidence",
+        "custody",
+        "custody/sha256",
+    }
+    for relative in member_paths:
+        parts = PurePosixPath(relative).parts[:-1]
+        for index in range(1, len(parts) + 1):
+            expected_directories.add(
+                PurePosixPath(*parts[:index]).as_posix()
+            )
+    if unsafe:
+        errors.append(
+            "non-regular filesystem entries are forbidden inside forensic packages: "
+            + ", ".join(sorted(unsafe))
+        )
+    missing = sorted(expected_files - physical)
+    extra = sorted(physical - expected_files)
+    if missing:
+        errors.append(
+            "forensic package is missing declared files: "
+            + ", ".join(missing)
+        )
+    if extra:
+        errors.append(
+            "forensic package contains undeclared files: "
+            + ", ".join(extra)
+        )
+    extra_directories = sorted(
+        physical_directories - expected_directories
+    )
+    missing_directories = sorted(
+        expected_directories - physical_directories
+    )
+    if missing_directories:
+        errors.append(
+            "forensic package is missing declared directory structure: "
+            + ", ".join(missing_directories)
+        )
+    if extra_directories:
+        errors.append(
+            "forensic package contains undeclared directories: "
+            + ", ".join(extra_directories)
+        )
+    if (
+        unsafe
+        or missing
+        or extra
+        or missing_directories
+        or extra_directories
+    ):
+        return ForensicPackageVerificationReport(
+            False,
+            package_identity_value,
+            evidence_manifest_identity,
+            evidence_scope,
+            custody_record_count,
+            tuple(checks),
+            tuple(errors),
+        )
+    checks.append("physical package membership exactly matches package.json")
+
+    member_ok = True
+    member_results = ordered_bounded_map(
+        _member_hash_task,
+        [(root_fd, item) for item in normalized_members],
+        max_workers=max_workers,
+    )
+    for (
+        relative,
+        identity,
+        byte_count,
+        member_error,
+    ), item in zip(member_results, normalized_members):
+        if member_error is not None:
+            member_ok = False
+            errors.append(
+                f"{relative}: cannot hash member: {member_error}"
+            )
+            continue
+        if identity != item["content_identity"]:
+            member_ok = False
+            errors.append(f"{relative}: member content identity mismatch")
+        if byte_count != item["byte_count"]:
+            member_ok = False
+            errors.append(f"{relative}: member byte_count mismatch")
+    if member_ok:
+        checks.append("all package member hashes and byte counts verified")
+
+    evidence_fd = _open_directory_at(root_fd, ("evidence",))
+    try:
+        bundle_report = (
+            verify_bundle_fd_reference(evidence_fd)
+            if reference_dependencies
+            else verify_bundle_fd(evidence_fd)
+        )
+    finally:
+        os.close(evidence_fd)
+    if not bundle_report.integrity_verified:
+        errors.append(
+            "embedded evidence bundle failed verification: "
+            + "; ".join(bundle_report.errors)
+        )
+    elif (
+        bundle_report.manifest_identity != evidence_manifest_identity
+        or bundle_report.manifest_scope != evidence_scope
+    ):
+        errors.append(
+            "embedded evidence bundle does not match package core"
+        )
+    else:
+        checks.append("embedded evidence bundle independently verified")
+
+    custody_raws, custody_errors = _custody_records(
+        root_fd,
+        member_paths,
+    )
+    errors.extend(custody_errors)
+    custody_report = verify_custody_records(custody_raws)
+    if len(custody_raws) != custody_record_count:
+        errors.append(
+            "package custody_record_count does not match custody members"
+        )
+    if not custody_report.integrity_verified:
+        errors.append(
+            "embedded custody chain failed verification: "
+            + "; ".join(custody_report.errors)
+        )
+    elif not custody_errors:
+        checks.append("embedded custody records independently verified")
+
+    try:
+        schemas = _canonical_object(root_fd, "schemas.json")
+        if schemas != expected_schema_metadata():
+            errors.append("schemas.json does not match package contract")
+        else:
+            checks.append("schema/version metadata verified")
+    except Exception as exc:
+        errors.append(f"schemas.json: {exc}")
+
+    if bundle_report.integrity_verified:
+        try:
+            gaps = _canonical_object(root_fd, "gaps.json")
+            evidence_fd = _open_directory_at(root_fd, ("evidence",))
+            try:
+                expected_gaps = derive_declared_gaps_fd(
+                    evidence_fd,
+                    custody_raws,
+                )
+            finally:
+                os.close(evidence_fd)
+            if gaps != expected_gaps:
+                errors.append(
+                    "gaps.json does not match recomputed evidence gaps"
+                )
+            else:
+                checks.append("declared gaps recomputed and verified")
+        except Exception as exc:
+            errors.append(f"gaps.json: {exc}")
+
+    try:
+        verification = _canonical_object(root_fd, "verification.json")
+        expected_verification = expected_verification_metadata(
+            bundle_report,
+            custody_report,
+        )
+        if verification != expected_verification:
+            errors.append(
+                "verification.json does not match recomputed reports"
+            )
+        else:
+            checks.append("verification metadata recomputed and verified")
+    except Exception as exc:
+        errors.append(f"verification.json: {exc}")
+
+    return ForensicPackageVerificationReport(
+        integrity_verified=member_ok and not errors,
+        package_identity=package_identity_value,
+        evidence_manifest_identity=evidence_manifest_identity,
+        evidence_scope=evidence_scope,
+        custody_record_count=custody_record_count,
+        checks=tuple(checks),
+        errors=tuple(errors),
+    )
+
+
+def _verify_forensic_package(
+    package_dir: Path | str,
+    *,
+    max_workers: int,
+    reference_dependencies: bool,
+) -> ForensicPackageVerificationReport:
+    package = Path(package_dir)
+    try:
         root_fd = _open_root(package)
     except (OSError, ValueError, RuntimeError) as exc:
         return ForensicPackageVerificationReport(
             False, None, None, None, 0, (), (str(exc),)
         )
+    try:
+        return _verify_forensic_package_root_fd(
+            root_fd,
+            max_workers=max_workers,
+            reference_dependencies=reference_dependencies,
+        )
+    finally:
+        os.close(root_fd)
+
+
+def verify_forensic_package_fd(
+    package_fd: int,
+) -> ForensicPackageVerificationReport:
+    """Verify an already-open forensic-package directory descriptor."""
 
     try:
-        try:
-            envelope = _canonical_object(root_fd, "package.json")
-            if set(envelope) != {
-                "core",
-                "package_identity",
-                "self_hash_exclusion",
-            }:
-                raise ValueError("package.json envelope keys changed")
-            core = envelope.get("core")
-            if not isinstance(core, dict):
-                raise ValueError("package core must be an object")
-            if set(core) != {
-                "schema",
-                "canonicalization",
-                "package_state",
-                "evidence_manifest_identity",
-                "evidence_scope",
-                "custody_record_count",
-                "members",
-            }:
-                raise ValueError("package core keys changed")
-            if core.get("schema") != FORENSIC_PACKAGE_SCHEMA:
-                raise ValueError("package schema changed")
-            if core.get("canonicalization") != CANONICALIZATION_ID:
-                raise ValueError("package canonicalization changed")
-            if core.get("package_state") != "FINALIZED":
-                raise ValueError("package_state must be FINALIZED")
-            if core.get("evidence_scope") not in {"open", "closed"}:
-                raise ValueError("package evidence_scope must be open or closed")
-            evidence_scope = str(core.get("evidence_scope"))
-            claimed_manifest = core.get("evidence_manifest_identity")
-            require_sha256_identity(
-                claimed_manifest,
-                label="package evidence manifest identity",
-            )
-            evidence_manifest_identity = str(claimed_manifest)
-            count = core.get("custody_record_count")
-            if type(count) is not int or not 0 <= count <= MAX_SAFE_INTEGER:
-                raise ValueError(
-                    "package custody_record_count must be a safe non-negative integer"
-                )
-            custody_record_count = count
-            members = core.get("members")
-            if not isinstance(members, list):
-                raise ValueError("package members must be a list")
-
-            normalized_members: list[dict[str, object]] = []
-            member_paths: list[str] = []
-            for index, item in enumerate(members):
-                if not isinstance(item, dict) or set(item) != {
-                    "path",
-                    "content_identity",
-                    "byte_count",
-                }:
-                    raise ValueError(
-                        f"package member[{index}] keys changed"
-                    )
-                relative = item.get("path")
-                parts = _safe_parts(relative)
-                assert isinstance(relative, str)
-                if relative == "package.json":
-                    raise ValueError(
-                        "package.json must not be a self-declared member"
-                    )
-                if not _member_path_allowed(relative):
-                    raise ValueError(
-                        f"package member path is outside the v1 layout: {relative}"
-                    )
-                content_identity = item.get("content_identity")
-                require_sha256_identity(
-                    content_identity,
-                    label=f"package member[{index}] identity",
-                )
-                byte_count = item.get("byte_count")
-                if (
-                    type(byte_count) is not int
-                    or not 0 <= byte_count <= MAX_SAFE_INTEGER
-                ):
-                    raise ValueError(
-                        f"package member[{index}] byte_count is invalid"
-                    )
-                member_paths.append(PurePosixPath(*parts).as_posix())
-                normalized_members.append(item)
-            if member_paths != sorted(member_paths):
-                raise ValueError("package members must be sorted by path")
-            if len(set(member_paths)) != len(member_paths):
-                raise ValueError("package member paths must be unique")
-
-            claimed_package = envelope.get("package_identity")
-            require_sha256_identity(
-                claimed_package,
-                label="package identity",
-            )
-            if envelope.get("self_hash_exclusion") != "package_identity":
-                raise ValueError("package self_hash_exclusion changed")
-            expected_package = forensic_package_identity(core)
-            if claimed_package != expected_package:
-                raise ValueError(
-                    "package identity does not match canonical package core"
-                )
-            package_identity_value = str(claimed_package)
-            checks.append("package envelope and identity verified")
-        except Exception as exc:
-            errors.append(str(exc))
-            return ForensicPackageVerificationReport(
-                False,
-                package_identity_value,
-                evidence_manifest_identity,
-                evidence_scope,
-                custody_record_count,
-                tuple(checks),
-                tuple(errors),
-            )
-
-        try:
-            physical, physical_directories, unsafe = _physical_files(root_fd)
-        except Exception as exc:
-            errors.append(f"cannot enumerate package: {exc}")
-            return ForensicPackageVerificationReport(
-                False,
-                package_identity_value,
-                evidence_manifest_identity,
-                evidence_scope,
-                custody_record_count,
-                tuple(checks),
-                tuple(errors),
-            )
-
-        expected_files = {"package.json", *member_paths}
-        expected_directories: set[str] = {
-            "evidence",
-            "custody",
-            "custody/sha256",
-        }
-        for relative in member_paths:
-            parts = PurePosixPath(relative).parts[:-1]
-            for index in range(1, len(parts) + 1):
-                expected_directories.add(
-                    PurePosixPath(*parts[:index]).as_posix()
-                )
-        if unsafe:
-            errors.append(
-                "non-regular filesystem entries are forbidden inside forensic packages: "
-                + ", ".join(sorted(unsafe))
-            )
-        missing = sorted(expected_files - physical)
-        extra = sorted(physical - expected_files)
-        if missing:
-            errors.append(
-                "forensic package is missing declared files: "
-                + ", ".join(missing)
-            )
-        if extra:
-            errors.append(
-                "forensic package contains undeclared files: "
-                + ", ".join(extra)
-            )
-        extra_directories = sorted(
-            physical_directories - expected_directories
-        )
-        missing_directories = sorted(
-            expected_directories - physical_directories
-        )
-        if missing_directories:
-            errors.append(
-                "forensic package is missing declared directory structure: "
-                + ", ".join(missing_directories)
-            )
-        if extra_directories:
-            errors.append(
-                "forensic package contains undeclared directories: "
-                + ", ".join(extra_directories)
-            )
-        if (
-            unsafe
-            or missing
-            or extra
-            or missing_directories
-            or extra_directories
-        ):
-            return ForensicPackageVerificationReport(
-                False,
-                package_identity_value,
-                evidence_manifest_identity,
-                evidence_scope,
-                custody_record_count,
-                tuple(checks),
-                tuple(errors),
-            )
-        checks.append("physical package membership exactly matches package.json")
-
-        member_ok = True
-        member_results = ordered_bounded_map(
-            _member_hash_task,
-            [(root_fd, item) for item in normalized_members],
-            max_workers=max_workers,
-        )
-        for (
-            relative,
-            identity,
-            byte_count,
-            member_error,
-        ), item in zip(member_results, normalized_members):
-            if member_error is not None:
-                member_ok = False
-                errors.append(
-                    f"{relative}: cannot hash member: {member_error}"
-                )
-                continue
-            if identity != item["content_identity"]:
-                member_ok = False
-                errors.append(f"{relative}: member content identity mismatch")
-            if byte_count != item["byte_count"]:
-                member_ok = False
-                errors.append(f"{relative}: member byte_count mismatch")
-        if member_ok:
-            checks.append("all package member hashes and byte counts verified")
-
-        evidence_fd = _open_directory_at(root_fd, ("evidence",))
-        try:
-            bundle_report = (
-                verify_bundle_fd_reference(evidence_fd)
-                if reference_dependencies
-                else verify_bundle_fd(evidence_fd)
-            )
-        finally:
-            os.close(evidence_fd)
-        if not bundle_report.integrity_verified:
-            errors.append(
-                "embedded evidence bundle failed verification: "
-                + "; ".join(bundle_report.errors)
-            )
-        elif (
-            bundle_report.manifest_identity != evidence_manifest_identity
-            or bundle_report.manifest_scope != evidence_scope
-        ):
-            errors.append(
-                "embedded evidence bundle does not match package core"
-            )
-        else:
-            checks.append("embedded evidence bundle independently verified")
-
-        custody_raws, custody_errors = _custody_records(
-            root_fd,
-            member_paths,
-        )
-        errors.extend(custody_errors)
-        custody_report = verify_custody_records(custody_raws)
-        if len(custody_raws) != custody_record_count:
-            errors.append(
-                "package custody_record_count does not match custody members"
-            )
-        if not custody_report.integrity_verified:
-            errors.append(
-                "embedded custody chain failed verification: "
-                + "; ".join(custody_report.errors)
-            )
-        elif not custody_errors:
-            checks.append("embedded custody records independently verified")
-
-        try:
-            schemas = _canonical_object(root_fd, "schemas.json")
-            if schemas != expected_schema_metadata():
-                errors.append("schemas.json does not match package contract")
-            else:
-                checks.append("schema/version metadata verified")
-        except Exception as exc:
-            errors.append(f"schemas.json: {exc}")
-
-        if bundle_report.integrity_verified:
-            try:
-                gaps = _canonical_object(root_fd, "gaps.json")
-                evidence_fd = _open_directory_at(root_fd, ("evidence",))
-                try:
-                    expected_gaps = derive_declared_gaps_fd(
-                        evidence_fd,
-                        custody_raws,
-                    )
-                finally:
-                    os.close(evidence_fd)
-                if gaps != expected_gaps:
-                    errors.append(
-                        "gaps.json does not match recomputed evidence gaps"
-                    )
-                else:
-                    checks.append("declared gaps recomputed and verified")
-            except Exception as exc:
-                errors.append(f"gaps.json: {exc}")
-
-        try:
-            verification = _canonical_object(root_fd, "verification.json")
-            expected_verification = expected_verification_metadata(
-                bundle_report,
-                custody_report,
-            )
-            if verification != expected_verification:
-                errors.append(
-                    "verification.json does not match recomputed reports"
-                )
-            else:
-                checks.append("verification metadata recomputed and verified")
-        except Exception as exc:
-            errors.append(f"verification.json: {exc}")
-
+        root_fd = os.dup(package_fd)
+        if not stat.S_ISDIR(os.fstat(root_fd).st_mode):
+            os.close(root_fd)
+            raise ValueError("package descriptor must reference a directory")
+    except (OSError, TypeError, ValueError) as exc:
         return ForensicPackageVerificationReport(
-            integrity_verified=member_ok and not errors,
-            package_identity=package_identity_value,
-            evidence_manifest_identity=evidence_manifest_identity,
-            evidence_scope=evidence_scope,
-            custody_record_count=custody_record_count,
-            checks=tuple(checks),
-            errors=tuple(errors),
+            False, None, None, None, 0, (), (str(exc),)
+        )
+    try:
+        return _verify_forensic_package_root_fd(
+            root_fd,
+            max_workers=DEFAULT_MAX_VERIFY_WORKERS,
+            reference_dependencies=False,
         )
     finally:
         os.close(root_fd)

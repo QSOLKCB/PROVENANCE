@@ -305,3 +305,15 @@ Signing authority remains an explicit local operator capability exposed by the t
 The detached records themselves remain independently verifiable through the Phase 12 verifier contract.
 
 See `TRUST.md`.
+
+---
+
+# Phase 14 boundary — sensitive transforms stay operator-side
+
+The Phase 14 reference redaction producer is exposed through the local terminal/Python surface rather than as a new MCP tool.
+
+This avoids turning raw sensitive source bytes or privacy-policy decisions into ordinary MCP arguments. Existing MCP evidence semantics remain unchanged.
+
+Selective disclosures remain independently verifiable after creation.
+
+See `PRIVACY.md`.

@@ -115,6 +115,8 @@ verify source snapshot
 
 A failed build removes its staging/output directory rather than leaving a partially published package.
 
+Publication uses kernel-enforced `renameat2(RENAME_NOREPLACE)` semantics. A destination created by another process after the initial absence check is never replaced. After publication the producer verifies the final directory by descriptor and requires its filesystem identity to match the staged package. Platforms without the no-replace primitive fail closed rather than falling back to overwrite-capable rename behavior.
+
 ## Verification
 
 Python:
@@ -197,3 +199,15 @@ from provenance_verify import verify_forensic_package_reference
 The optimized/reference package reports must compare exactly equal for stable inputs.
 
 See [PERFORMANCE.md](PERFORMANCE.md).
+
+---
+
+## Phase 14 selective disclosure
+
+A finalized Phase 11 package may be used as the source for a detached Phase 14 selective disclosure.
+
+The source package itself is not rewritten. The privacy producer verifies the package and reads the retained source artifact through the same open directory descriptor.
+
+The resulting disclosure intentionally omits source content bytes while binding the source package identity, source artifact digest/record metadata, redaction specification, derivative bytes, and DERIVED lineage event.
+
+See [PRIVACY.md](PRIVACY.md).

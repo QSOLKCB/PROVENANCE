@@ -8,7 +8,11 @@ import tempfile
 import unittest
 
 from provenance_mcp import ProvenanceMCPServer
-from provenance_verify import verify_bundle, verify_forensic_package
+from provenance_verify import (
+    verify_bundle,
+    verify_forensic_package,
+    verify_selective_disclosure,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -377,6 +381,131 @@ class ProvenanceCliTests(unittest.TestCase):
             self.assertEqual(assurance["integrity"], "VERIFIED")
             self.assertEqual(assurance["signature"], "VERIFIED")
             self.assertEqual(assurance["external_anchor"], "VERIFIED")
+
+    def test_phase14_redacted_selective_disclosure_cli_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store = root / "store"
+            custody = root / "custody"
+            package = root / "package"
+            disclosure = root / "disclosure"
+            source_text = "name=Alice;token=SECRET-12345;status=ok\n"
+            source_bytes = source_text.encode("utf-8")
+            secret = b"SECRET-12345"
+            start = source_bytes.index(secret)
+            end = start + len(secret)
+
+            recorded = _json_result(
+                _run(
+                    "record",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                    "--text",
+                    source_text,
+                    "--actor",
+                    "operator:phase14",
+                    "--operation",
+                    "phase14.source",
+                    "--media-type",
+                    "text/plain",
+                )
+            )
+            _json_result(
+                _run(
+                    "finalize",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                    "--scope",
+                    "closed",
+                )
+            )
+            _json_result(
+                _run(
+                    "package",
+                    "--store",
+                    str(store),
+                    "--custody",
+                    str(custody),
+                    "--destination",
+                    str(package),
+                )
+            )
+
+            redacted = _json_result(
+                _run(
+                    "redact-disclosure",
+                    "--package",
+                    str(package),
+                    "--source",
+                    recorded["artifact_identity"],
+                    "--range",
+                    f"{start}:{end}",
+                    "--output",
+                    str(disclosure),
+                )
+            )
+            self.assertEqual(
+                redacted["source_content_identity"],
+                recorded["artifact_identity"],
+            )
+            self.assertNotEqual(
+                redacted["derivative_content_identity"],
+                recorded["artifact_identity"],
+            )
+            self.assertEqual(
+                redacted["verification"]["lineage"],
+                "VERIFIED",
+            )
+            self.assertEqual(
+                redacted["verification"]["transformation"],
+                "VERIFIED",
+            )
+
+            standalone = _json_result(
+                _run(
+                    "verify-disclosure",
+                    "--disclosure",
+                    str(disclosure),
+                )
+            )
+            self.assertTrue(standalone["integrity_verified"])
+            self.assertEqual(standalone["lineage"], "VERIFIED")
+            self.assertEqual(
+                standalone["transformation"],
+                "NOT_ATTEMPTED_SOURCE_WITHHELD",
+            )
+
+            bound = _json_result(
+                _run(
+                    "verify-disclosure",
+                    "--disclosure",
+                    str(disclosure),
+                    "--source-package",
+                    str(package),
+                )
+            )
+            self.assertTrue(bound["integrity_verified"])
+            self.assertEqual(bound["lineage"], "VERIFIED")
+            self.assertEqual(bound["transformation"], "VERIFIED")
+            self.assertEqual(bound["source_package_binding"], "VERIFIED")
+
+            report = verify_selective_disclosure(
+                disclosure,
+                source_package=package,
+            )
+            self.assertTrue(report.integrity_verified, report.errors)
+            self.assertNotIn(
+                secret,
+                b"\n".join(
+                    path.read_bytes()
+                    for path in sorted(disclosure.iterdir())
+                    if path.is_file()
+                ),
+            )
 
     def test_relative_paths_resolve_from_caller_working_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

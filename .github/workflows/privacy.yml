@@ -1,0 +1,37 @@
+name: privacy
+
+on:
+  push:
+    paths:
+      - "provenance_privacy/**"
+      - "provenance_verify/**"
+      - "provenance_export/**"
+      - "provenance_core/**"
+      - "tests/test_privacy.py"
+      - "docs/PRIVACY.md"
+      - "docs/ROADMAP.md"
+      - ".github/workflows/privacy.yml"
+  pull_request:
+    paths:
+      - "provenance_privacy/**"
+      - "provenance_verify/**"
+      - "provenance_export/**"
+      - "provenance_core/**"
+      - "tests/test_privacy.py"
+      - "docs/PRIVACY.md"
+      - "docs/ROADMAP.md"
+      - ".github/workflows/privacy.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  privacy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Run Phase 14 privacy tests
+        run: python3 -m unittest tests.test_privacy -v
