@@ -1411,6 +1411,12 @@ The Phase 13 reference benchmark measured lower median runtime for both bundle a
 
 # Phase 14 — Privacy and Selective Disclosure
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Allow deployments to preserve integrity without exposing everything.
@@ -1432,9 +1438,42 @@ A redacted artifact is a new derivative.
 
 It must retain lineage to its source where permitted.
 
+## Reference implementation
+
+Phase 14 adds deterministic byte-range redaction and a finalized selective-disclosure package.
+
+The producer starts from a verified Phase 11 forensic package containing a retained source artifact and creates:
+
+```text
+source artifact digest + exact original ArtifactRecord witness
+redaction specification
+new retained derivative artifact
+DERIVED source → derivative event
+finalized selective-disclosure envelope
+```
+
+The original source bytes are intentionally omitted from the disclosure. The disclosure explicitly separates the source artifact's original retention metadata from the disclosure's `DIGEST_ONLY` treatment.
+
+Standalone verification proves disclosure integrity and declared lineage without claiming the hidden transformation was recomputed. Supplying the original source package additionally lets the verifier bind the source package and reapply the redaction transform byte-for-byte.
+
+Redaction requires retained source content and rejects digest-only sources, overlapping ranges, no-op transforms, tampering, and attempts to relabel the derivative as OBSERVED/original evidence.
+
+The source package is verified/read through one held directory descriptor before staged disclosure publication.
+
+CLI commands:
+
+```text
+provenance redact-disclosure
+provenance verify-disclosure
+```
+
+See `PRIVACY.md`.
+
 ## Exit Gate
 
 An investigator can verify that a disclosed derivative corresponds to a declared source relationship without the system falsely claiming the derivative is the original artifact.
+
+The Phase 14 CI suite proves this both with source bytes withheld and, when the original package is supplied, by exact redaction-transform recomputation.
 
 ---
 
