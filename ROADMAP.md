@@ -790,6 +790,12 @@ MCP can be removed entirely without invalidating existing evidence.
 
 # Phase 8 — CLI
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Provide a minimal human/operator interface without requiring MCP or a UI.
@@ -837,6 +843,40 @@ Browser-based sign-in should open an explicit authorization URL and receive only
 
 OpenAI-compatible HTTP APIs are an important interoperability target, but compatibility at the transport/API surface must not make OpenAI-specific semantics part of provenance-core.
 
+## Reference implementation
+
+The Phase 8 reference surface uses a zero-dependency Rust binary named `provenance` for terminal interaction and a small Python backend that composes the existing core, store, custody, and independent verifier modules.
+
+Implemented commands:
+
+```text
+provenance record
+provenance inspect
+provenance verify
+provenance finalize
+provenance export
+provenance tui
+```
+
+Operator-supplied content is recorded as DECLARED. Each successful record invocation also creates a unique OBSERVED CLI receipt so occurrence evidence does not collapse when declaration content deduplicates.
+
+The terminal mode is deliberately line-oriented for the first implementation:
+
+```text
+/
+→ command palette
+/ver
+→ filtered palette
+/verify
+→ keyboard-first execution
+```
+
+No external Rust crates, network service, MCP transport, or provider authentication are required.
+
+For cross-interface continuity, Phase 8 shares Phase 7's hardened operational working-state lock/journal. The historical MCP-named journal is operational metadata rather than evidence semantics; CLI and MCP therefore serialize into one recoverable pending working set and either interface can finalize the union.
+
+See `CLI.md`.
+
 ## Rule
 
 The CLI wraps existing core/verifier behavior.
@@ -844,6 +884,19 @@ The CLI wraps existing core/verifier behavior.
 It must not reimplement evidence semantics.
 
 ## Exit Gate
+
+An executed terminal integration can:
+
+```text
+record operator-supplied evidence
+preserve the declaration/observation boundary
+inspect working and finalized state
+finalize through the existing store
+independently verify bundle + custody
+export and independently verify a snapshot copy
+share pending working state with MCP
+drive the slash-command palette from a terminal
+```
 
 A user can create and independently verify a basic evidence bundle from a terminal.
 
