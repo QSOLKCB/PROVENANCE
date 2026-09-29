@@ -137,32 +137,37 @@ PROVENANCE should initially remain one repository.
 
 Module separation does **not** require separate GitHub repositories.
 
-Preferred bootstrap structure:
+Current documentation-oriented repository structure:
 
 ```text
 PROVENANCE/
-│
-├── provenance-core/
-├── provenance-verify/
-├── provenance-store/
-├── provenance-mcp/
-├── provenance-cli/
-├── provenance-ui/
-├── provenance-adapters/
-│
-├── schemas/
-├── tests/
-│
 ├── README.md
 ├── README4AIs.md
 ├── AGENTS.md
-├── INVARIANTS.md
-├── ARCHITECTURE.md
-├── DONORS.md
-└── LINEAGE.md
+├── LICENSE
+├── docs/
+│   ├── README.md
+│   ├── GETTING_STARTED.md
+│   ├── INSTRUCTIONS.md
+│   ├── ARCHITECTURE.md
+│   ├── INVARIANTS.md
+│   ├── ROADMAP.md
+│   └── subsystem contracts...
+├── provenance_core/
+├── provenance_verify/
+├── provenance_store/
+├── provenance_custody/
+├── provenance_export/
+├── provenance_mcp/
+├── provenance_cli/
+├── provenance_ui/
+├── provenance_adapters/
+├── provenance-cli/
+├── scripts/
+└── tests/
 ```
 
-This shape is conceptual until implementation requires each module.
+The repository root intentionally keeps only project-entry and agent-guidance Markdown. Detailed specifications live under `docs/`.
 
 Do not create empty modules merely to make the tree look mature.
 
