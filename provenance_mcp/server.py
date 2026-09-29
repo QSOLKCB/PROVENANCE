@@ -93,6 +93,21 @@ def _json_text(value: object) -> str:
     )
 
 
+def _reject_duplicate_json_pairs(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON key {key!r}")
+        value[key] = item
+    return value
+
+
+def _reject_nonfinite_json(token: str):
+    raise ValueError(f"non-finite JSON token {token}")
+
+
 def _require_object(value: object, *, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be an object")
@@ -1310,9 +1325,17 @@ def serve_stdio(
         has_id = False
         try:
             try:
-                request = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise MCPProtocolError(-32700, f"parse error: {exc.msg}") from exc
+                request = json.loads(
+                    line,
+                    object_pairs_hook=_reject_duplicate_json_pairs,
+                    parse_constant=_reject_nonfinite_json,
+                )
+            except (json.JSONDecodeError, ValueError, RecursionError) as exc:
+                detail = exc.msg if isinstance(exc, json.JSONDecodeError) else str(exc)
+                raise MCPProtocolError(
+                    -32700,
+                    f"parse error: {detail}",
+                ) from exc
             if isinstance(request, dict) and "id" in request:
                 has_id = True
                 request_id = request.get("id")
