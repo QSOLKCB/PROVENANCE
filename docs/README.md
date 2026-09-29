@@ -21,6 +21,7 @@ The repository root is intentionally small. Detailed contracts, subsystem notes,
 | [CUSTODY.md](CUSTODY.md) | Append-only custody |
 | [PACKAGE.md](PACKAGE.md) | Phase 11 portable forensic package |
 | [TRUST.md](TRUST.md) | Phase 12 detached signatures and external anchoring |
+| [PERFORMANCE.md](PERFORMANCE.md) | Phase 13 exact verifier performance hardening and benchmark evidence |
 
 ## Interfaces and integrations
 
