@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -369,6 +370,168 @@ class ProvenanceMCPTests(unittest.TestCase):
 
             self.assertEqual(returncode, 0, stderr)
             self.assertEqual(stderr, "")
+
+    def test_concurrent_servers_merge_acknowledged_working_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+
+            client_a = _StdioClient(store_root, custody_root)
+            client_b = _StdioClient(store_root, custody_root)
+            results: dict[str, dict] = {}
+            errors: list[BaseException] = []
+            barrier = threading.Barrier(3)
+
+            try:
+                client_a.request("server/discover")
+                client_b.request("server/discover")
+
+                def record(
+                    label: str,
+                    client: _StdioClient,
+                ) -> None:
+                    try:
+                        barrier.wait(timeout=5)
+                        results[label] = _tool_payload(
+                            client.request(
+                                "tools/call",
+                                {
+                                    "name": "provenance.record",
+                                    "arguments": {
+                                        "actor": f"concurrent-{label}",
+                                        "operation": f"concurrent.record.{label}",
+                                        "value": {"writer": label},
+                                    },
+                                },
+                            )
+                        )
+                    except BaseException as exc:
+                        errors.append(exc)
+
+                thread_a = threading.Thread(
+                    target=record,
+                    args=("A", client_a),
+                )
+                thread_b = threading.Thread(
+                    target=record,
+                    args=("B", client_b),
+                )
+                thread_a.start()
+                thread_b.start()
+                barrier.wait(timeout=5)
+                thread_a.join(timeout=10)
+                thread_b.join(timeout=10)
+
+                self.assertFalse(thread_a.is_alive())
+                self.assertFalse(thread_b.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(set(results), {"A", "B"})
+            finally:
+                returncode_a, stderr_a = client_a.close()
+                returncode_b, stderr_b = client_b.close()
+
+            self.assertEqual(returncode_a, 0, stderr_a)
+            self.assertEqual(stderr_a, "")
+            self.assertEqual(returncode_b, 0, stderr_b)
+            self.assertEqual(stderr_b, "")
+
+            state_path = store_root / ".provenance-mcp-working.json"
+            state = parse_canonical_json_bytes(state_path.read_bytes())
+            self.assertEqual(state["phase"], "recording")
+            self.assertEqual(len(state["artifacts"]), 4)
+            self.assertEqual(len(state["events"]), 4)
+            self.assertEqual(
+                len(state["pending_verified_artifacts"]),
+                4,
+            )
+
+            finalizer = _StdioClient(store_root, custody_root)
+            try:
+                finalizer.request("server/discover")
+                prefinal = _tool_payload(
+                    finalizer.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.inspect",
+                            "arguments": {},
+                        },
+                    )
+                )
+                self.assertEqual(prefinal["artifact_count"], 4)
+                self.assertEqual(prefinal["event_count"], 4)
+
+                finalized = _tool_payload(
+                    finalizer.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.finalize",
+                            "arguments": {"scope": "closed"},
+                        },
+                    )
+                )
+                self.assertTrue(finalized["integrity_verified"])
+                self.assertTrue(finalized["custody_verified"])
+
+                manifest_response = finalizer.request(
+                    "resources/read",
+                    {
+                        "uri": (
+                            "provenance://manifest/"
+                            + finalized["manifest_identity"]
+                        )
+                    },
+                )
+                manifest = parse_canonical_json_bytes(
+                    manifest_response["result"]["contents"][0]["text"].encode(
+                        "utf-8"
+                    )
+                )
+                artifact_ids = {
+                    item["content_identity"]
+                    for item in manifest["core"]["artifacts"]
+                }
+                event_ids = set(manifest["core"]["events"])
+
+                for result in results.values():
+                    self.assertIn(
+                        result["declaration_artifact_identity"],
+                        artifact_ids,
+                    )
+                    self.assertIn(
+                        result["receipt_artifact_identity"],
+                        artifact_ids,
+                    )
+                    self.assertIn(
+                        result["declaration_event_identity"],
+                        event_ids,
+                    )
+                    self.assertIn(
+                        result["receipt_event_identity"],
+                        event_ids,
+                    )
+
+                verified = _tool_payload(
+                    finalizer.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.verify",
+                            "arguments": {},
+                        },
+                    )
+                )
+                self.assertTrue(verified["bundle"]["integrity_verified"])
+                self.assertTrue(verified["custody"]["integrity_verified"])
+                self.assertEqual(
+                    verified["custody"]["record_count"],
+                    13,
+                )
+            finally:
+                returncode, stderr = finalizer.close()
+
+            self.assertEqual(returncode, 0, stderr)
+            self.assertEqual(stderr, "")
+            self.assertFalse(state_path.exists())
 
     def test_restart_recovers_unfinalized_record_membership(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
