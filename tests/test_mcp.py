@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from provenance_core import canonical_json_bytes, parse_canonical_json_bytes
+import provenance_mcp.server as mcp_server_module
+from provenance_mcp import ProvenanceMCPServer
 from provenance_verify import verify_bundle
 
 
@@ -365,6 +369,265 @@ class ProvenanceMCPTests(unittest.TestCase):
 
             self.assertEqual(returncode, 0, stderr)
             self.assertEqual(stderr, "")
+
+    def test_restart_recovers_unfinalized_record_membership(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+
+            first_client = _StdioClient(store_root, custody_root)
+            try:
+                first_client.request("server/discover")
+                recorded = _tool_payload(
+                    first_client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.record",
+                            "arguments": {
+                                "actor": "restart-test",
+                                "operation": "restart.pending",
+                                "value": {"pending": True},
+                            },
+                        },
+                    )
+                )
+            finally:
+                returncode, stderr = first_client.close()
+            self.assertEqual(returncode, 0, stderr)
+            self.assertEqual(stderr, "")
+
+            state_path = store_root / ".provenance-mcp-working.json"
+            self.assertTrue(state_path.is_file())
+
+            second_client = _StdioClient(store_root, custody_root)
+            try:
+                second_client.request("server/discover")
+                prefinal = _tool_payload(
+                    second_client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.inspect",
+                            "arguments": {},
+                        },
+                    )
+                )
+                self.assertEqual(prefinal["artifact_count"], 2)
+                self.assertEqual(prefinal["event_count"], 2)
+
+                finalized = _tool_payload(
+                    second_client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.finalize",
+                            "arguments": {"scope": "closed"},
+                        },
+                    )
+                )
+                self.assertTrue(finalized["integrity_verified"])
+                self.assertTrue(finalized["custody_verified"])
+
+                manifest_response = second_client.request(
+                    "resources/read",
+                    {
+                        "uri": (
+                            "provenance://manifest/"
+                            + finalized["manifest_identity"]
+                        )
+                    },
+                )
+                manifest = parse_canonical_json_bytes(
+                    manifest_response["result"]["contents"][0]["text"].encode(
+                        "utf-8"
+                    )
+                )
+                artifacts = {
+                    item["content_identity"]
+                    for item in manifest["core"]["artifacts"]
+                }
+                events = set(manifest["core"]["events"])
+                self.assertIn(
+                    recorded["declaration_artifact_identity"],
+                    artifacts,
+                )
+                self.assertIn(
+                    recorded["receipt_artifact_identity"],
+                    artifacts,
+                )
+                self.assertIn(
+                    recorded["declaration_event_identity"],
+                    events,
+                )
+                self.assertIn(
+                    recorded["receipt_event_identity"],
+                    events,
+                )
+
+                verified = _tool_payload(
+                    second_client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.verify",
+                            "arguments": {},
+                        },
+                    )
+                )
+                self.assertTrue(verified["bundle"]["integrity_verified"])
+                self.assertTrue(verified["custody"]["integrity_verified"])
+                self.assertEqual(
+                    verified["custody"]["record_count"],
+                    7,
+                )
+            finally:
+                returncode, stderr = second_client.close()
+
+            self.assertEqual(returncode, 0, stderr)
+            self.assertEqual(stderr, "")
+            self.assertFalse(state_path.exists())
+
+    def test_artifact_read_uses_unfinalized_retention_upgrade(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = _StdioClient(root / "store", root / "custody")
+            arguments = {
+                "actor": "retention-test",
+                "operation": "retention.upgrade",
+                "value": {"payload": "same-content"},
+            }
+            try:
+                client.request("server/discover")
+                first = _tool_payload(
+                    client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.record",
+                            "arguments": {
+                                **arguments,
+                                "retainContent": False,
+                            },
+                        },
+                    )
+                )
+                _tool_payload(
+                    client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.finalize",
+                            "arguments": {"scope": "closed"},
+                        },
+                    )
+                )
+
+                second = _tool_payload(
+                    client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.record",
+                            "arguments": arguments,
+                        },
+                    )
+                )
+                self.assertEqual(
+                    first["declaration_artifact_identity"],
+                    second["declaration_artifact_identity"],
+                )
+
+                resource = client.request(
+                    "resources/read",
+                    {
+                        "uri": (
+                            "provenance://artifact/"
+                            + second["declaration_artifact_identity"]
+                        )
+                    },
+                )
+                content = resource["result"]["contents"][0]
+                self.assertIn("blob", content)
+                self.assertNotIn("text", content)
+                expected = canonical_json_bytes(
+                    {
+                        "schema": "provenance.mcp-declaration.v1",
+                        "actor": arguments["actor"],
+                        "operation": arguments["operation"],
+                        "value": arguments["value"],
+                    }
+                )
+                self.assertEqual(
+                    base64.b64decode(content["blob"]),
+                    expected,
+                )
+
+                _tool_payload(
+                    client.request(
+                        "tools/call",
+                        {
+                            "name": "provenance.finalize",
+                            "arguments": {"scope": "closed"},
+                        },
+                    )
+                )
+            finally:
+                returncode, stderr = client.close()
+            self.assertEqual(returncode, 0, stderr)
+            self.assertEqual(stderr, "")
+
+    def test_export_parent_swap_cannot_escape_descriptor_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+            export_parent = root / "exports"
+            moved_parent = root / "exports-moved"
+            export_parent.mkdir()
+
+            server = ProvenanceMCPServer(store_root, custody_root)
+            recorded = server._record(
+                {
+                    "actor": "export-race-test",
+                    "operation": "export.race",
+                    "value": {"x": 1},
+                }
+            )
+            self.assertEqual(recorded["classification"], "DECLARED")
+            server._finalize({"scope": "closed"})
+
+            destination = export_parent / "bundle"
+            original_copy = mcp_server_module._copy_directory_contents
+            raced = False
+
+            def race_then_copy(source_fd: int, destination_fd: int) -> None:
+                nonlocal raced
+                if not raced:
+                    raced = True
+                    export_parent.rename(moved_parent)
+                    export_parent.symlink_to(
+                        store_root,
+                        target_is_directory=True,
+                    )
+                original_copy(source_fd, destination_fd)
+
+            try:
+                with mock.patch.object(
+                    mcp_server_module,
+                    "_copy_directory_contents",
+                    side_effect=race_then_copy,
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError,
+                        "parent changed during publication",
+                    ):
+                        server._export({"destination": str(destination)})
+            finally:
+                if export_parent.is_symlink():
+                    export_parent.unlink()
+                if moved_parent.exists():
+                    moved_parent.rename(export_parent)
+
+            self.assertTrue(raced)
+            self.assertFalse((store_root / "bundle").exists())
+            self.assertFalse((export_parent / "bundle").exists())
+            self.assertTrue(server.store.verify_current().integrity_verified)
+            self.assertTrue(server.custody.verify().integrity_verified)
 
     def test_record_rejects_caller_evidence_class_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
