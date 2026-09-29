@@ -535,6 +535,68 @@ class ProvenanceMCPTests(unittest.TestCase):
             self.assertEqual(stderr, "")
             self.assertFalse(state_path.exists())
 
+    def test_record_rejects_root_swap_during_journal_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_root = root / "store"
+            custody_root = root / "custody"
+            moved_root = root / "store-original"
+
+            server = ProvenanceMCPServer(store_root, custody_root)
+            original_write = server._write_working_state
+            swapped = False
+
+            def swap_then_write(
+                *,
+                phase: str,
+                finalized_manifest_identity: str | None = None,
+            ) -> None:
+                nonlocal swapped
+                if not swapped:
+                    swapped = True
+                    store_root.rename(moved_root)
+                    LocalEvidenceStore(store_root)
+                original_write(
+                    phase=phase,
+                    finalized_manifest_identity=finalized_manifest_identity,
+                )
+
+            with mock.patch.object(
+                server,
+                "_write_working_state",
+                side_effect=swap_then_write,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "store root filesystem identity changed",
+                ):
+                    server._record(
+                        {
+                            "actor": "root-swap-record-test",
+                            "operation": "record.swap",
+                            "value": {"x": 1},
+                        }
+                    )
+
+            self.assertTrue(swapped)
+            self.assertTrue(
+                (moved_root / ".provenance-mcp-working.json").is_file()
+            )
+            self.assertFalse(
+                (store_root / ".provenance-mcp-working.json").exists()
+            )
+
+            replacement = ProvenanceMCPServer(store_root, custody_root)
+            replacement_state = replacement._inspect({})
+            self.assertIsNone(replacement_state["current_manifest_identity"])
+            self.assertEqual(replacement_state["artifact_count"], 0)
+            self.assertEqual(replacement_state["event_count"], 0)
+
+            recovered = ProvenanceMCPServer(moved_root, custody_root)
+            recovered_state = recovered._inspect({})
+            self.assertEqual(recovered_state["artifact_count"], 2)
+            self.assertEqual(recovered_state["event_count"], 2)
+
     def test_long_lived_server_rejects_replacement_store_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
