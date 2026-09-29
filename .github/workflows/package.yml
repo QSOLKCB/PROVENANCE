@@ -9,9 +9,9 @@ on:
       - "provenance_store/**"
       - "provenance_custody/**"
       - "tests/test_package.py"
-      - "BUNDLE.md"
-      - "PACKAGE.md"
-      - "ROADMAP.md"
+      - "docs/BUNDLE.md"
+      - "docs/PACKAGE.md"
+      - "docs/ROADMAP.md"
       - ".github/workflows/package.yml"
   pull_request:
     paths:
@@ -21,9 +21,9 @@ on:
       - "provenance_store/**"
       - "provenance_custody/**"
       - "tests/test_package.py"
-      - "BUNDLE.md"
-      - "PACKAGE.md"
-      - "ROADMAP.md"
+      - "docs/BUNDLE.md"
+      - "docs/PACKAGE.md"
+      - "docs/ROADMAP.md"
       - ".github/workflows/package.yml"
 
 permissions:
