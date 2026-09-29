@@ -79,7 +79,6 @@ fn run_backend(args: &[String]) -> Result<i32, String> {
         .arg("-m")
         .arg("provenance_cli.backend")
         .args(args)
-        .current_dir(&root)
         .env("PYTHONPATH", pythonpath_with_root(&root))
         .status()
         .map_err(|error| format!("failed to start provenance CLI backend: {error}"))?;
