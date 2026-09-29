@@ -7,7 +7,7 @@ PROVENANCE records **who did what, when, where, why, and how — backed by evide
 **Start here:** [Getting Started](docs/GETTING_STARTED.md) · [Usage Instructions](docs/INSTRUCTIONS.md) · [Documentation](docs/README.md) · [Roadmap](docs/ROADMAP.md)
 
 [![Version](https://img.shields.io/badge/version-v0.1--dev-4c1.svg)](docs/ROADMAP.md)
-[![Phase](https://img.shields.io/badge/roadmap-Phase%2011%20implemented-2ea44f.svg)](docs/ROADMAP.md)
+[![Phase](https://img.shields.io/badge/roadmap-Phase%2012%20implemented-2ea44f.svg)](docs/ROADMAP.md)
 [![Core CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml)
 [![Verify CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml)
 [![Package CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml)
@@ -27,6 +27,7 @@ PROVENANCE records **who did what, when, where, why, and how — backed by evide
 - **Real observation paths** — Ollama, generic HTTP, and local process adapters.
 - **Operator surfaces** — Rust CLI/TUI, stdio MCP, and read-only localhost UI.
 - **Portable forensic packages** — evidence + custody + schemas + verification metadata + declared gaps.
+- **Optional authenticity** — detached Ed25519 SSHSIG signatures and independently verifiable Git commit anchors.
 - **Explicit uncertainty** — missing, digest-only, open-collection, and custody-gap states remain visible.
 
 ## Quick lifecycle
@@ -89,9 +90,9 @@ The core remains provider- and interface-neutral. Verification consumes finalize
 
 ## Status
 
-Implemented through **Phase 11**: canonical core, verifier, local store, custody, Ollama + real-model CI, MCP, Rust CLI/TUI, read-only UI, generic adapters, and portable forensic packages.
+Implemented through **Phase 12**: canonical core, verifier, local store, custody, Ollama + real-model CI, MCP, Rust CLI/TUI, read-only UI, generic adapters, portable forensic packages, and detached signatures/Git anchors.
 
-Next: **Phase 12 — signatures and external anchoring**. See [the roadmap](docs/ROADMAP.md).
+Next: **Phase 13 — performance hardening**. See [the roadmap](docs/ROADMAP.md).
 
 ## Documentation
 
@@ -107,6 +108,7 @@ Next: **Phase 12 — signatures and external anchoring**. See [the roadmap](docs
 | Store | [docs/STORE.md](docs/STORE.md) |
 | Custody | [docs/CUSTODY.md](docs/CUSTODY.md) |
 | Portable package | [docs/PACKAGE.md](docs/PACKAGE.md) |
+| Signatures & anchors | [docs/TRUST.md](docs/TRUST.md) |
 | CLI/TUI | [docs/CLI.md](docs/CLI.md) |
 | MCP | [docs/MCP.md](docs/MCP.md) |
 | Read-only UI | [docs/UI.md](docs/UI.md) |
