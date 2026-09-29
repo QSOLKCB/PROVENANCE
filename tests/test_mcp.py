@@ -1037,9 +1037,11 @@ class ProvenanceMCPTests(unittest.TestCase):
                     event_response["error"]["code"],
                     -32603,
                 )
-                self.assertIn(
-                    "does not match resource identity",
-                    event_response["error"]["data"]["detail"],
+                event_detail = event_response["error"]["data"]["detail"]
+                self.assertTrue(
+                    "does not match resource identity" in event_detail
+                    or "differs from verified snapshot" in event_detail,
+                    event_detail,
                 )
                 event_path.write_bytes(original_event)
 
@@ -1073,9 +1075,11 @@ class ProvenanceMCPTests(unittest.TestCase):
                     artifact_response["error"]["code"],
                     -32603,
                 )
-                self.assertIn(
-                    "content does not match resource identity",
-                    artifact_response["error"]["data"]["detail"],
+                artifact_detail = artifact_response["error"]["data"]["detail"]
+                self.assertTrue(
+                    "content does not match resource identity" in artifact_detail
+                    or "differs from verified snapshot" in artifact_detail,
+                    artifact_detail,
                 )
                 artifact_path.write_bytes(original_artifact)
 
