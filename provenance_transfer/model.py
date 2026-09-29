@@ -11,6 +11,11 @@ from provenance_core import (
     require_sha256_identity,
 )
 from provenance_custody import ClockObservation
+from provenance_trust.model import (
+    ed25519_key_fingerprint,
+    normalize_ed25519_public_key,
+    sha256_content_identity,
+)
 
 
 TRANSFER_PROTOCOL = "provenance.transfer.v1"
@@ -155,4 +160,39 @@ def receipt_core(
         "accepted_at": clock_dict(accepted_at),
         "receiver_custody_identities": list(identities),
         "ordering": "PARTIAL",
+    }
+
+
+def transfer_signature_core(
+    *,
+    role: str,
+    subject_kind: str,
+    subject_identity: str,
+    signed_bytes: bytes,
+    public_key: str,
+    signature: str,
+) -> dict[str, Any]:
+    if role not in {"sender", "receiver"}:
+        raise ValueError("transfer signature role must be sender or receiver")
+    if subject_kind not in {"transfer_offer", "transfer_receipt"}:
+        raise ValueError("unsupported transfer signature subject kind")
+    require_sha256_identity(
+        subject_identity,
+        label="transfer signature subject identity",
+    )
+    normalized = normalize_ed25519_public_key(public_key)
+    if not isinstance(signature, str) or not signature:
+        raise ValueError("transfer signature must be non-empty text")
+    return {
+        "schema": TRANSFER_SIGNATURE_SCHEMA,
+        "canonicalization": CANONICALIZATION_ID,
+        "role": role,
+        "subject_kind": subject_kind,
+        "subject_identity": subject_identity,
+        "signed_content_identity": sha256_content_identity(signed_bytes),
+        "algorithm": "ssh-ed25519",
+        "namespace": SIGNATURE_NAMESPACE,
+        "public_key": normalized,
+        "key_fingerprint": ed25519_key_fingerprint(normalized),
+        "signature": signature,
     }
