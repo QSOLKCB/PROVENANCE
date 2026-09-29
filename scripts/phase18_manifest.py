@@ -16,12 +16,7 @@ EXPECTED_COMMIT = "0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742"
 EXPECTED_DOI = "10.5281/zenodo.23043860"
 EXPECTED_TOOLCHAIN = "leanprover/lean4:v4.34.1"
 
-ARCHIVE_FILES = (
-    "formal/.gitignore",
-    "formal/TARGET.json",
-    "formal/lean-toolchain",
-    "formal/lakefile.toml",
-    "formal/ProvenanceFormal.lean",
+ARCHIVE_EXTRA_FILES = (
     "docs/FORMAL_VERIFICATION.md",
     "docs/ARCHIVAL_RELEASE.md",
     "CITATION.cff",
@@ -155,6 +150,14 @@ def _lean_sources(proof_commit: str) -> list[str]:
     return paths
 
 
+def _archive_source_files(proof_commit: str) -> list[str]:
+    listing = _git_text(
+        "ls-tree", "-r", "--name-only", proof_commit, "formal"
+    )
+    formal_files = [line for line in listing.splitlines() if line]
+    return sorted(set(formal_files).union(ARCHIVE_EXTRA_FILES))
+
+
 def _reject_placeholders(proof_commit: str) -> None:
     for relative in _lean_sources(proof_commit):
         proof = _blob_bytes(proof_commit, relative).decode("utf-8")
@@ -208,7 +211,7 @@ def build_manifest(
     _reject_placeholders(proof_commit)
 
     files: list[dict[str, object]] = []
-    for relative in ARCHIVE_FILES:
+    for relative in _archive_source_files(proof_commit):
         raw = _blob_bytes(proof_commit, relative)
         files.append(
             {
