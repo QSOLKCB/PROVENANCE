@@ -34,6 +34,7 @@ from provenance_core import (
     sha256_identity,
 )
 from provenance_custody import LocalCustodyLedger, observe_clock
+from provenance_export import create_forensic_package
 from provenance_store import LocalEvidenceStore
 from provenance_verify import verify_bundle
 
@@ -492,6 +493,27 @@ TOOLS: tuple[dict[str, Any], ...] = (
             "additionalProperties": False,
         },
         "annotations": {"readOnlyHint": True},
+    },
+    {
+        "name": "provenance.package",
+        "description": (
+            "Create a finalized portable Phase 11 forensic package containing "
+            "the verified evidence snapshot, custody records, schema metadata, "
+            "verification metadata, and declared gaps."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "destination": {"type": "string", "minLength": 1},
+            },
+            "required": ["destination"],
+            "additionalProperties": False,
+        },
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+        },
     },
     {
         "name": "provenance.export",
@@ -1300,6 +1322,51 @@ class ProvenanceMCPServer:
 
         raise ValueError(f"unknown evidence identity: {identity}")
 
+    def _package(self, arguments: object) -> dict[str, Any]:
+        with self._working_state_lock():
+            self._synchronize_working_state_locked()
+            args = _require_object(
+                arguments,
+                label="provenance.package arguments",
+            )
+            _require_exact_keys(
+                args,
+                required={"destination"},
+                label="provenance.package arguments",
+            )
+            destination = _require_nonempty_string(
+                args["destination"],
+                label="destination",
+            )
+            result = create_forensic_package(
+                self.store.root,
+                self.custody.root,
+                destination,
+            )
+            custody_identity = self._append_custody(
+                result.evidence_manifest_identity,
+                CustodyAction.EXPORTED,
+                actor=MCP_INTERFACE_ID,
+                source=str(result.path),
+                related_identity=result.package_identity,
+            )
+            custody_report = self.custody.verify()
+            if not custody_report.integrity_verified:
+                raise ToolFailure(
+                    "custody verification failed after forensic package export: "
+                    + "; ".join(custody_report.errors)
+                )
+            return {
+                "package_identity": result.package_identity,
+                "manifest_identity": result.evidence_manifest_identity,
+                "scope": result.evidence_scope,
+                "custody_record_count": result.custody_record_count,
+                "destination": str(result.path),
+                "integrity_verified": True,
+                "export_custody_identity": custody_identity,
+                "custody_verified": True,
+            }
+
     def _export(self, arguments: object) -> dict[str, Any]:
         with self._working_state_lock():
             self._synchronize_working_state_locked()
@@ -1444,6 +1511,7 @@ class ProvenanceMCPServer:
             "provenance.inspect": self._inspect,
             "provenance.verify": self._verify,
             "provenance.finalize": self._finalize,
+            "provenance.package": self._package,
             "provenance.export": self._export,
         }
         handler = handlers.get(name)
