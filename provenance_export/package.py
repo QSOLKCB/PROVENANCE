@@ -16,11 +16,12 @@ from provenance_core import (
 )
 from provenance_verify import (
     FORENSIC_PACKAGE_SCHEMA,
-    derive_declared_gaps,
+    derive_declared_gaps_fd,
     expected_schema_metadata,
     expected_verification_metadata,
     forensic_package_identity,
     verify_bundle,
+    verify_bundle_fd,
     verify_custody_records,
     verify_forensic_package,
 )
@@ -607,9 +608,21 @@ def create_forensic_package(
                     "package destination parent changed during staging"
                 )
             staging_path = parent / staging_name
-            exported_bundle_report = verify_bundle(
-                staging_path / "evidence"
+            evidence_check_fd = os.open(
+                "evidence",
+                _directory_flags(),
+                dir_fd=staging_fd,
             )
+            try:
+                exported_bundle_report = verify_bundle_fd(
+                    evidence_check_fd
+                )
+                declared_gaps = derive_declared_gaps_fd(
+                    evidence_check_fd,
+                    [raw for _name, raw in custody_records],
+                )
+            finally:
+                os.close(evidence_check_fd)
             if (
                 not exported_bundle_report.integrity_verified
                 or exported_bundle_report.manifest_identity
@@ -642,12 +655,7 @@ def create_forensic_package(
             _write_member(
                 staging_fd,
                 "gaps.json",
-                canonical_json_bytes(
-                    derive_declared_gaps(
-                        staging_path / "evidence",
-                        [raw for _name, raw in custody_records],
-                    )
-                ),
+                canonical_json_bytes(declared_gaps),
                 members,
             )
             _write_member(
