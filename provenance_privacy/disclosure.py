@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ctypes
+import errno
 import hashlib
 import os
 from pathlib import Path
@@ -38,6 +40,21 @@ from provenance_verify.privacy import verify_selective_disclosure_fd
 
 _CHUNK_SIZE = 1024 * 1024
 _STRUCTURED_LIMIT = 16 * 1024 * 1024
+_RENAME_NOREPLACE = 1
+
+try:
+    _LIBC = ctypes.CDLL(None, use_errno=True)
+    _RENAMEAT2 = _LIBC.renameat2
+    _RENAMEAT2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    _RENAMEAT2.restype = ctypes.c_int
+except AttributeError:
+    _RENAMEAT2 = None
 
 
 class PrivacyError(RuntimeError):
@@ -58,7 +75,6 @@ def _directory_flags() -> int:
     missing = [name for name in required if not hasattr(os, name)]
     for operation, label in (
         (os.open, "dir_fd support for os.open"),
-        (os.rename, "dir_fd support for os.rename"),
         (os.unlink, "dir_fd support for os.unlink"),
     ):
         if operation not in os.supports_dir_fd:
@@ -69,6 +85,37 @@ def _directory_flags() -> int:
             + ", ".join(missing)
         )
     return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def _rename_noreplace_at(
+    source_dir_fd: int,
+    source_name: str,
+    destination_dir_fd: int,
+    destination_name: str,
+) -> None:
+    if _RENAMEAT2 is None:
+        raise PrivacyError(
+            "safe no-replace publication requires renameat2(RENAME_NOREPLACE)"
+        )
+    ctypes.set_errno(0)
+    result = _RENAMEAT2(
+        source_dir_fd,
+        os.fsencode(source_name),
+        destination_dir_fd,
+        os.fsencode(destination_name),
+        _RENAME_NOREPLACE,
+    )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in {errno.EEXIST, errno.ENOTEMPTY}:
+        raise PrivacyError(
+            "disclosure destination must not already exist"
+        )
+    raise PrivacyError(
+        "no-replace disclosure publication failed: "
+        + os.strerror(error)
+    )
 
 
 def _file_read_flags() -> int:
@@ -439,6 +486,7 @@ def create_redacted_disclosure(
             _directory_flags(),
             dir_fd=parent_fd,
         )
+        staging_identity = _directory_identity(staging_fd)
         members: list[dict[str, object]] = []
         try:
             _write_member(
@@ -536,17 +584,28 @@ def create_redacted_disclosure(
             raise PrivacyError(
                 "disclosure destination parent changed before publication"
             )
-        os.rename(
+        _rename_noreplace_at(
+            parent_fd,
             staging_name,
+            parent_fd,
             supplied.name,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
         )
-        created_name = supplied.name
+        # Publication succeeded. From this point on, never recursively remove
+        # the final name on failure: a hostile process could replace that name
+        # after publication and cleanup must not delete unrelated data.
+        created_name = None
         os.fsync(parent_fd)
         final_path = parent / supplied.name
-        final_fd = os.open(final_path, _directory_flags())
+        final_fd = os.open(
+            supplied.name,
+            _directory_flags(),
+            dir_fd=parent_fd,
+        )
         try:
+            if _directory_identity(final_fd) != staging_identity:
+                raise PrivacyError(
+                    "published disclosure filesystem identity changed"
+                )
             verification = verify_selective_disclosure_fd(
                 final_fd,
                 source_package_fd=package_fd,
