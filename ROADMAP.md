@@ -1119,6 +1119,12 @@ The Phase 10 executed test uses a local HTTP server and a local child process, p
 
 # Phase 11 — Exportable Evidence Bundles
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Create portable forensic packages.
@@ -1165,9 +1171,45 @@ with:
 FINALIZED
 ```
 
+## Reference implementation
+
+Phase 11 adds a separate `provenance.forensic-package.v1` archival envelope around an unchanged Phase 2 `provenance.bundle.v1` snapshot.
+
+The package contains:
+
+```text
+package.json
+evidence/           # unchanged Phase 2 bundle
+custody/sha256/    # stable immutable custody snapshot
+schemas.json
+verification.json
+gaps.json
+```
+
+Every package member is bound by path, SHA-256 content identity, and byte count. `package.json` has its own domain-separated identity and self-hash exclusion.
+
+The producer stages the package, independently verifies it, atomically publishes it, and verifies the published destination again.
+
+The independent package verifier recomputes embedded evidence verification, custody verification, schema metadata, and declared gaps; it rejects missing/extra/unsafe/substituted members and undeclared directories.
+
+A finalized package explicitly separates:
+
+```text
+package_state = FINALIZED
+evidence_scope = open | closed
+```
+
+so an archived open collection is never silently upgraded to closed.
+
+The Rust CLI exposes `provenance package`; MCP exposes `provenance.package`. The historical Phase 7/8 `export` snapshot-copy contract remains unchanged.
+
+See `PACKAGE.md`.
+
 ## Exit Gate
 
 A bundle created on one machine can be moved to another and independently verified.
+
+The executed Phase 11 test copies the finalized package to a separate simulated machine directory, removes the original package, and verifies the moved copy with the same package identity and evidence manifest identity.
 
 ---
 
