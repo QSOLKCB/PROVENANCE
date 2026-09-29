@@ -10,6 +10,7 @@ on:
       - "provenance_custody/**"
       - "tests/test_package.py"
       - "BUNDLE.md"
+      - "PACKAGE.md"
       - "ROADMAP.md"
       - ".github/workflows/package.yml"
   pull_request:
@@ -21,6 +22,7 @@ on:
       - "provenance_custody/**"
       - "tests/test_package.py"
       - "BUNDLE.md"
+      - "PACKAGE.md"
       - "ROADMAP.md"
       - ".github/workflows/package.yml"
 
