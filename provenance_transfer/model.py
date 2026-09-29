@@ -129,6 +129,8 @@ def receipt_core(
     require_sha256_identity(package_identity, label="package identity")
     source = _system(source_system, label="source_system")
     destination = _system(destination_system, label="destination_system")
+    if source == destination:
+        raise ValueError("source_system and destination_system must differ")
     identities = tuple(receiver_custody_identities)
     if not identities:
         raise ValueError("receipt requires receiver custody acknowledgements")
