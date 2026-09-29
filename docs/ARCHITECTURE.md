@@ -2262,3 +2262,41 @@ MAKE THE EVIDENCE SURVIVE THE SOFTWARE THAT CREATED IT.
 
 GET OUT OF THE MONITORED SYSTEM'S WAY.
 ```
+
+---
+
+# Phase 15 — Distributed Custody Architecture
+
+The reference distributed path is a signed store-and-forward handoff, not a global ledger.
+
+```text
+source forensic package
+  ├── source evidence identity
+  └── sender custody snapshot
+          ↓
+signed transfer offer
+          ↓
+transfer bundle
+          ↓ offline / delayed transport
+receiver verifies package + offer
+          ↓
+receiver-local CAPTURED/STORED/VERIFIED chain
+          ↓
+signed receipt
+```
+
+Dependency direction remains optional and outward:
+
+```text
+provenance-transfer
+    ↓
+provenance-export / provenance-custody / provenance-trust
+
+transfer evidence
+    ↓
+provenance-verify
+```
+
+No cross-system timestamp comparison creates ordering authority. The verifier reports explicit causal edges and `PARTIAL` ordering only.
+
+See [TRANSFER.md](TRANSFER.md).

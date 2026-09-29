@@ -391,3 +391,50 @@ provenance verify-disclosure \
 These are standalone package/privacy commands, not TUI store-session commands.
 
 See `PRIVACY.md`.
+
+---
+
+# Phase 15 extension — distributed custody
+
+Create a signed offline handoff:
+
+~~~bash
+provenance transfer-create \
+  --package /path/to/source-package \
+  --source-system org-a/system-1 \
+  --destination-system org-b/system-9 \
+  --sender-key /path/to/sender-key \
+  --output /path/to/transfer
+~~~
+
+Accept it into independently operated receiver storage:
+
+~~~bash
+provenance transfer-receive \
+  --transfer /path/to/transfer \
+  --package-destination /receiver/package \
+  --receipt /receiver/receipt \
+  --custody /receiver/custody \
+  --receiver-system org-b/system-9 \
+  --receiver-key /path/to/receiver-key \
+  --expected-sender-fingerprint 'SHA256:<trusted-sender-fingerprint>'
+~~~
+
+Verify sender handoff:
+
+~~~bash
+provenance verify-transfer --transfer /path/to/transfer
+~~~
+
+Verify the receiver acknowledgement and optional end-to-end bindings:
+
+~~~bash
+provenance verify-receipt \
+  --receipt /receiver/receipt \
+  --transfer /path/to/transfer \
+  --package /receiver/package
+~~~
+
+These are standalone finalized-package operations and are not TUI working-store commands.
+
+See `TRANSFER.md`.

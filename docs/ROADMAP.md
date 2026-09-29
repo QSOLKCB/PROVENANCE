@@ -1479,6 +1479,12 @@ The Phase 14 CI suite proves this both with source bytes withheld and, when the 
 
 # Phase 15 — Distributed Custody
 
+## Status
+
+```text
+IMPLEMENTED
+```
+
 ## Goal
 
 Support evidence spanning multiple services or organizations.
@@ -1504,9 +1510,59 @@ Do not manufacture global ordering.
 
 Preserve partial ordering when that is all the evidence supports.
 
+## Reference implementation
+
+Phase 15 implements an offline, signed, partially ordered transfer protocol over finalized Phase 11 forensic packages.
+
+Sender side:
+
+```text
+verified forensic package
+→ signed transfer offer
+→ finalized transfer bundle
+```
+
+Receiver side:
+
+```text
+verify transfer
+→ preserve package identity
+→ append receiver-local CAPTURED/STORED/VERIFIED custody
+→ sign receiver receipt
+```
+
+Sender and receiver clock observations remain separate. The verifier records only evidence-backed causal edges and reports `ordering = PARTIAL`; wall-clock comparison is never used to manufacture global order.
+
+The transfer bundle is self-contained and requires no network service, so delayed/offline/store-and-forward handoff remains verifiable after a partition.
+
+Duplicate delivery is idempotent for a completed receipt and does not append duplicate receiver custody. If the live receiver custody ledger no longer contains the acknowledgements named by the receipt, duplicate delivery fails rather than silently restoring continuity.
+
+Crash recovery accepts only a valid local acknowledgement prefix:
+
+```text
+CAPTURED
+CAPTURED → STORED
+CAPTURED → STORED → VERIFIED
+```
+
+Cross-system authenticity uses role-separated Ed25519 SSHSIG records under the `provenance-transfer` namespace. Key possession does not by itself establish organization/legal identity.
+
+CLI commands:
+
+```text
+provenance transfer-create
+provenance transfer-receive
+provenance verify-transfer
+provenance verify-receipt
+```
+
+See `TRANSFER.md`.
+
 ## Exit Gate
 
 Evidence can cross independently operated systems without silently losing origin, identity, custody, or uncertainty.
+
+The Phase 15 CI suite proves this across separate sender/receiver directories, including offline copied handoff, intentionally reversed sender/receiver wall clocks, preserved package identity, receiver-local custody, signed acknowledgements, duplicate delivery, crash-prefix recovery, wrong-recipient rejection, and tamper detection.
 
 ---
 

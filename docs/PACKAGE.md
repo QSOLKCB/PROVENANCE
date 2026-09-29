@@ -211,3 +211,22 @@ The source package itself is not rewritten. The privacy producer verifies the pa
 The resulting disclosure intentionally omits source content bytes while binding the source package identity, source artifact digest/record metadata, redaction specification, derivative bytes, and DERIVED lineage event.
 
 See [PRIVACY.md](PRIVACY.md).
+
+---
+
+## Phase 15 transfer subject
+
+The Phase 15 distributed-custody protocol transfers an unchanged finalized Phase 11 package.
+
+The package identity is the remote subject identity:
+
+~~~text
+sender package identity
+== transfer subject identity
+== received package identity
+== receipt subject identity
+~~~
+
+The transfer bundle does not rewrite or repackage the evidence into a new evidence identity. It wraps the existing package with signed handoff metadata.
+
+See [TRANSFER.md](TRANSFER.md).

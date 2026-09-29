@@ -1,0 +1,40 @@
+name: transfer
+
+on:
+  push:
+    paths:
+      - "provenance_transfer/**"
+      - "provenance_trust/**"
+      - "provenance_verify/**"
+      - "provenance_custody/**"
+      - "provenance_export/**"
+      - "tests/test_transfer.py"
+      - "docs/TRANSFER.md"
+      - "docs/ROADMAP.md"
+      - ".github/workflows/transfer.yml"
+  pull_request:
+    paths:
+      - "provenance_transfer/**"
+      - "provenance_verify/**"
+      - "provenance_custody/**"
+      - "provenance_export/**"
+      - "tests/test_transfer.py"
+      - "docs/TRANSFER.md"
+      - "docs/ROADMAP.md"
+      - ".github/workflows/transfer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  transfer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Require transfer signing tool
+        run: command -v ssh-keygen
+      - name: Run Phase 15 distributed-custody tests
+        run: python3 -m unittest tests.test_transfer -v

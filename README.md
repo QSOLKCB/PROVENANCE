@@ -7,13 +7,14 @@ PROVENANCE records **who did what, when, where, why, and how — backed by evide
 **Start here:** [Getting Started](docs/GETTING_STARTED.md) · [Usage Instructions](docs/INSTRUCTIONS.md) · [Documentation](docs/README.md) · [Roadmap](docs/ROADMAP.md)
 
 [![Version](https://img.shields.io/badge/version-v0.1--dev-4c1.svg)](docs/ROADMAP.md)
-[![Phase](https://img.shields.io/badge/roadmap-Phase%2014%20implemented-2ea44f.svg)](docs/ROADMAP.md)
+[![Phase](https://img.shields.io/badge/roadmap-Phase%2015%20implemented-2ea44f.svg)](docs/ROADMAP.md)
 [![Core CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml)
 [![Verify CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml)
 [![Package CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml)
 [![Trust CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/trust.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/trust.yml)
 [![Performance CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/performance.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/performance.yml)
 [![Privacy CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/privacy.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/privacy.yml)
+[![Transfer CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/transfer.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/transfer.yml)
 [![Determinism](https://img.shields.io/badge/determinism-canonical%20SHA--256-0969da.svg)](docs/INVARIANTS.md)
 [![Verification](https://img.shields.io/badge/verification-independent-6f42c1.svg)](docs/BUNDLE.md)
 [![Custody](https://img.shields.io/badge/custody-append--only-b60205.svg)](docs/CUSTODY.md)
@@ -33,6 +34,7 @@ PROVENANCE records **who did what, when, where, why, and how — backed by evide
 - **Optional authenticity** — detached Ed25519 SSHSIG signatures and independently verifiable Git commit anchors.
 - **Exact performance hardening** — bounded deterministic parallel verification with retained serial reference paths.
 - **Selective disclosure** — redacted DERIVED artifacts with source digest lineage and optional source-bound transform recomputation.
+- **Distributed custody handoff** — signed offline transfer offers/receipts with receiver-local custody and explicit partial ordering.
 - **Explicit uncertainty** — missing, digest-only, open-collection, and custody-gap states remain visible.
 
 ## Quick lifecycle
@@ -95,9 +97,9 @@ The core remains provider- and interface-neutral. Verification consumes finalize
 
 ## Status
 
-Implemented through **Phase 14**: canonical core, verifier, local store, custody, Ollama + real-model CI, MCP, Rust CLI/TUI, read-only UI, generic adapters, portable forensic packages, detached signatures/Git anchors, exact bounded-parallel verification, and selective redacted disclosures.
+Implemented through **Phase 15**: canonical core, verifier, local store, custody, Ollama + real-model CI, MCP, Rust CLI/TUI, read-only UI, generic adapters, portable forensic packages, detached signatures/Git anchors, exact bounded-parallel verification, selective redacted disclosures, and signed offline distributed-custody handoff.
 
-Next: **Phase 15 — distributed custody**. See [the roadmap](docs/ROADMAP.md).
+Next: **Phase 16 — release-grade trust lane**. See [the roadmap](docs/ROADMAP.md).
 
 ## Documentation
 
@@ -116,6 +118,7 @@ Next: **Phase 15 — distributed custody**. See [the roadmap](docs/ROADMAP.md).
 | Signatures & anchors | [docs/TRUST.md](docs/TRUST.md) |
 | Performance hardening | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) |
 | Privacy & selective disclosure | [docs/PRIVACY.md](docs/PRIVACY.md) |
+| Distributed custody | [docs/TRANSFER.md](docs/TRANSFER.md) |
 | CLI/TUI | [docs/CLI.md](docs/CLI.md) |
 | MCP | [docs/MCP.md](docs/MCP.md) |
 | Read-only UI | [docs/UI.md](docs/UI.md) |
