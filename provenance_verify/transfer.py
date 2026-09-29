@@ -58,7 +58,7 @@ class TransferBundleVerificationReport:
     source_system: str | None
     destination_system: str | None
     sender_signature: str
-    sender_custody: str
+    source_package_custody: str
     ordering: str
     offered_at: dict[str, str] | None
     causal_edges: tuple[tuple[str, str, str], ...]
@@ -75,7 +75,7 @@ class TransferBundleVerificationReport:
             "source_system": self.source_system,
             "destination_system": self.destination_system,
             "sender_signature": self.sender_signature,
-            "sender_custody": self.sender_custody,
+            "source_package_custody": self.source_package_custody,
             "ordering": self.ordering,
             "offered_at": self.offered_at,
             "causal_edges": [
@@ -177,15 +177,6 @@ def _allowed_bundle_member(path: str) -> bool:
         return True
     if path.startswith("package/"):
         return len(PurePosixPath(path).parts) >= 2
-    if path.startswith("sender_custody/sha256/"):
-        parts = PurePosixPath(path).parts
-        name = parts[-1]
-        return (
-            len(parts) == 3
-            and len(name) == 69
-            and name.endswith(".json")
-            and all(ch in "0123456789abcdef" for ch in name[:-5])
-        )
     return False
 
 
@@ -222,7 +213,7 @@ def verify_transfer_bundle(
     destination_system: str | None = None
     offered_at: dict[str, str] | None = None
     sender_signature = "FAILED"
-    sender_custody = "FAILED"
+    source_package_custody = "FAILED"
     causal_edges: list[tuple[str, str, str]] = []
 
     try:
@@ -256,8 +247,6 @@ def verify_transfer_bundle(
                 "offer_signature_identity",
                 "source_system",
                 "destination_system",
-                "sender_transfer_custody_identity",
-                "sender_custody_record_count",
                 "members",
                 "ordering",
             }:
@@ -279,7 +268,6 @@ def verify_transfer_bundle(
                 ("evidence manifest identity", "evidence_manifest_identity"),
                 ("offer identity", "offer_identity"),
                 ("offer signature identity", "offer_signature_identity"),
-                ("sender transfer custody identity", "sender_transfer_custody_identity"),
             ):
                 require_sha256_identity(core.get(key), label=label)
             package_identity = str(core["subject_identity"])
@@ -292,10 +280,6 @@ def verify_transfer_bundle(
             )
             if source_system == destination_system:
                 raise ValueError("source and destination systems must differ")
-            count = core.get("sender_custody_record_count")
-            if type(count) is not int or count < 1:
-                raise ValueError("sender custody record count is invalid")
-
             members = core.get("members")
             if not isinstance(members, list):
                 raise ValueError("transfer members must be a list")
@@ -347,11 +331,7 @@ def verify_transfer_bundle(
 
             files, directories, unsafe = _physical_files(root_fd)
             expected_files = {"transfer.json", *paths}
-            expected_dirs = {
-                "package",
-                "sender_custody",
-                "sender_custody/sha256",
-            }
+            expected_dirs = {"package"}
             for path in paths:
                 parts = PurePosixPath(path).parts[:-1]
                 for idx in range(1, len(parts) + 1):
@@ -476,73 +456,16 @@ def verify_transfer_bundle(
                 raise ValueError("embedded manifest identity mismatch")
             checks.append("embedded package independently verified")
 
-            custody_paths = sorted(
-                path
-                for path in paths
-                if path.startswith("sender_custody/sha256/")
-            )
-            if len(custody_paths) != count:
-                raise ValueError(
-                    "sender custody record count does not match members"
-                )
-            raws, parsed = _parse_custody_raws(root_fd, custody_paths)
-            custody_report = verify_custody_records(raws)
-            if not custody_report.integrity_verified:
-                raise ValueError(
-                    "sender custody chain failed verification: "
-                    + "; ".join(custody_report.errors)
-                )
-            transfer_custody_identity = str(
-                core["sender_transfer_custody_identity"]
-            )
-            transfer_record = parsed.get(transfer_custody_identity)
-            if transfer_record is None:
-                raise ValueError(
-                    "sender transfer custody record is absent"
-                )
-            custody_core = transfer_record.get("core")
-            if not isinstance(custody_core, dict):
-                raise ValueError("sender transfer custody core is invalid")
-            if custody_core.get("subject_identity") != package_identity:
-                raise ValueError(
-                    "sender transfer custody subject mismatch"
-                )
-            if custody_core.get("action") != CustodyAction.TRANSFERRED.value:
-                raise ValueError(
-                    "sender transfer custody action is not TRANSFERRED"
-                )
-            if custody_core.get("related_identity") != offer_identity_value:
-                raise ValueError(
-                    "sender transfer custody does not bind the offer"
-                )
-            if custody_core.get("actor") != source_system:
-                raise ValueError("sender transfer custody actor mismatch")
-            if custody_core.get("source") != destination_system:
-                raise ValueError("sender transfer custody destination mismatch")
-            custody_clock = {
-                "recorded_at": custody_core.get("recorded_at"),
-                "clock_source": custody_core.get("clock_source"),
-                "clock_assurance": custody_core.get("clock_assurance"),
-            }
-            if custody_clock != offered_at:
-                raise ValueError(
-                    "sender transfer custody clock differs from offer clock"
-                )
-            sender_custody = "VERIFIED"
-            checks.append("sender local custody chain verified")
+            # The Phase 11 package is the authority for sender-side
+            # custody. Its verifier already checks the embedded custody snapshot.
+            source_package_custody = "VERIFIED"
+            checks.append("source package custody verified")
 
-            causal_edges.extend(
+            causal_edges.append(
                 (
-                    (
-                        package_identity,
-                        offer_identity_value,
-                        "offered_for_transfer",
-                    ),
-                    (
-                        offer_identity_value,
-                        transfer_custody_identity,
-                        "sender_recorded_transfer",
-                    ),
+                    package_identity,
+                    offer_identity_value,
+                    "offered_for_transfer",
                 )
             )
         except Exception as exc:
@@ -556,7 +479,7 @@ def verify_transfer_bundle(
             source_system=source_system,
             destination_system=destination_system,
             sender_signature=sender_signature,
-            sender_custody=sender_custody,
+            source_package_custody=source_package_custody,
             ordering="PARTIAL",
             offered_at=offered_at,
             causal_edges=tuple(causal_edges),
