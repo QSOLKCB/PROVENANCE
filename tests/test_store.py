@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import inspect
 import os
 from pathlib import Path
 import shutil
@@ -137,6 +139,63 @@ class LocalEvidenceStoreTests(unittest.TestCase):
             commands = [call.args[1] for call in lockf.call_args_list]
             self.assertIn(store_module.fcntl.LOCK_EX, commands)
             self.assertIn(store_module.fcntl.LOCK_UN, commands)
+
+    def test_refresh_postcheck_root_swap_keeps_bound_reconstructed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            root = base / "store"
+            moved_root = base / "store-original"
+
+            store = LocalEvidenceStore(root)
+            artifact = store.put_artifact(b"refresh postcheck binding")
+            store.put_event(
+                _event_for(
+                    artifact.content_identity,
+                    operation="refresh-postcheck-binding",
+                )
+            )
+            snapshot = store.finalize()
+            original_identity = snapshot.manifest_identity
+
+            original_root_fd = store._root_fd
+            swapped = False
+
+            @contextmanager
+            def swap_after_load_head_check():
+                nonlocal swapped
+                caller = inspect.currentframe().f_back.f_code.co_name
+                with original_root_fd() as fd:
+                    yield fd
+                if caller == "_load_head" and not swapped:
+                    swapped = True
+                    root.rename(moved_root)
+                    LocalEvidenceStore(root)
+
+            with mock.patch.object(
+                store,
+                "_root_fd",
+                side_effect=swap_after_load_head_check,
+            ):
+                store.refresh_from_disk()
+
+            self.assertTrue(swapped)
+            self.assertEqual(
+                store.current_manifest_identity,
+                original_identity,
+            )
+            self.assertEqual(
+                LocalEvidenceStore(moved_root).current_manifest_identity,
+                original_identity,
+            )
+            self.assertIsNone(
+                LocalEvidenceStore(root).current_manifest_identity
+            )
+
+            with self.assertRaisesRegex(
+                StoreError,
+                "root filesystem identity changed",
+            ):
+                store.verify_current()
 
     def test_refresh_rejects_root_swap_after_bound_head_read(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
