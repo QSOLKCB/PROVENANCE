@@ -58,6 +58,8 @@ class TransferBundleVerificationReport:
     source_system: str | None
     destination_system: str | None
     sender_signature: str
+    sender_key_fingerprint: str | None
+    sender_identity_binding: str
     source_package_verification: str
     ordering: str
     offered_at: dict[str, str] | None
@@ -75,6 +77,8 @@ class TransferBundleVerificationReport:
             "source_system": self.source_system,
             "destination_system": self.destination_system,
             "sender_signature": self.sender_signature,
+            "sender_key_fingerprint": self.sender_key_fingerprint,
+            "sender_identity_binding": self.sender_identity_binding,
             "source_package_verification": self.source_package_verification,
             "ordering": self.ordering,
             "offered_at": self.offered_at,
@@ -203,6 +207,9 @@ def _parse_custody_raws(
 
 def verify_transfer_bundle(
     transfer_dir: os.PathLike[str] | str,
+    *,
+    expected_sender_fingerprint: str | None = None,
+    _transfer_fd: int | None = None,
 ) -> TransferBundleVerificationReport:
     checks: list[str] = []
     errors: list[str] = []
@@ -213,15 +220,28 @@ def verify_transfer_bundle(
     destination_system: str | None = None
     offered_at: dict[str, str] | None = None
     sender_signature = "FAILED"
+    sender_key_fingerprint: str | None = None
+    sender_identity_binding = (
+        "NOT_ATTEMPTED"
+        if expected_sender_fingerprint is None
+        else "FAILED"
+    )
     source_package_verification = "FAILED"
     causal_edges: list[tuple[str, str, str]] = []
 
     try:
-        root_fd = os.open(transfer_dir, _directory_flags())
+        if _transfer_fd is None:
+            root_fd = os.open(transfer_dir, _directory_flags())
+        else:
+            root_fd = os.dup(_transfer_fd)
+            if not os.path.isdir(f"/proc/self/fd/{root_fd}"):
+                os.close(root_fd)
+                raise OSError("transfer descriptor is not a directory")
     except OSError as exc:
         return TransferBundleVerificationReport(
             False, None, None, None, None, None,
-            "FAILED", "FAILED", "PARTIAL", None, (), (),
+            "FAILED", None, sender_identity_binding, "FAILED",
+            "PARTIAL", None, (), (),
             (f"transfer root cannot be opened safely: {exc}",),
         )
 
@@ -332,12 +352,6 @@ def verify_transfer_bundle(
             files, directories, unsafe = _physical_files(root_fd)
             expected_files = {"transfer.json", *paths}
             expected_dirs = {"package"}
-            for path in paths:
-                parts = PurePosixPath(path).parts[:-1]
-                for idx in range(1, len(parts) + 1):
-                    expected_dirs.add(
-                        PurePosixPath(*parts[:idx]).as_posix()
-                    )
             if unsafe:
                 raise ValueError(
                     "unsafe transfer filesystem entries: "
@@ -346,7 +360,14 @@ def verify_transfer_bundle(
             missing = sorted(expected_files - files)
             extra = sorted(files - expected_files)
             missing_dirs = sorted(expected_dirs - directories)
-            extra_dirs = sorted(directories - expected_dirs)
+            extra_dirs = sorted(
+                directory
+                for directory in directories
+                if (
+                    directory not in expected_dirs
+                    and not directory.startswith("package/")
+                )
+            )
             if missing or extra or missing_dirs or extra_dirs:
                 raise ValueError(
                     "transfer physical membership mismatch: "
@@ -435,7 +456,25 @@ def verify_transfer_bundle(
             ):
                 raise ValueError("offer signature identity mismatch")
             sender_signature = "VERIFIED"
+            signature_core = signature_record.get("core")
+            assert isinstance(signature_core, dict)
+            sender_key_fingerprint = str(
+                signature_core.get("key_fingerprint")
+            )
             checks.append("sender offer signature verified")
+            if expected_sender_fingerprint is not None:
+                if (
+                    sender_key_fingerprint
+                    != expected_sender_fingerprint
+                ):
+                    raise ValueError(
+                        "sender signing key fingerprint does not match "
+                        "the independently supplied expected fingerprint"
+                    )
+                sender_identity_binding = "VERIFIED"
+                checks.append(
+                    "sender key fingerprint binding verified"
+                )
 
             package_fd = _open_directory_at(root_fd, ("package",))
             try:
@@ -479,6 +518,8 @@ def verify_transfer_bundle(
             source_system=source_system,
             destination_system=destination_system,
             sender_signature=sender_signature,
+            sender_key_fingerprint=sender_key_fingerprint,
+            sender_identity_binding=sender_identity_binding,
             source_package_verification=source_package_verification,
             ordering="PARTIAL",
             offered_at=offered_at,
@@ -490,11 +531,26 @@ def verify_transfer_bundle(
         os.close(root_fd)
 
 
+def verify_transfer_bundle_fd(
+    transfer_fd: int,
+    *,
+    expected_sender_fingerprint: str | None = None,
+) -> TransferBundleVerificationReport:
+    """Verify an already-open transfer directory descriptor."""
+
+    return verify_transfer_bundle(
+        ".",
+        expected_sender_fingerprint=expected_sender_fingerprint,
+        _transfer_fd=transfer_fd,
+    )
+
+
 def verify_transfer_receipt(
     receipt_dir: os.PathLike[str] | str,
     *,
     transfer_bundle: os.PathLike[str] | str | None = None,
     received_package: os.PathLike[str] | str | None = None,
+    expected_sender_fingerprint: str | None = None,
 ) -> TransferReceiptVerificationReport:
     checks: list[str] = []
     errors: list[str] = []
@@ -576,6 +632,10 @@ def verify_transfer_receipt(
             destination_system = _safe_system(
                 core.get("destination_system"), label="destination_system"
             )
+            if source_system == destination_system:
+                raise ValueError(
+                    "receipt source and destination systems must differ"
+                )
             accepted_at = _validate_clock(
                 core.get("accepted_at"), label="accepted_at"
             )
@@ -747,7 +807,12 @@ def verify_transfer_receipt(
             )
 
             if transfer_bundle is not None:
-                transfer_report = verify_transfer_bundle(transfer_bundle)
+                transfer_report = verify_transfer_bundle(
+                    transfer_bundle,
+                    expected_sender_fingerprint=(
+                        expected_sender_fingerprint
+                    ),
+                )
                 if not transfer_report.integrity_verified:
                     errors.append(
                         "transfer bundle failed verification: "
