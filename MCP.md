@@ -44,7 +44,11 @@ Both roots are explicit. Phase 7 does not start a network listener and does not 
 
 An MCP server is permanently bound to the filesystem identity of the store root it opened at construction. Current-state refreshes happen in-place through that bound store object. If the configured store pathname is renamed/replaced so it resolves to a different directory inode, the server rejects the operation rather than silently switching to the replacement store.
 
-Refresh holds the originally bound root directory descriptor across authoritative HEAD reconstruction. HEAD is read descriptor-relatively from that bound root; reconstructed state is not accepted until the configured pathname is checked again against the same bound filesystem identity. A rename/replacement during refresh therefore fails instead of being accepted as refreshed state.
+Refresh holds the originally bound root directory descriptor across authoritative HEAD reconstruction. HEAD is read descriptor-relatively from that bound root, and reconstructed state is staged from that descriptor-bound evidence only.
+
+The staged state is committed before the final pathname continuity observation; if that observation fails, the previous accepted in-memory state is restored. No filesystem-derived state assignment occurs after the final continuity observation.
+
+A non-cooperating process can still rename a POSIX pathname after the final observation has completed. That cannot redirect the just-completed refresh: its accepted state came entirely from the original bound inode. A subsequent store operation revalidates the configured root and rejects the replacement rather than using it.
 
 ---
 
@@ -83,7 +87,11 @@ A successful record call is also durably represented in the MCP operational work
 
 The working-state journal is multi-writer safe. All MCP server processes sharing a store serialize working-state recovery, record publication, journal replacement, and finalization through one POSIX advisory lock in the store root. After acquiring that lock, a server reloads the current store HEAD and replays the complete durable journal before performing its mutation. A writer therefore extends the merged working set instead of replacing it from stale process-local state.
 
-Journal read, replacement, and removal use the same already-validated store-root descriptor held by that lock; they do not reopen the mutable configured pathname. Before a tool is allowed to return successfully, the pathname is checked again against the server's original store-root identity. If the pathname is swapped while a record is being published, the request fails and any operational journal remains with the original bound store rather than being split onto the replacement root.
+Journal read, replacement, and removal use the same already-validated store-root descriptor held by that lock; they do not reopen the mutable configured pathname.
+
+The server performs a final pathname continuity observation after the journal/evidence mutation is complete. If a replacement is visible at that observation, the request fails. If an external process renames the pathname only after that final observation has completed, the operation may return successfully, but its artifacts, events, and recovery journal are all already durably co-located on the original bound store inode. Nothing is redirected to the replacement root, and the next MCP operation rejects the configured-path identity change.
+
+This is the enforceable POSIX guarantee: descriptor-bound evidence continuity, not prevention of an unrelated process renaming a pathname after the server's final syscall.
 
 This rule covers both concurrent writes and stale long-lived server instances:
 
