@@ -268,6 +268,18 @@ class GenericAdapterTests(unittest.TestCase):
             )
             self.assertTrue(stored.snapshot.verification.integrity_verified)
 
+    def test_http_rejects_adapter_controlled_framing_headers(self) -> None:
+        with self.assertRaisesRegex(ValueError, "adapter-controlled"):
+            GenericHTTPAdapter(
+                self._url(),
+                headers={"Content-Type": "text/plain"},
+            )
+        with self.assertRaisesRegex(ValueError, "adapter-controlled"):
+            GenericHTTPAdapter(
+                self._url(),
+                headers={"Content-Length": "999"},
+            )
+
     def test_contract_rejects_non_namespaced_extensions(self) -> None:
         with self.assertRaisesRegex(
             AdapterContractError,
