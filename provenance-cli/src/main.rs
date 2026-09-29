@@ -154,6 +154,7 @@ fn run_tui(args: &[String]) -> Result<i32, String> {
 
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines();
+    let mut session_status = 0;
 
     loop {
         if interactive {
@@ -166,7 +167,7 @@ fn run_tui(args: &[String]) -> Result<i32, String> {
         let line = match lines.next() {
             Some(Ok(value)) => value,
             Some(Err(error)) => return Err(format!("stdin read failed: {error}")),
-            None => return Ok(0),
+            None => return Ok(session_status),
         };
         let trimmed = line.trim();
 
@@ -191,7 +192,7 @@ fn run_tui(args: &[String]) -> Result<i32, String> {
             continue;
         }
         if trimmed == "/quit" || trimmed == "/q" {
-            return Ok(0);
+            return Ok(session_status);
         }
         if !trimmed.starts_with('/') {
             println!("commands begin with '/'; type / for the palette");
@@ -221,6 +222,9 @@ fn run_tui(args: &[String]) -> Result<i32, String> {
 
         let code = run_backend(&backend_args)?;
         if code != 0 {
+            if session_status == 0 {
+                session_status = code.clamp(1, 255);
+            }
             println!("command exited with status {code}");
         }
     }
