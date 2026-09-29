@@ -385,6 +385,7 @@ class LocalCustodyLedgerTests(unittest.TestCase):
             counter_lock = threading.Lock()
             missing_reads = 0
             real_open = os.open
+            directory_flags = ledger_module._directory_flags()
             format_read_flags = ledger_module._file_read_flags()
 
             def synchronized_open(
@@ -413,6 +414,10 @@ class LocalCustodyLedgerTests(unittest.TestCase):
                 return real_open(path, flags, mode, dir_fd=dir_fd)
 
             with mock.patch.object(
+                ledger_module,
+                "_directory_flags",
+                return_value=directory_flags,
+            ), mock.patch.object(
                 ledger_module.os,
                 "open",
                 side_effect=synchronized_open,
