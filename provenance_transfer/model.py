@@ -10,7 +10,6 @@ from provenance_core import (
     canonical_json_bytes,
     require_sha256_identity,
 )
-from provenance_custody import ClockObservation
 from provenance_trust.model import (
     ed25519_key_fingerprint,
     normalize_ed25519_public_key,
@@ -52,32 +51,26 @@ def transfer_signature_identity(core: object) -> str:
     return _identity(SIGNATURE_DOMAIN, core)
 
 
-def clock_dict(clock: ClockObservation) -> dict[str, str]:
-    if not isinstance(clock, ClockObservation):
-        raise TypeError("clock must be a ClockObservation")
-    return {
-        "recorded_at": clock.recorded_at,
-        "clock_source": clock.clock_source,
-        "clock_assurance": clock.clock_assurance.value,
-    }
-
-
-def parse_clock(value: object) -> ClockObservation:
-    if not isinstance(value, dict) or set(value) != {
-        "recorded_at",
-        "clock_source",
-        "clock_assurance",
-    }:
-        raise ValueError("transfer clock object keys changed")
+def clock_dict(clock: object) -> dict[str, str]:
     try:
-        assurance = ClockAssurance(value["clock_assurance"])
-    except Exception as exc:
-        raise ValueError("transfer clock assurance is invalid") from exc
-    return ClockObservation(
-        recorded_at=value["recorded_at"],
-        clock_source=value["clock_source"],
-        clock_assurance=assurance,
-    )
+        recorded_at = clock.recorded_at
+        clock_source = clock.clock_source
+        assurance = clock.clock_assurance
+    except AttributeError as exc:
+        raise TypeError(
+            "clock must expose recorded_at, clock_source, and clock_assurance"
+        ) from exc
+    if not isinstance(recorded_at, str) or not recorded_at:
+        raise ValueError("clock recorded_at must be non-empty text")
+    if not isinstance(clock_source, str) or not clock_source:
+        raise ValueError("clock source must be non-empty text")
+    if not isinstance(assurance, ClockAssurance):
+        raise TypeError("clock assurance must be a ClockAssurance")
+    return {
+        "recorded_at": recorded_at,
+        "clock_source": clock_source,
+        "clock_assurance": assurance.value,
+    }
 
 
 def _system(value: object, *, label: str) -> str:
@@ -94,7 +87,7 @@ def offer_core(
     evidence_manifest_identity: str,
     source_system: str,
     destination_system: str,
-    offered_at: ClockObservation,
+    offered_at: object,
 ) -> dict[str, Any]:
     require_sha256_identity(package_identity, label="transfer package identity")
     require_sha256_identity(
@@ -125,7 +118,7 @@ def receipt_core(
     package_identity: str,
     source_system: str,
     destination_system: str,
-    accepted_at: ClockObservation,
+    accepted_at: object,
     receiver_custody_identities: list[str] | tuple[str, ...],
 ) -> dict[str, Any]:
     require_sha256_identity(
