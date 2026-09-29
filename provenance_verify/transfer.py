@@ -6,6 +6,7 @@ from datetime import datetime
 import os
 from pathlib import PurePosixPath
 import re
+import stat
 from typing import Any
 
 from provenance_core import (
@@ -234,7 +235,7 @@ def verify_transfer_bundle(
             root_fd = os.open(transfer_dir, _directory_flags())
         else:
             root_fd = os.dup(_transfer_fd)
-            if not os.path.isdir(f"/proc/self/fd/{root_fd}"):
+            if not stat.S_ISDIR(os.fstat(root_fd).st_mode):
                 os.close(root_fd)
                 raise OSError("transfer descriptor is not a directory")
     except OSError as exc:
