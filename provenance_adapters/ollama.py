@@ -51,14 +51,26 @@ class _RejectRedirects(urllib_request.HTTPRedirectHandler):
     """Reject redirects without issuing a request to their destination."""
 
     def http_error_302(self, req, fp, code, msg, headers):
+        response_bytes: bytes | None
+        detail = f"Ollama endpoint returned forbidden HTTP redirect {code}"
         try:
-            fp.close()
+            try:
+                response_bytes = fp.read()
+            except http_client.IncompleteRead as exc:
+                response_bytes = bytes(exc.partial)
+                detail += "; redirect body was truncated"
+            except http_client.HTTPException as exc:
+                response_bytes = None
+                detail += f"; redirect body read failed: {exc}"
         finally:
-            raise _TransportFailure(
-                f"Ollama endpoint returned forbidden HTTP redirect {code}",
-                category="redirect_rejected",
-                status=code,
-            )
+            fp.close()
+
+        raise _TransportFailure(
+            detail,
+            category="redirect_rejected",
+            status=code,
+            response_bytes=response_bytes,
+        )
 
     http_error_301 = http_error_302
     http_error_303 = http_error_302
@@ -246,7 +258,18 @@ class OllamaAdapter:
             try:
                 body = exc.read()
             except http_client.IncompleteRead as read_exc:
-                body = bytes(read_exc.partial)
+                raise _TransportFailure(
+                    "Ollama HTTP error response body was truncated",
+                    category="incomplete_read",
+                    status=exc.code,
+                    response_bytes=bytes(read_exc.partial),
+                ) from read_exc
+            except http_client.HTTPException as read_exc:
+                raise _TransportFailure(
+                    f"Ollama HTTP error response protocol failure: {read_exc}",
+                    category="http_protocol_error",
+                    status=exc.code,
+                ) from read_exc
             except Exception:
                 body = None
             raise _TransportFailure(
@@ -259,6 +282,11 @@ class OllamaAdapter:
             raise _TransportFailure(
                 f"local Ollama endpoint is unavailable: {exc.reason}",
                 category="endpoint_unavailable",
+            ) from exc
+        except http_client.HTTPException as exc:
+            raise _TransportFailure(
+                f"Ollama HTTP protocol failure: {exc}",
+                category="http_protocol_error",
             ) from exc
         except OSError as exc:
             raise _TransportFailure(
