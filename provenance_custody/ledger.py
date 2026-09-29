@@ -242,54 +242,117 @@ class LocalCustodyLedger:
 
     def _ensure_format(self, root_fd: int) -> None:
         expected = (CUSTODY_LEDGER_FORMAT + "\n").encode("ascii")
-        try:
-            fd = os.open(_FORMAT, _file_read_flags(), dir_fd=root_fd)
-        except FileNotFoundError:
+        temp_prefix = f".{_FORMAT}."
+        temp_suffix = ".tmp"
+
+        def open_existing() -> int:
             try:
-                fd = os.open(
+                return os.open(
                     _FORMAT,
-                    _file_create_flags(),
-                    0o600,
+                    _file_read_flags(),
                     dir_fd=root_fd,
                 )
             except OSError as exc:
                 raise CustodyLedgerError(
-                    f"custody format marker cannot be created: {exc}"
+                    f"custody format marker cannot be opened: {exc}"
                 ) from exc
+
+        def validate_existing(fd: int) -> None:
             try:
-                _write_all(fd, expected)
-                os.fsync(fd)
-            except OSError as exc:
-                raise CustodyLedgerError(
-                    f"custody format marker cannot be written: {exc}"
-                ) from exc
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise CustodyLedgerError(
+                        "custody format marker must be a regular file"
+                    )
+                raw = _read_all(fd)
+                if raw != expected:
+                    raise CustodyLedgerError(
+                        "unsupported custody ledger format"
+                    )
+                try:
+                    os.fsync(fd)
+                except OSError as exc:
+                    raise CustodyLedgerError(
+                        f"custody format marker cannot be synced: {exc}"
+                    ) from exc
             finally:
                 os.close(fd)
             _fsync_directory(root_fd)
-            return
+
+        try:
+            fd = os.open(
+                _FORMAT,
+                _file_read_flags(),
+                dir_fd=root_fd,
+            )
+        except FileNotFoundError:
+            temp_name = (
+                f"{temp_prefix}{uuid.uuid4().hex}{temp_suffix}"
+            )
+            temp_fd: int | None = None
+            try:
+                try:
+                    temp_fd = os.open(
+                        temp_name,
+                        _file_create_flags(),
+                        0o600,
+                        dir_fd=root_fd,
+                    )
+                except OSError as exc:
+                    raise CustodyLedgerError(
+                        "custody format temporary marker cannot be created: "
+                        f"{exc}"
+                    ) from exc
+
+                try:
+                    _write_all(temp_fd, expected)
+                    os.fsync(temp_fd)
+                except OSError as exc:
+                    raise CustodyLedgerError(
+                        "custody format temporary marker cannot be written: "
+                        f"{exc}"
+                    ) from exc
+                finally:
+                    os.close(temp_fd)
+                    temp_fd = None
+
+                try:
+                    os.link(
+                        temp_name,
+                        _FORMAT,
+                        src_dir_fd=root_fd,
+                        dst_dir_fd=root_fd,
+                        follow_symlinks=False,
+                    )
+                except FileExistsError:
+                    # Another fully written marker won the publication race.
+                    pass
+                except OSError as exc:
+                    raise CustodyLedgerError(
+                        f"custody format marker cannot be published: {exc}"
+                    ) from exc
+
+                try:
+                    os.unlink(temp_name, dir_fd=root_fd)
+                except FileNotFoundError:
+                    pass
+
+                _fsync_directory(root_fd)
+                fd = open_existing()
+                validate_existing(fd)
+                return
+            finally:
+                if temp_fd is not None:
+                    os.close(temp_fd)
+                try:
+                    os.unlink(temp_name, dir_fd=root_fd)
+                except FileNotFoundError:
+                    pass
         except OSError as exc:
             raise CustodyLedgerError(
                 f"custody format marker cannot be opened: {exc}"
             ) from exc
 
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
-                raise CustodyLedgerError(
-                    "custody format marker must be a regular file"
-                )
-            raw = _read_all(fd)
-            if raw != expected:
-                raise CustodyLedgerError(
-                    "unsupported custody ledger format"
-                )
-            os.fsync(fd)
-        except OSError as exc:
-            raise CustodyLedgerError(
-                f"custody format marker cannot be synced: {exc}"
-            ) from exc
-        finally:
-            os.close(fd)
-        _fsync_directory(root_fd)
+        validate_existing(fd)
 
     def _ensure_lock(self, root_fd: int) -> None:
         process_lock = _process_lock_for_root(root_fd)
