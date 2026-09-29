@@ -219,6 +219,10 @@ class LocalEvidenceStore:
                 except FileNotFoundError:
                     try:
                         os.mkdir(part, mode=0o700, dir_fd=current_fd)
+                    except FileExistsError:
+                        # Another process created the same component after our
+                        # failed open. Reopen and validate it below.
+                        pass
                     except OSError as exc:
                         raise StoreError(
                             f"store root component {part!r} cannot be created: {exc}"
@@ -312,6 +316,19 @@ class LocalEvidenceStore:
 
     def _ensure_store_format(self, root_fd: int) -> None:
         expected = (STORE_FORMAT + "\n").encode("ascii")
+
+        def open_existing() -> int:
+            try:
+                return os.open(
+                    _FORMAT,
+                    _file_read_flags(),
+                    dir_fd=root_fd,
+                )
+            except OSError as exc:
+                raise StoreError(
+                    f"STORE_FORMAT marker cannot be opened safely: {exc}"
+                ) from exc
+
         try:
             fd = os.open(
                 _FORMAT,
@@ -325,33 +342,44 @@ class LocalEvidenceStore:
                 )
             with os.scandir(root_fd) as entries:
                 existing = [entry.name for entry in entries]
+
             if existing:
-                raise StoreError(
-                    "existing store root has no STORE_FORMAT marker; "
-                    "refusing to assume a layout version"
-                )
-            try:
-                fd = os.open(
-                    _FORMAT,
-                    _file_create_flags(),
-                    0o600,
-                    dir_fd=root_fd,
-                )
-            except OSError as exc:
-                raise StoreError(
-                    f"STORE_FORMAT marker cannot be created: {exc}"
-                ) from exc
-            try:
-                _write_all(fd, expected)
-                os.fsync(fd)
-            except OSError as exc:
-                raise StoreError(
-                    f"STORE_FORMAT marker cannot be written durably: {exc}"
-                ) from exc
-            finally:
-                os.close(fd)
-            _fsync_directory(root_fd)
-            return
+                if _FORMAT not in existing:
+                    raise StoreError(
+                        "existing store root has no STORE_FORMAT marker; "
+                        "refusing to assume a layout version"
+                    )
+                # A concurrent initializer published the marker after our first
+                # open failed. Reopen it and validate exact contents below.
+                fd = open_existing()
+            else:
+                try:
+                    fd = os.open(
+                        _FORMAT,
+                        _file_create_flags(),
+                        0o600,
+                        dir_fd=root_fd,
+                    )
+                except FileExistsError:
+                    # Another process won the create race after our empty scan.
+                    fd = open_existing()
+                except OSError as exc:
+                    raise StoreError(
+                        f"STORE_FORMAT marker cannot be created: {exc}"
+                    ) from exc
+                else:
+                    try:
+                        _write_all(fd, expected)
+                        os.fsync(fd)
+                    except OSError as exc:
+                        raise StoreError(
+                            "STORE_FORMAT marker cannot be written durably: "
+                            f"{exc}"
+                        ) from exc
+                    finally:
+                        os.close(fd)
+                    _fsync_directory(root_fd)
+                    return
         except OSError as exc:
             raise StoreError(
                 f"STORE_FORMAT marker cannot be opened safely: {exc}"
@@ -375,8 +403,8 @@ class LocalEvidenceStore:
         finally:
             os.close(fd)
 
-        # The initial marker publication may also have failed before its root
-        # directory entry was made durable.
+        # A concurrently published marker may have reached us through either
+        # race path above. Re-establish the root directory durability barrier.
         _fsync_directory(root_fd)
 
     def _ensure_lock_file(self, root_fd: int) -> None:
