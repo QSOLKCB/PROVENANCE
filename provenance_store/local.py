@@ -1811,14 +1811,25 @@ class LocalEvidenceStore:
             label="HEAD snapshot after reconstruction checks",
         )
 
-        if root_fd is not None:
-            # Reject a rename/replacement that happened at any point while
-            # reconstruction was in progress. State is only accepted after
-            # the configured path resolves to the originally bound inode.
-            with self._root_fd():
-                pass
+        previous_artifacts = self._artifacts
+        previous_events = self._events
+        previous_manifest_identity = self._current_manifest_identity
+        previous_changed_artifacts = self._session_changed_artifacts
 
         self._artifacts = loaded_artifacts
         self._events = loaded_events
         self._current_manifest_identity = identity
-        self._session_changed_artifacts.clear()
+        self._session_changed_artifacts = set()
+
+        if root_fd is not None:
+            # No filesystem-derived state is assigned after this continuity
+            # observation. If it fails, restore the previously accepted state.
+            try:
+                with self._root_fd():
+                    pass
+            except Exception:
+                self._artifacts = previous_artifacts
+                self._events = previous_events
+                self._current_manifest_identity = previous_manifest_identity
+                self._session_changed_artifacts = previous_changed_artifacts
+                raise
