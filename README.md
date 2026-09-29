@@ -7,12 +7,13 @@ PROVENANCE records **who did what, when, where, why, and how — backed by evide
 **Start here:** [Getting Started](docs/GETTING_STARTED.md) · [Usage Instructions](docs/INSTRUCTIONS.md) · [Documentation](docs/README.md) · [Roadmap](docs/ROADMAP.md)
 
 [![Version](https://img.shields.io/badge/version-v0.1--dev-4c1.svg)](docs/ROADMAP.md)
-[![Phase](https://img.shields.io/badge/roadmap-Phase%2013%20implemented-2ea44f.svg)](docs/ROADMAP.md)
+[![Phase](https://img.shields.io/badge/roadmap-Phase%2014%20implemented-2ea44f.svg)](docs/ROADMAP.md)
 [![Core CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml)
 [![Verify CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml)
 [![Package CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/package.yml)
 [![Trust CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/trust.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/trust.yml)
 [![Performance CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/performance.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/performance.yml)
+[![Privacy CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/privacy.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/privacy.yml)
 [![Determinism](https://img.shields.io/badge/determinism-canonical%20SHA--256-0969da.svg)](docs/INVARIANTS.md)
 [![Verification](https://img.shields.io/badge/verification-independent-6f42c1.svg)](docs/BUNDLE.md)
 [![Custody](https://img.shields.io/badge/custody-append--only-b60205.svg)](docs/CUSTODY.md)
@@ -31,6 +32,7 @@ PROVENANCE records **who did what, when, where, why, and how — backed by evide
 - **Portable forensic packages** — evidence + custody + schemas + verification metadata + declared gaps.
 - **Optional authenticity** — detached Ed25519 SSHSIG signatures and independently verifiable Git commit anchors.
 - **Exact performance hardening** — bounded deterministic parallel verification with retained serial reference paths.
+- **Selective disclosure** — redacted DERIVED artifacts with source digest lineage and optional source-bound transform recomputation.
 - **Explicit uncertainty** — missing, digest-only, open-collection, and custody-gap states remain visible.
 
 ## Quick lifecycle
@@ -93,9 +95,9 @@ The core remains provider- and interface-neutral. Verification consumes finalize
 
 ## Status
 
-Implemented through **Phase 13**: canonical core, verifier, local store, custody, Ollama + real-model CI, MCP, Rust CLI/TUI, read-only UI, generic adapters, portable forensic packages, detached signatures/Git anchors, and exact bounded-parallel verification.
+Implemented through **Phase 14**: canonical core, verifier, local store, custody, Ollama + real-model CI, MCP, Rust CLI/TUI, read-only UI, generic adapters, portable forensic packages, detached signatures/Git anchors, exact bounded-parallel verification, and selective redacted disclosures.
 
-Next: **Phase 14 — privacy, redaction, and retention**. See [the roadmap](docs/ROADMAP.md).
+Next: **Phase 15 — distributed custody**. See [the roadmap](docs/ROADMAP.md).
 
 ## Documentation
 
@@ -113,6 +115,7 @@ Next: **Phase 14 — privacy, redaction, and retention**. See [the roadmap](docs
 | Portable package | [docs/PACKAGE.md](docs/PACKAGE.md) |
 | Signatures & anchors | [docs/TRUST.md](docs/TRUST.md) |
 | Performance hardening | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) |
+| Privacy & selective disclosure | [docs/PRIVACY.md](docs/PRIVACY.md) |
 | CLI/TUI | [docs/CLI.md](docs/CLI.md) |
 | MCP | [docs/MCP.md](docs/MCP.md) |
 | Read-only UI | [docs/UI.md](docs/UI.md) |
