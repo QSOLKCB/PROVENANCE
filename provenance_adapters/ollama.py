@@ -1,12 +1,15 @@
 """Local Ollama reference adapter for PROVENANCE Phase 5."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
+import fcntl
 import http.client as http_client
 import json
 import os
+import stat
 import threading
-from typing import Mapping
+from typing import Iterator, Mapping
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
@@ -27,9 +30,10 @@ ADAPTER_ID = "provenance-adapter:ollama/v1"
 _ENDPOINT_ACTOR = "ollama:local-endpoint"
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
+_OBSERVATION_LOCK_NAME = ".ollama-observation.lock"
 _OBSERVATION_LOCKS_GUARD = threading.Lock()
 _OBSERVATION_LOCKS: dict[
-    tuple[int, int, int, int],
+    tuple[int, int],
     threading.Lock,
 ] = {}
 
@@ -179,24 +183,113 @@ def _failure_detail_bytes(
     )
 
 
-def _observation_lock(
-    store: LocalEvidenceStore,
-    custody: LocalCustodyLedger,
+def _process_observation_lock(
+    key: tuple[int, int],
 ) -> threading.Lock:
-    store_stat = os.stat(store.root, follow_symlinks=False)
-    custody_stat = os.stat(custody.root, follow_symlinks=False)
-    key = (
-        store_stat.st_dev,
-        store_stat.st_ino,
-        custody_stat.st_dev,
-        custody_stat.st_ino,
-    )
     with _OBSERVATION_LOCKS_GUARD:
         lock = _OBSERVATION_LOCKS.get(key)
         if lock is None:
             lock = threading.Lock()
             _OBSERVATION_LOCKS[key] = lock
         return lock
+
+
+@contextmanager
+def _observation_reservation(
+    store: LocalEvidenceStore,
+    custody: LocalCustodyLedger,
+) -> Iterator[None]:
+    directory_flags = (
+        os.O_RDONLY
+        | os.O_DIRECTORY
+        | os.O_NOFOLLOW
+        | os.O_CLOEXEC
+    )
+    root_fds: dict[tuple[int, int], int] = {}
+    process_locks: list[threading.Lock] = []
+    lock_fds: list[int] = []
+
+    try:
+        for root in (store.root, custody.root):
+            try:
+                root_fd = os.open(root, directory_flags)
+            except OSError as exc:
+                raise OllamaAdapterError(
+                    f"observation reservation root cannot be opened safely: {exc}"
+                ) from exc
+
+            root_stat = os.fstat(root_fd)
+            key = (root_stat.st_dev, root_stat.st_ino)
+            if key in root_fds:
+                os.close(root_fd)
+            else:
+                root_fds[key] = root_fd
+
+        ordered_keys = sorted(root_fds)
+
+        for key in ordered_keys:
+            process_lock = _process_observation_lock(key)
+            process_lock.acquire()
+            process_locks.append(process_lock)
+
+        for key in ordered_keys:
+            root_fd = root_fds[key]
+            try:
+                lock_fd = os.open(
+                    _OBSERVATION_LOCK_NAME,
+                    os.O_RDWR
+                    | os.O_CREAT
+                    | os.O_CLOEXEC
+                    | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=root_fd,
+                )
+            except OSError as exc:
+                raise OllamaAdapterError(
+                    f"observation reservation lock cannot be opened safely: {exc}"
+                ) from exc
+
+            if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+                os.close(lock_fd)
+                raise OllamaAdapterError(
+                    "observation reservation lock must be a regular file"
+                )
+
+            try:
+                fcntl.lockf(
+                    lock_fd,
+                    fcntl.LOCK_EX,
+                    0,
+                    0,
+                    os.SEEK_SET,
+                )
+            except OSError as exc:
+                os.close(lock_fd)
+                raise OllamaAdapterError(
+                    f"observation reservation POSIX lock failed: {exc}"
+                ) from exc
+
+            lock_fds.append(lock_fd)
+
+        yield
+    finally:
+        for lock_fd in reversed(lock_fds):
+            try:
+                fcntl.lockf(
+                    lock_fd,
+                    fcntl.LOCK_UN,
+                    0,
+                    0,
+                    os.SEEK_SET,
+                )
+            finally:
+                os.close(lock_fd)
+
+        for process_lock in reversed(process_locks):
+            process_lock.release()
+
+        for root_fd in root_fds.values():
+            os.close(root_fd)
 
 
 class OllamaAdapter:
@@ -454,8 +547,7 @@ class OllamaAdapter:
         if not isinstance(custody, LocalCustodyLedger):
             raise TypeError("custody must be a LocalCustodyLedger")
 
-        reservation = _observation_lock(store, custody)
-        with reservation:
+        with _observation_reservation(store, custody):
             return self._observe_generate_reserved(
                 model=model,
                 prompt=prompt,
