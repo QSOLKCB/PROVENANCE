@@ -128,7 +128,7 @@ def changeOperation (event : EventCore) (operation : String) : EventCore :=
   { event with operation := operation }
 
 /--
-FV-03 / INV-CLS-3 / INV-CLS-5:
+FV-03 / INV-CLS-3:
 changing a non-classification field preserves the evidence class.
 -/
 theorem operationChangePreservesClassification
