@@ -42,6 +42,8 @@ python3 -m provenance_mcp \
 
 Both roots are explicit. Phase 7 does not start a network listener and does not infer a remote endpoint.
 
+An MCP server is permanently bound to the filesystem identity of the store root it opened at construction. Current-state refreshes happen in-place through that bound store object. If the configured store pathname is renamed/replaced so it resolves to a different directory inode, the server rejects the operation rather than silently switching to the replacement store.
+
 ---
 
 # Tools
@@ -92,7 +94,9 @@ ANY LATER FINALIZER = A ∪ B
 
 The same lock also serializes shared custody-ledger initialization for concurrently starting MCP servers using the same roots.
 
-After process restart, the server revalidates the journaled artifact records, retained bytes, and event identities against the object pool before reattaching them to the working snapshot. If the store HEAD advanced because finalization committed immediately before a crash, restart requires the journaled members to be present in that verified HEAD and completes fresh VERIFIED custody before clearing the journal.
+After process restart, the server revalidates the journaled artifact records, retained bytes, and event identities against the object pool before reattaching them to the working snapshot. The journal's `pending_verified_artifacts` set must exactly equal the journaled artifact membership; recovery rejects extra, missing, or duplicate pending subjects before any VERIFIED custody can be appended.
+
+If the store HEAD advanced because finalization committed immediately before a crash, restart requires the journaled members to be present in that verified HEAD and completes fresh VERIFIED custody before clearing the journal.
 
 The caller cannot supply an `evidenceClass` override.
 
