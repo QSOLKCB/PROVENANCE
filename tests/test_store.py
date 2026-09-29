@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
-import inspect
 import os
 from pathlib import Path
 import shutil
@@ -157,24 +155,21 @@ class LocalEvidenceStoreTests(unittest.TestCase):
             snapshot = store.finalize()
             original_identity = snapshot.manifest_identity
 
-            original_root_fd = store._root_fd
+            original_load_head = store._load_head
             swapped = False
 
-            @contextmanager
-            def swap_after_load_head_check():
+            def load_then_swap(*, root_fd: int | None = None) -> None:
                 nonlocal swapped
-                caller = inspect.currentframe().f_back.f_code.co_name
-                with original_root_fd() as fd:
-                    yield fd
-                if caller == "_load_head" and not swapped:
+                original_load_head(root_fd=root_fd)
+                if not swapped:
                     swapped = True
                     root.rename(moved_root)
                     LocalEvidenceStore(root)
 
             with mock.patch.object(
                 store,
-                "_root_fd",
-                side_effect=swap_after_load_head_check,
+                "_load_head",
+                side_effect=load_then_swap,
             ):
                 store.refresh_from_disk()
 
