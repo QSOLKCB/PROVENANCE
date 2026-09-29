@@ -301,6 +301,40 @@ def create_signature_record(
                 f"ssh-keygen did not produce a signature: {exc}"
             ) from exc
 
+        allowed = root / "allowed_signers"
+        allowed.write_text(
+            f"provenance {public_key}\n",
+            encoding="ascii",
+        )
+        verified = subprocess.run(
+            [
+                ssh_keygen,
+                "-Y",
+                "verify",
+                "-f",
+                str(allowed),
+                "-I",
+                "provenance",
+                "-n",
+                SIGNATURE_NAMESPACE,
+                "-s",
+                str(signature_path),
+            ],
+            input=package_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=20,
+        )
+        if verified.returncode != 0:
+            detail = verified.stderr.decode(
+                "utf-8",
+                errors="replace",
+            ).strip()
+            raise TrustRecordError(
+                detail or "new SSH signature failed self-verification"
+            )
+
     core = signature_core(
         subject_identity=package_identity,
         signed_content_identity=sha256_content_identity(package_bytes),
@@ -337,6 +371,7 @@ def _git(
 ) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["GIT_OPTIONAL_LOCKS"] = "0"
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
     try:
         return subprocess.run(
             [git, "-C", str(repo), *args],
