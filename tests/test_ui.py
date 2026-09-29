@@ -120,6 +120,10 @@ class ProvenanceUiTests(unittest.TestCase):
             self.assertEqual(view["verification"]["signature"], "NOT_PRESENT")
             self.assertEqual(view["verification"]["replay"], "NOT_ATTEMPTED")
             self.assertEqual(view["artifacts"][0]["identity"], artifact)
+            self.assertEqual(
+                view["artifacts"][0]["verification"],
+                {"integrity": "VERIFIED", "custody": "VERIFIED"},
+            )
             self.assertEqual(view["events"][0]["identity"], event)
             self.assertTrue(
                 any(gap["kind"] == "UNTIMED_EVENTS" for gap in view["gaps"])
