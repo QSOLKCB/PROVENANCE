@@ -68,6 +68,20 @@ Two threads, adapter instances, or cooperating processes sharing the same store 
 
 The operational .ollama-observation.lock files are synchronization state only. They are not evidence artifacts and do not enter evidence identity.
 
+## Fork boundary
+
+An active Phase 5 observation is process-bound.
+
+If the thread currently executing an observation calls `os.fork()`, the adapter's registered `after_in_child` handler terminates that child immediately with exit status `86`, before `os.fork()` can return into transport, custody, store, or caller code in the child.
+
+This is intentional. A PID check around a callback cannot prevent a callback from forking and then performing an HTTP request or evidence mutation before control returns to the adapter. Immediate child termination is therefore the enforcement boundary that guarantees an inherited observation cannot emit an unrecorded second exchange or inherited custody/store writes.
+
+The parent continues under the original reservation.
+
+A fork initiated by another thread is not treated as an inherited observation continuation. The pre-fork handler first settles the adapter's process-local reservation mutexes; the child then receives a fresh empty process-local lock registry.
+
+Code that needs child-process work must fork before starting the observation, or start a fresh child process that creates its own fresh evidence targets and observation reservation.
+
 This prevents repeated byte-identical exchanges from collapsing into the same deterministic event identities before the core has a justified occurrence discriminator.
 
 Multi-exchange sessions belong to a later contract extension.
