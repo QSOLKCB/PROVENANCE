@@ -58,7 +58,7 @@ class TransferBundleVerificationReport:
     source_system: str | None
     destination_system: str | None
     sender_signature: str
-    source_package_custody: str
+    source_package_verification: str
     ordering: str
     offered_at: dict[str, str] | None
     causal_edges: tuple[tuple[str, str, str], ...]
@@ -75,7 +75,7 @@ class TransferBundleVerificationReport:
             "source_system": self.source_system,
             "destination_system": self.destination_system,
             "sender_signature": self.sender_signature,
-            "source_package_custody": self.source_package_custody,
+            "source_package_verification": self.source_package_verification,
             "ordering": self.ordering,
             "offered_at": self.offered_at,
             "causal_edges": [
@@ -213,7 +213,7 @@ def verify_transfer_bundle(
     destination_system: str | None = None
     offered_at: dict[str, str] | None = None
     sender_signature = "FAILED"
-    source_package_custody = "FAILED"
+    source_package_verification = "FAILED"
     causal_edges: list[tuple[str, str, str]] = []
 
     try:
@@ -458,7 +458,7 @@ def verify_transfer_bundle(
 
             # The Phase 11 package is the authority for sender-side
             # custody. Its verifier already checks the embedded custody snapshot.
-            source_package_custody = "VERIFIED"
+            source_package_verification = "VERIFIED"
             checks.append("source package custody verified")
 
             causal_edges.append(
@@ -479,7 +479,7 @@ def verify_transfer_bundle(
             source_system=source_system,
             destination_system=destination_system,
             sender_signature=sender_signature,
-            source_package_custody=source_package_custody,
+            source_package_verification=source_package_verification,
             ordering="PARTIAL",
             offered_at=offered_at,
             causal_edges=tuple(causal_edges),
