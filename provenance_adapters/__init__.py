@@ -1,6 +1,7 @@
 """PROVENANCE framework-specific and provider-neutral adapters."""
 
 from .base import (
+    ADAPTER_ARTIFACT_MEDIA_TYPE,
     ADAPTER_METADATA_SCHEMA,
     AdapterContract,
     AdapterContractError,
@@ -31,6 +32,7 @@ from .process import (
 
 __all__ = [
     "ADAPTER_ID",
+    "ADAPTER_ARTIFACT_MEDIA_TYPE",
     "ADAPTER_METADATA_SCHEMA",
     "HTTP_ADAPTER_CONTRACT",
     "PROCESS_ADAPTER_CONTRACT",
