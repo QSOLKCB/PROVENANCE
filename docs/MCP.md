@@ -317,3 +317,22 @@ This avoids turning raw sensitive source bytes or privacy-policy decisions into 
 Selective disclosures remain independently verifiable after creation.
 
 See `PRIVACY.md`.
+
+---
+
+# Phase 15 boundary — transfer signing stays operator-side
+
+The Phase 15 reference transfer producer/receiver is exposed through the local CLI/Python API rather than new MCP tools.
+
+Reasons:
+
+~~~text
+sender/receiver private keys must not become ordinary MCP arguments
+destination custody roots are operator-controlled local state
+offline transfer must remain usable without an MCP host
+MCP remains optional to independent verification
+~~~
+
+Existing MCP evidence semantics are unchanged.
+
+See `TRANSFER.md`.
