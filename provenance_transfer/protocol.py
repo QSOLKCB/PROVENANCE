@@ -199,8 +199,11 @@ def _copy_package_directory(
                 staging_identity=staging_identity,
                 label="received package",
             )
-        except TransferError:
-            if destination.exists() or destination.is_symlink():
+        except TransferError as exc:
+            if (
+                str(exc) == "package destination must not already exist"
+                and (destination.exists() or destination.is_symlink())
+            ):
                 existing = verify_forensic_package(destination)
                 if existing.integrity_verified:
                     _remove_tree_at(parent_fd, staging_name)
@@ -901,8 +904,11 @@ def receive_transfer(
                     staging_identity=staging_identity,
                     label="transfer receipt",
                 )
-            except TransferError:
-                if receipt_dest.exists() or receipt_dest.is_symlink():
+            except TransferError as exc:
+                if (
+                    str(exc) == "package destination must not already exist"
+                    and (receipt_dest.exists() or receipt_dest.is_symlink())
+                ):
                     duplicate = _verified_duplicate_receipt()
                     _remove_tree_at(parent_fd, staging_name)
                     os.fsync(parent_fd)
