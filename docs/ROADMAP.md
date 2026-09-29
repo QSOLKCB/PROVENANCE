@@ -1838,10 +1838,10 @@ The dedicated `formal.yml` workflow:
 
 ```text
 verifies v1.0.0 → frozen SHA
+checksum-verifies the official Lean 4.34.1 release bundle
 builds the Lean proof set
-runs leanchecker
-runs nanoda with sorry disallowed
-runs axiom audit
+runs bundled leanchecker
+rejects proof placeholders
 generates a proof-source evidence manifest
 archives the frozen v1.0.0 source
 archives the formal proof sources
