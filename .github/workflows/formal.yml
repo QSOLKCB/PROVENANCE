@@ -91,7 +91,7 @@ jobs:
           lake --version
           cd formal
           lake build
-          lake env leanchecker
+          lake env leanchecker ProvenanceFormal
 
       - name: Generate formal evidence manifest
         shell: sh
