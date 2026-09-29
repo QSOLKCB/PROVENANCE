@@ -88,6 +88,8 @@ Redirects are not followed.
 
 HTTP header values are runtime-only and are deliberately not retained as evidence. This prevents API keys, cookies, and authorization material from becoming ordinary evidence payloads merely because they were needed for transport.
 
+`Content-Type`, `Content-Length`, `Host`, and `Transfer-Encoding` are adapter-controlled rather than caller-overridable, keeping request framing consistent with the recorded URL/body/media-type inputs.
+
 Header names are retained in the request descriptor.
 
 The full target URL is retained in the request descriptor. Operators should therefore keep credentials out of URLs and query strings and use runtime headers instead.
