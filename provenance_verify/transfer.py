@@ -659,32 +659,67 @@ def verify_transfer_receipt(
                     + "; ".join(custody_report.errors)
                 )
 
-            matching: list[tuple[str, dict[str, Any]]] = []
-            for identity, value in parsed.items():
-                custody_core = value.get("core")
+            cores_by_identity = {
+                identity: value["core"]
+                for identity, value in parsed.items()
+                if isinstance(value.get("core"), dict)
+            }
+            roots = [
+                identity
+                for identity, custody_core in cores_by_identity.items()
+                if custody_core.get("previous_custody") is None
+            ]
+            if len(roots) != 1:
+                raise ValueError(
+                    "receiver custody chain must have exactly one root"
+                )
+            child_of: dict[str, str] = {}
+            for identity, custody_core in cores_by_identity.items():
+                previous = custody_core.get("previous_custody")
+                if previous is not None:
+                    child_of[str(previous)] = identity
+            ordered_cores: list[dict[str, Any]] = []
+            current: str | None = roots[0]
+            visited: set[str] = set()
+            while current is not None:
+                if current in visited or current not in cores_by_identity:
+                    raise ValueError(
+                        "receiver custody chain traversal failed"
+                    )
+                visited.add(current)
+                ordered_cores.append(cores_by_identity[current])
+                current = child_of.get(current)
+            if len(visited) != len(cores_by_identity):
+                raise ValueError(
+                    "receiver custody chain is disconnected"
+                )
+
+            matching = [
+                custody_core
+                for custody_core in ordered_cores
                 if (
-                    isinstance(custody_core, dict)
-                    and custody_core.get("subject_identity")
+                    custody_core.get("subject_identity")
                     == package_identity
                     and custody_core.get("related_identity")
                     == offer_identity_value
                     and custody_core.get("actor") == destination_system
                     and custody_core.get("source") == source_system
-                ):
-                    matching.append((identity, custody_core))
-            actions = {
-                str(item[1].get("action")) for item in matching
-            }
-            required_actions = {
+                )
+            ]
+            actions = [
+                str(custody_core.get("action"))
+                for custody_core in matching
+            ]
+            if actions != [
                 CustodyAction.CAPTURED.value,
                 CustodyAction.STORED.value,
                 CustodyAction.VERIFIED.value,
-            }
-            if not required_actions.issubset(actions):
+            ]:
                 raise ValueError(
-                    "receiver custody lacks CAPTURED/STORED/VERIFIED acknowledgements"
+                    "receiver acknowledgement custody must be exactly "
+                    "CAPTURED/STORED/VERIFIED in local chain order"
                 )
-            for _identity, custody_core in matching:
+            for custody_core in matching:
                 if custody_core.get("recorded_at") != accepted_at["recorded_at"]:
                     raise ValueError(
                         "receiver acknowledgement clock differs from receipt"
