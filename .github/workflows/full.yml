@@ -48,7 +48,6 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: false
 
       - name: Install pinned Rust
         shell: sh
@@ -134,7 +133,6 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-          cache: false
 
       - name: Install pinned Ollama
         shell: sh
