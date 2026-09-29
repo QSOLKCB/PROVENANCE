@@ -1364,10 +1364,11 @@ package member hashing/counting  → bounded parallel
 semantic reduction/error order   → deterministic input order
 ```
 
-Default worker cap:
+Worker policy:
 
 ```text
-4 workers
+hard cap = 4 workers
+effective default = min(4, logical CPU count)
 2 queued/in-flight batches per worker
 ```
 
@@ -1375,18 +1376,18 @@ The conformance suite compares complete optimized/reference report objects on va
 
 The CI benchmark refuses to report performance unless exact report equivalence holds.
 
-Recorded environment-scoped observation on GitHub Actions (AMD EPYC 9V74, 4 logical CPUs, CPython 3.12.3, 32 × 1 MiB retained artifacts + 32 events, 5 repetitions):
+Recorded environment-scoped observation on GitHub Actions (AMD EPYC 7763, 4 logical CPUs, CPython 3.12.3, 32 × 1 MiB retained artifacts + 32 events, 5 repetitions):
 
 ```text
 bundle verifier:
-  serial median    45.343164 ms
-  optimized median 25.792463 ms
-  observed gain    43.117%
+  serial median    43.851859 ms
+  optimized median 26.336839 ms
+  observed gain    39.941%
 
 forensic-package verifier:
-  serial median    96.480844 ms
-  optimized median 59.515135 ms
-  observed gain    38.314%
+  serial median    92.626357 ms
+  optimized median 61.895547 ms
+  observed gain    33.177%
 ```
 
 These measurements are environment-specific observations and must be re-measured before transfer to another environment.
