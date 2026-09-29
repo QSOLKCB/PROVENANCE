@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -14,10 +15,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CLI_BIN = REPO_ROOT / "provenance-cli" / "target" / "debug" / "provenance"
 
 
-def _run(*args: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    *args: str,
+    input_text: str | None = None,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    run_env = os.environ.copy()
+    if env is not None:
+        run_env.update(env)
     return subprocess.run(
         [str(CLI_BIN), *args],
-        cwd=REPO_ROOT,
+        cwd=REPO_ROOT if cwd is None else cwd,
+        env=run_env,
         input=input_text,
         text=True,
         encoding="utf-8",
@@ -175,6 +185,85 @@ class ProvenanceCliTests(unittest.TestCase):
                 exported_report.manifest_identity,
                 finalized["manifest_identity"],
             )
+
+    def test_relative_paths_resolve_from_caller_working_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            caller = Path(tmp)
+            suffix = caller.name
+            store_name = f"{suffix}-store"
+            custody_name = f"{suffix}-custody"
+            source_name = f"{suffix}-evidence.bin"
+            export_name = f"{suffix}-export"
+
+            caller_source = caller / source_name
+            caller_source.write_bytes(b"caller-relative-evidence\n")
+
+            repo_store = REPO_ROOT / store_name
+            repo_custody = REPO_ROOT / custody_name
+            repo_source = REPO_ROOT / source_name
+            repo_export = REPO_ROOT / export_name
+
+            self.assertFalse(repo_store.exists())
+            self.assertFalse(repo_custody.exists())
+            self.assertFalse(repo_source.exists())
+            self.assertFalse(repo_export.exists())
+
+            external_env = {"PROVENANCE_ROOT": str(REPO_ROOT)}
+
+            recorded = _json_result(
+                _run(
+                    "record",
+                    "--store",
+                    f"./{store_name}",
+                    "--custody",
+                    f"./{custody_name}",
+                    "--file",
+                    f"./{source_name}",
+                    "--actor",
+                    "operator:external-cwd",
+                    "--operation",
+                    "terminal.relative.capture",
+                    cwd=caller,
+                    env=external_env,
+                )
+            )
+            self.assertEqual(recorded["byte_count"], len(caller_source.read_bytes()))
+            self.assertTrue((caller / store_name).is_dir())
+            self.assertTrue((caller / custody_name).is_dir())
+
+            finalized = _json_result(
+                _run(
+                    "finalize",
+                    "--store",
+                    f"./{store_name}",
+                    "--custody",
+                    f"./{custody_name}",
+                    cwd=caller,
+                    env=external_env,
+                )
+            )
+            self.assertTrue(finalized["integrity_verified"])
+
+            exported = _json_result(
+                _run(
+                    "export",
+                    "--store",
+                    f"./{store_name}",
+                    "--custody",
+                    f"./{custody_name}",
+                    "--destination",
+                    f"./{export_name}",
+                    cwd=caller,
+                    env=external_env,
+                )
+            )
+            self.assertTrue(exported["integrity_verified"])
+            self.assertTrue((caller / export_name).is_dir())
+
+            self.assertFalse(repo_store.exists())
+            self.assertFalse(repo_custody.exists())
+            self.assertFalse(repo_source.exists())
+            self.assertFalse(repo_export.exists())
 
     def test_concurrent_cli_records_merge_one_shared_working_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
