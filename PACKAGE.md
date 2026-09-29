@@ -81,6 +81,8 @@ OPEN_COLLECTION
 MISSING_ARTIFACT
 DIGEST_ONLY_ARTIFACT
 EVENT_COLLECTION_STATUS
+CUSTODY_NOT_PRESENT
+PARTIAL_CUSTODY_COVERAGE
 ~~~
 
 The package verifier recomputes this file. Gap metadata therefore cannot be edited into a more flattering story without invalidating verification.
