@@ -191,6 +191,13 @@ def verify_research_manifest(data: bytes, contents: Mapping[str, bytes]) -> dict
             except KeyError:
                 missing.append(artifact["key"])
                 continue
+            except Exception as exc:
+                missing.append(artifact["key"])
+                errors.append(
+                    f"artifact lookup failed: {artifact['key']} "
+                    f"({type(exc).__name__}): {exc}"
+                )
+                continue
             if not isinstance(raw, bytes) or len(raw) != artifact["byte_count"] or sha256_identity(raw) != digest:
                 errors.append(f"artifact bytes mismatch: {artifact['key']}")
             else:

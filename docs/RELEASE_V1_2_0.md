@@ -46,7 +46,9 @@ The published v1.1.1 DOI `10.5281/zenodo.23043860`, frozen v1.0.0 implementation
 `formal/TARGET.json`, proof sources and Phase 18 scripts retain their historical
 meaning. The existing formal workflow continues to check that old target and
 emit evidence under its old DOI, even when triggered from a newer repository
-commit. Its output must not be relabeled as a v1.2.0 proof.
+commit. Its formal-source archive retains the published v1.1.1 citation at
+`formal/CITATION.cff` and excludes the moving root citation. Its output must not
+be relabeled as a v1.2.0 proof.
 
 The new research module is tested but is outside the existing FV-01–FV-04 runtime
 bridge. An eventual formal extension must follow an explicit freeze and new

@@ -25,7 +25,10 @@ execution, theorem equivalence and mathematical validity need a separate
 checker. The report explicitly leaves upstream membership, mathematical
 validity and license compliance `not_checked`. `metadata_class` is null until
 the core passes schema validation; invalid input never acquires a classification.
-Artifact lookup failures are visible gaps, and excessive JSON/canonical nesting
+Artifact lookup failures are visible gaps. Ordinary backend exceptions also
+record their type/message in `errors` and allow remaining artifact checks to
+continue; process cancellation (`KeyboardInterrupt`/`SystemExit`) propagates.
+Excessive JSON/canonical nesting
 returns a failed report rather than propagating a recursion exception.
 
 ## Manifest contract

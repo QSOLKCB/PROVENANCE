@@ -15,11 +15,13 @@ EXPECTED_TAG = "v1.0.0"
 EXPECTED_COMMIT = "0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742"
 EXPECTED_DOI = "10.5281/zenodo.23043860"
 EXPECTED_TOOLCHAIN = "leanprover/lean4:v4.34.1"
+EXPECTED_CITATION_SHA256 = (
+    "sha256:50633f2f0cf4fb2bb3518874cfe58e0827a12eb95fea3f76f2b24ccc75e16dcc"
+)
 
 ARCHIVE_EXTRA_FILES = (
     "docs/FORMAL_VERIFICATION.md",
     "docs/ARCHIVAL_RELEASE.md",
-    "CITATION.cff",
     "scripts/phase18_attestation.py",
     "scripts/phase18_manifest.py",
     ".github/workflows/formal.yml",
@@ -135,6 +137,12 @@ def _validate_toolchain(proof_commit: str) -> None:
         )
 
 
+def _validate_historical_citation(proof_commit: str) -> None:
+    raw = _blob_bytes(proof_commit, "formal/CITATION.cff")
+    if _sha256_bytes(raw) != EXPECTED_CITATION_SHA256:
+        raise SystemExit("formal/CITATION.cff must retain the published v1.1.1 citation bytes")
+
+
 _PLACEHOLDER_PATTERN = re.compile(r"\b(sorry|admit|axiom)\b")
 
 
@@ -208,6 +216,7 @@ def build_manifest(
     )
     _validate_frozen_ref()
     _validate_toolchain(proof_commit)
+    _validate_historical_citation(proof_commit)
     _reject_placeholders(proof_commit)
 
     files: list[dict[str, object]] = []

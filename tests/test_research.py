@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 import hashlib
 from pathlib import Path
 import sys
@@ -153,6 +154,41 @@ class ResearchTests(unittest.TestCase):
         report = verify_research_manifest(canonical_json_bytes(tampered), self.contents)
         self.assertFalse(report["byte_integrity_verified"])
         self.assertEqual(report["metadata_class"], "DECLARED")
+
+    def test_backend_lookup_errors_are_gaps_and_remaining_checks_continue(self):
+        digest = self.core["artifacts"][1]["content_identity"]
+        retained = self.contents
+
+        class FailingBackend(Mapping):
+            def __init__(self, failure):
+                self.failure = failure
+
+            def __getitem__(self, key):
+                if key == digest:
+                    raise self.failure
+                return retained[key]
+
+            def __iter__(self):
+                return iter(retained)
+
+            def __len__(self):
+                return len(retained)
+
+        for failure in (
+            OSError("artifact store unavailable"), RuntimeError("backend disconnected"),
+            ValueError("backend payload unreadable"), TypeError("backend decoding failed"),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                report = verify_research_manifest(self.raw, FailingBackend(failure))
+                self.assertFalse(report["byte_integrity_verified"])
+                self.assertEqual(report["missing_artifacts"], ["scope"])
+                self.assertEqual(report["checked_artifacts"], ["license", "statement", "comparator", "citation"])
+                self.assertEqual(report["errors"], [f"artifact lookup failed: scope ({type(failure).__name__}): {failure}"])
+                self.assertEqual(report["metadata_class"], "DECLARED")
+        for cancellation in (KeyboardInterrupt(), SystemExit(2)):
+            with self.subTest(cancellation=type(cancellation).__name__):
+                with self.assertRaises(type(cancellation)):
+                    verify_research_manifest(self.raw, FailingBackend(cancellation))
 
     def test_source_algorithm_is_explicit_and_matches_commit_width(self):
         for algorithm, commit in (("sha1", "a" * 40), ("sha256", "b" * 64)):

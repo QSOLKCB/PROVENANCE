@@ -61,10 +61,16 @@ The formal-source archive contains the Phase 18 proof and archive material neede
 - formal target declaration;
 - formal-verification bridge;
 - archival protocol;
-- citation metadata;
+- historical citation metadata (`formal/CITATION.cff`);
 - proof execution attestation generator;
 - formal evidence generator;
 - formal CI definition.
+
+The formal-source archive retains the exact `CITATION.cff` bytes from the
+published `v1.1.1` release at `formal/CITATION.cff`. The Phase 18 manifest checks
+its pinned SHA-256 and includes its identity with the other formal files. The
+moving root `CITATION.cff` is excluded from both this archive and its source-file
+manifest, so later release citations cannot relabel the Phase 18 DOI.
 
 ### Formal evidence manifest
 
