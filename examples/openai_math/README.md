@@ -15,7 +15,8 @@ their original notices. PROVENANCE's implementation remains MPL-2.0.
 | `upstream/citation.md` | `preprints/Spontaneous-magnetization-in-the-quantum-Heisenberg-ferromagnet-September-24-2026/README.md` |
 
 The manifest records family 271, manuscript identity, declared formalization
-scope, theorem name, Comparator configuration, license, and the supplied
+scope, theorem name, Comparator configuration, explicit Git `sha1` commit
+algorithm, license, and the supplied
 academic citation. SHA-256 identities cover exact retained file bytes.
 The manuscript PDF, solution library, dependencies and proof-execution logs
 are not retained. No upstream proof or Comparator has been run here.

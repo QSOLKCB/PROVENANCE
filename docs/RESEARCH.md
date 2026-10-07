@@ -23,7 +23,10 @@ Verification receipts are referenced artifacts, not an automatic proof-success
 flag. Their bytes are checked like any other artifact. Receipt authenticity,
 execution, theorem equivalence and mathematical validity need a separate
 checker. The report explicitly leaves upstream membership, mathematical
-validity and license compliance `not_checked`.
+validity and license compliance `not_checked`. `metadata_class` is null until
+the core passes schema validation; invalid input never acquires a classification.
+Artifact lookup failures are visible gaps, and excessive JSON/canonical nesting
+returns a failed report rather than propagating a recursion exception.
 
 ## Manifest contract
 
@@ -39,17 +42,23 @@ sha256("PROVENANCE/RESEARCH-MANIFEST/v1\0" + canonical_json_bytes(core))
 | Core field | Meaning |
 |---|---|
 | `schema`, `canonicalization`, `evidence_class` | Exact version identifiers and `DECLARED` |
-| `source` | `project`, `repository`, exact lowercase 40/64-hex Git `commit`, declared `license` |
+| `source` | `project`, `repository`, exact lowercase Git `commit`, explicit `commit_algorithm`, declared `license` |
 | `artifacts` | Nonempty list of `key`, portable relative `path`, `origin`, `role`, `content_identity`, `byte_count` |
 | `uses` | Nonempty list of `upstream`, nullable `local`, `mode`, nullable `modification_notice` |
 | `claims` | Nonempty list separating manuscript, formalized and local scope |
 | `attribution` | Credit, upstream license artifact, NOTICE observation state and upstream citation artifacts |
 
+`commit_algorithm` is `sha1` (40 lowercase hex commit characters) or
+`sha256` (64). The algorithm is declared explicitly, never inferred from length;
+unknown algorithms and width mismatches are rejected. This field identifies the
+Git object algorithm separately from the manifest/artifact SHA-256 algorithm.
+
 Artifact keys and origin/path pairs must be unique. Origins are `upstream` and
 `local`. Roles are `source`, `local`, `license`, `notice`, `citation`, `scope`,
 `comparator`, `receipt`. Byte counts are non-negative safe integers; hashes use
 `sha256:<64 lowercase hex>`. Paths are metadata only and must not contain
-absolute paths, empty/dot/parent segments, backslashes, colons or control characters.
+absolute paths, empty/dot/parent segments, backslashes, colons or control characters
+(C0 U+0000–U+001F, DEL U+007F, and C1 U+0080–U+009F).
 Artifact order is meaningful canonical input; sealing preserves list order.
 
 | Usage mode | Required binding |

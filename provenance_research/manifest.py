@@ -40,7 +40,7 @@ def _path(value: object) -> str:
     path = _text(value, "artifact path")
     if path.startswith("/") or "\\" in path or ":" in path or any(
         part in {"", ".", ".."} for part in path.split("/")
-    ) or any(ord(char) < 32 for char in path):
+    ) or any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in path):
         raise ResearchError("artifact path must be a portable relative path")
     return path
 
@@ -51,11 +51,15 @@ def _validate(core: object) -> dict:
         raise ResearchError("unsupported research schema or canonicalization")
     if core["evidence_class"] != "DECLARED":
         raise ResearchError("research metadata must remain DECLARED")
-    source = _object(core["source"], "project repository commit license", "source")
+    source = _object(core["source"], "project repository commit commit_algorithm license", "source")
     for key in ("project", "repository", "license"):
         _text(source[key], f"source.{key}")
-    if not isinstance(source["commit"], str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", source["commit"]) is None:
-        raise ResearchError("source.commit must be an exact lowercase Git commit identity")
+    algorithm = _text(source["commit_algorithm"], "source.commit_algorithm")
+    if algorithm not in ("sha1", "sha256"):
+        raise ResearchError("source.commit_algorithm must be sha1 or sha256")
+    width = 40 if algorithm == "sha1" else 64
+    if not isinstance(source["commit"], str) or re.fullmatch(r"[0-9a-f]{%d}" % width, source["commit"]) is None:
+        raise ResearchError("source.commit must match its declared Git hash algorithm")
 
     artifacts = {}
     paths = set()
@@ -64,7 +68,9 @@ def _validate(core: object) -> dict:
         artifact = _object(artifact, "key path origin role content_identity byte_count", "artifact")
         key = _text(artifact["key"], "artifact key")
         path = _path(artifact["path"])
-        if artifact["origin"] not in ("upstream", "local") or artifact["role"] not in roles:
+        origin = _text(artifact["origin"], "artifact origin")
+        role = _text(artifact["role"], "artifact role")
+        if origin not in ("upstream", "local") or role not in roles:
             raise ResearchError("invalid artifact origin or role")
         locator = (artifact["origin"], path)
         if key in artifacts or locator in paths:
@@ -92,6 +98,8 @@ def _validate(core: object) -> dict:
         mode = use["mode"]
         if mode not in ("reference", "adaptation", "derived", "copied"):
             raise ResearchError("invalid usage mode")
+        if use["local"] is not None:
+            _text(use["local"], "use local reference")
         pair = (use["upstream"], use["local"])
         if pair in pairs:
             raise ResearchError("duplicate use binding")
@@ -165,26 +173,29 @@ def verify_research_manifest(data: bytes, contents: Mapping[str, bytes]) -> dict
     Missing evidence fails the byte-integrity result and remains visible.
     """
     identity = None
+    metadata_class = None
     missing = []
     checked = []
     errors = []
     try:
         envelope = _object(parse_canonical_json_bytes(data), "core research_identity self_hash_exclusion", "envelope")
         core = _validate(envelope["core"])
+        metadata_class = core["evidence_class"]
         identity = domain_identity(DOMAIN, core)
         if envelope["self_hash_exclusion"] != "research_identity" or envelope["research_identity"] != identity:
             raise ResearchError("research identity or self-hash exclusion mismatch")
         for artifact in core["artifacts"]:
             digest = artifact["content_identity"]
-            if digest not in contents:
+            try:
+                raw = contents[digest]
+            except KeyError:
                 missing.append(artifact["key"])
                 continue
-            raw = contents[digest]
             if not isinstance(raw, bytes) or len(raw) != artifact["byte_count"] or sha256_identity(raw) != digest:
                 errors.append(f"artifact bytes mismatch: {artifact['key']}")
             else:
                 checked.append(artifact["key"])
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         errors.append(str(exc))
     return {
         "schema": "provenance.research-verification-report.v1",
@@ -193,7 +204,7 @@ def verify_research_manifest(data: bytes, contents: Mapping[str, bytes]) -> dict
         "checked_artifacts": checked,
         "missing_artifacts": missing,
         "errors": errors,
-        "metadata_class": "DECLARED",
+        "metadata_class": metadata_class,
         "upstream_membership": "not_checked",
         "mathematical_validity": "not_checked",
         "license_compliance": "not_checked",
