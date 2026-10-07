@@ -9,6 +9,8 @@ ARCHITECTURE=MODULAR_MONOREPO
 PRIMARY_GOAL=FRAMEWORK_NEUTRAL_CHAIN_OF_CUSTODY
 ```
 
+Post-Phase-18 development: **v1.2.0 external research provenance candidate**. See [RESEARCH.md](RESEARCH.md) and [RELEASE_V1_2_0.md](RELEASE_V1_2_0.md). Historical freeze/proof targets below remain unchanged.
+
 This roadmap defines the intended development sequence for `QSOLKCB/PROVENANCE`.
 
 The ordering is deliberate.

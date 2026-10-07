@@ -14,6 +14,8 @@ The repository root is intentionally small. Detailed contracts, subsystem notes,
 
 | Document | Purpose |
 |---|---|
+| [RESEARCH.md](RESEARCH.md) | v1.2.0 external artifact declarations, reuse, citations and byte verification |
+| [RELEASE_V1_2_0.md](RELEASE_V1_2_0.md) | New DOI and final-SHA immutable publication sequence |
 | [INVARIANTS.md](INVARIANTS.md) | Mandatory evidence and verification invariants |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Architecture and module boundaries |
 | [BUNDLE.md](BUNDLE.md) | Phase 2 evidence bundle |

@@ -4,6 +4,15 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - "formal/CITATION.cff"
+      - "scripts/phase18_manifest.py"
+      - "tests/test_phase18_archive.py"
+      - ".github/workflows/formal.yml"
+      - "provenance_research/**"
+      - "tests/test_research.py"
+      - "examples/openai_math/**"
+      - "docs/RESEARCH.md"
+      - "docs/RELEASE_V1_2_0.md"
       - ".github/workflows/full.yml"
       - "docs/RELEASE.md"
       - "docs/ROADMAP.md"
@@ -14,6 +23,15 @@ on:
   push:
     branches: ["main"]
     paths:
+      - "formal/CITATION.cff"
+      - "scripts/phase18_manifest.py"
+      - "tests/test_phase18_archive.py"
+      - ".github/workflows/formal.yml"
+      - "provenance_research/**"
+      - "tests/test_research.py"
+      - "examples/openai_math/**"
+      - "docs/RESEARCH.md"
+      - "docs/RELEASE_V1_2_0.md"
       - ".github/workflows/full.yml"
       - "docs/RELEASE.md"
       - "docs/ROADMAP.md"

@@ -5,6 +5,7 @@ on:
     paths:
       - "formal/**"
       - "scripts/phase18_manifest.py"
+      - "tests/test_phase18_archive.py"
       - "scripts/phase18_attestation.py"
       - "docs/FORMAL_VERIFICATION.md"
       - "docs/ARCHIVAL_RELEASE.md"
@@ -19,6 +20,7 @@ on:
     paths:
       - "formal/**"
       - "scripts/phase18_manifest.py"
+      - "tests/test_phase18_archive.py"
       - "scripts/phase18_attestation.py"
       - "docs/FORMAL_VERIFICATION.md"
       - "docs/ARCHIVAL_RELEASE.md"
@@ -71,6 +73,9 @@ jobs:
           assert target["lean_toolchain"] == "leanprover/lean4:v4.34.1"
           PY
 
+      - name: Verify historical citation archive routing
+        run: python3 -m unittest discover -s tests -p "test_phase18_archive.py" -v
+
       - name: Install checksum-pinned Lean 4.34.1
         shell: sh
         run: |
@@ -120,7 +125,7 @@ jobs:
           out="$RUNNER_TEMP/phase18"
           git archive             --format=tar.gz             --prefix=PROVENANCE-v1.0.0/             --output="$out/PROVENANCE-v1.0.0-source.tar.gz"             "$FROZEN_TAG"
 
-          git archive             --format=tar.gz             --prefix=PROVENANCE-phase18-formal/             --output="$out/PROVENANCE-phase18-formal-sources.tar.gz"             HEAD --             formal             docs/FORMAL_VERIFICATION.md             docs/ARCHIVAL_RELEASE.md             CITATION.cff             scripts/phase18_attestation.py             scripts/phase18_manifest.py             .github/workflows/formal.yml
+          git archive             --format=tar.gz             --prefix=PROVENANCE-phase18-formal/             --output="$out/PROVENANCE-phase18-formal-sources.tar.gz"             HEAD --             formal             docs/FORMAL_VERIFICATION.md             docs/ARCHIVAL_RELEASE.md             scripts/phase18_attestation.py             scripts/phase18_manifest.py             .github/workflows/formal.yml
 
           (
             cd "$out"

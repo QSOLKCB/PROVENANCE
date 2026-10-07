@@ -1,5 +1,7 @@
 # Release-Grade Trust Lane
 
+For the post-archive v1.2.0 candidate and its final merged SHA/tag sequence, see [RELEASE_V1_2_0.md](RELEASE_V1_2_0.md). Its DOI is separate from the published Phase 18 record.
+
 Phase 16 adds a high-assurance validation lane for release candidates.
 
 It is intentionally separate from routine fast CI.

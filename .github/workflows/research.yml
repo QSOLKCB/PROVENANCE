@@ -1,0 +1,41 @@
+name: research
+
+on:
+  pull_request:
+    paths:
+      - "provenance_research/**"
+      - "provenance_core/**"
+      - "provenance_store/**"
+      - "provenance_verify/**"
+      - "examples/openai_math/**"
+      - "tests/test_research.py"
+      - "docs/RESEARCH.md"
+      - ".github/workflows/research.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "provenance_research/**"
+      - "provenance_core/**"
+      - "provenance_store/**"
+      - "provenance_verify/**"
+      - "examples/openai_math/**"
+      - "tests/test_research.py"
+      - "docs/RESEARCH.md"
+      - ".github/workflows/research.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  research:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Test manifest contract and retained-byte verification
+        run: python3 -m unittest discover -s tests -p "test_research.py" -v
+      - name: Verify pinned upstream reference fixture
+        run: python3 -m examples.openai_math.verify
