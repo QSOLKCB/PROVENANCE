@@ -6,9 +6,11 @@ PROVENANCE records **who did what, when, where, why, and how — backed by evide
 
 PROVENANCE has completed **Phase 18**, including formal verification and archival publication. **`v1.0.0`** (`0b1a2eea6c3c2b40a7f2a390fcd3410c75fab742`) remains the immutable implementation target of the Lean model, while **`v1.1.1`** (`c24a7c14f162b19df9ad0b674f5d28ae0cf4029f`) is the final formal/archive release. The archival record is published on Zenodo as **[10.5281/zenodo.23043860](https://doi.org/10.5281/zenodo.23043860)**.
 
+**v1.2.0 candidate:** [External research provenance](docs/RESEARCH.md) adds exact upstream artifact, reuse, citation and formalization-scope bindings. New release DOI: [10.5281/zenodo.23207011](https://doi.org/10.5281/zenodo.23207011) (reserved; publication pending). See the [immutable release sequence](docs/RELEASE_V1_2_0.md). The existing Lean proofs retain their frozen v1.0.0 target; they do not cover this extension.
+
 **Start here:** [Getting Started](docs/GETTING_STARTED.md) · [Usage Instructions](docs/INSTRUCTIONS.md) · [Release Trust Lane](docs/RELEASE.md) · [Documentation](docs/README.md) · [Roadmap](docs/ROADMAP.md)
 
-[![Version](https://img.shields.io/badge/version-v1.1.1-4c1.svg)](https://github.com/QSOLKCB/PROVENANCE/releases/tag/v1.1.1)
+[![Version](https://img.shields.io/badge/version-v1.2.0%20candidate-4c1.svg)](docs/RELEASE_V1_2_0.md)
 [![Phase](https://img.shields.io/badge/roadmap-Phase%2018%20complete-2ea44f.svg)](docs/ROADMAP.md)
 [![Core CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/core.yml)
 [![Verify CI](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml/badge.svg)](https://github.com/QSOLKCB/PROVENANCE/actions/workflows/verify.yml)
@@ -42,6 +44,7 @@ PROVENANCE has completed **Phase 18**, including formal verification and archiva
 - **Distributed custody handoff** — signed offline transfer offers/receipts with receiver-local custody and explicit partial ordering.
 - **Release-grade trust lane** — fresh-checkout, pinned-toolchain full validation with complete tests and real Ollama integration.
 - **Formal proof set** — Lean 4.34.1 models four frozen invariants with an explicit runtime bridge and independent proof checks.
+- **External research provenance** — pinned upstream revisions, reuse/modification bindings, license/citation artifacts and explicit mathematical verification boundaries.
 - **Explicit uncertainty** — missing, digest-only, open-collection, and custody-gap states remain visible.
 
 ## Quick lifecycle
@@ -176,6 +179,8 @@ The proof does not claim whole-program verification. See [Formal Verification](d
 | Distributed custody | [docs/TRANSFER.md](docs/TRANSFER.md) |
 | Release-grade trust lane | [docs/RELEASE.md](docs/RELEASE.md) |
 | Formal verification | [docs/FORMAL_VERIFICATION.md](docs/FORMAL_VERIFICATION.md) |
+| External research provenance | [docs/RESEARCH.md](docs/RESEARCH.md) |
+| v1.2.0 release candidate | [docs/RELEASE_V1_2_0.md](docs/RELEASE_V1_2_0.md) |
 | Archival release | [docs/ARCHIVAL_RELEASE.md](docs/ARCHIVAL_RELEASE.md) |
 | CLI/TUI | [docs/CLI.md](docs/CLI.md) |
 | MCP | [docs/MCP.md](docs/MCP.md) |

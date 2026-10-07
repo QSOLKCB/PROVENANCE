@@ -5,9 +5,9 @@ type: software
 authors:
   - family-names: "Slade"
     given-names: "Trent"
-version: "1.1.1"
-doi: "10.5281/zenodo.23043860"
-date-released: "2026-09-29"
+version: "1.2.0"
+doi: "10.5281/zenodo.23207011"
 repository-code: "https://github.com/QSOLKCB/PROVENANCE"
-url: "https://github.com/QSOLKCB/PROVENANCE/releases/tag/v1.1.1"
+# Release candidate: publication date and immutable release URL are pending.
+url: "https://github.com/QSOLKCB/PROVENANCE"
 license: "MPL-2.0"
