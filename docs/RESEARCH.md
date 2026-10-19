@@ -130,6 +130,10 @@ specification material, not a PROVENANCE proof.
 
 ## Validation
 
+For separately versioned source/build/output bindings and retained expected-result
+comparisons, see [Research check receipts](RESEARCH_CHECKS.md). The existing v1
+manifest treats those receipts as opaque artifacts; its semantics are unchanged.
+
 ```bash
 python3 -m unittest discover -s tests -p 'test_research.py' -v
 python3 -m examples.openai_math.verify
