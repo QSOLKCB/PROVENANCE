@@ -150,7 +150,7 @@ def verify_research_check_receipt(data: bytes, contents: Mapping[str, bytes]) ->
         "semantic_correctness": "not_checked",
     }
     try:
-        if not isinstance(data, bytes):
+        if type(data) is not bytes:
             raise ResearchError("receipt must be bytes")
         envelope = parse_canonical_json_bytes(data)
         report["canonical"] = True
@@ -176,7 +176,7 @@ def verify_research_check_receipt(data: bytes, contents: Mapping[str, bytes]) ->
                 report["missing_artifacts"].append(key)
                 report["errors"].append(f"artifact lookup failed: {key} ({type(exc).__name__}): {exc}")
                 continue
-            if not isinstance(raw, bytes) or len(raw) != artifact["byte_count"] or sha256_identity(raw) != digest:
+            if type(raw) is not bytes or len(raw) != artifact["byte_count"] or sha256_identity(raw) != digest:
                 report["errors"].append(f"artifact bytes mismatch: {key}")
             else:
                 verified[key] = raw

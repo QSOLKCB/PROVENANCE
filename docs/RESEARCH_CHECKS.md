@@ -70,7 +70,9 @@ The core has exactly these fields:
   schema validation rather than silently degrading.
 
 Artifacts have no filesystem locator. The caller supplies a mapping from content
-identities to retained `bytes`. The verifier opens no path, fetches no URL, and
+identities to retained built-in `bytes`. Receipt input and retained artifacts
+reject byte subclasses, so caller-defined equality, length, or decoding cannot
+change the comparison or validation semantics. The verifier opens no path, fetches no URL, and
 executes no supplied recipe, proof, or receipt.
 
 ## Verification and gaps

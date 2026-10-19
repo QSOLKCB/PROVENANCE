@@ -105,6 +105,20 @@ class ResearchReceiptTests(unittest.TestCase):
         self.assertIn("OSError", report["errors"][0])
         self.assertFalse(report["comparisons_verified"])
 
+    def test_byte_subclasses_cannot_override_comparison_or_input_parsing(self):
+        class LyingBytes(bytes):
+            def __eq__(self, other):
+                return True
+        core, contents = fixture(b"3\n")
+        report = self.verify(core, {key: LyingBytes(raw) for key, raw in contents.items()})
+        self.assertFalse(report["byte_integrity_verified"])
+        self.assertFalse(report["comparisons_verified"])
+        self.assertEqual(report["checks"][0]["status"], "not_checked")
+        self.assertTrue(report["errors"])
+        report = verify_research_check_receipt(LyingBytes(self.raw), self.contents)
+        self.assertFalse(report["canonical"])
+        self.assertFalse(report["comparisons_verified"])
+
     def test_process_cancellation_propagates(self):
         class Backend(dict):
             def __getitem__(self, key):
